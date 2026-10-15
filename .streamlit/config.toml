@@ -1,0 +1,9 @@
+[server]
+maxUploadSize = 40
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"

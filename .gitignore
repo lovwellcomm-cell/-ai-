@@ -1,0 +1,11 @@
+# 密钥与本地配置
+.env
+.streamlit/secrets.toml
+.claude/
+
+# 运行时数据（内置示例年报在 demo/ 里，会被提交）
+data/
+
+__pycache__/
+.pytest_cache/
+*.log
