@@ -1,0 +1,77 @@
+<!--
+  组件静态骨架。由 ui/chat_component.py 读取后作为 st.components.v2.component(html=...) 传入。
+  注意：Streamlit 判定「内联还是文件路径」靠启发式——含换行的字符串才会被当成内联代码，
+  所以这个文件必须保持多行，不要压缩成一行。
+  动态内容（消息、来源、抽屉内容）一律由 chat.js 用 textContent 构建，不要写进这里。
+-->
+<div class="arb" id="arb" data-theme="light">
+
+  <!-- ================= 顶栏 ================= -->
+  <header class="topbar">
+    <button class="iconbtn menu-only" id="menuBtn" type="button" aria-label="打开文档栏">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    </button>
+    <div class="ctx">
+      <i class="ctx-dot"></i>
+      <span class="ctx-co" id="ctxCo"></span>
+      <span class="ctx-meta mono" id="ctxMeta"></span>
+    </div>
+    <div class="spacer"></div>
+    <button class="iconbtn" id="srcBtn" type="button" aria-label="查看引用来源" title="引用来源">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 5h11a1 1 0 0 1 1 1v11M4 9a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      <span class="cnt mono" id="srcCnt">0</span>
+    </button>
+    <button class="iconbtn" id="themeBtn" type="button" aria-label="切换深色 / 浅色">
+      <svg id="themeIcon" viewBox="0 0 24 24" fill="none" aria-hidden="true"></svg>
+    </button>
+  </header>
+
+  <!-- ================= 对话流 ================= -->
+  <div class="thread" id="thread">
+    <div class="thread-inner" id="threadInner"></div>
+  </div>
+
+  <!-- ================= 输入区 ================= -->
+  <div class="dock">
+    <div class="dock-inner">
+      <div class="warn" id="warn" hidden>
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 9v4m0 3.5h.01M10.3 3.9 2.6 17.2A1.6 1.6 0 0 0 4 19.6h16a1.6 1.6 0 0 0 1.4-2.4L13.7 3.9a1.6 1.6 0 0 0-2.8 0Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="warnText"></span>
+      </div>
+
+      <div class="composer">
+        <textarea id="input" rows="1" aria-label="提问"></textarea>
+        <div class="cbar">
+          <button type="button" class="chip" id="docChip">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+            <span id="docChipText"></span>
+          </button>
+          <div class="spacer"></div>
+          <button type="button" class="send" id="sendBtn" aria-label="发送" disabled>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 19V5m0 0-6 6m6-6 6 6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="hintline">
+        <span id="hintLeft"></span>
+        <span class="mono kbd">Enter 发送 · Shift+Enter 换行</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 引用抽屉（绝对定位在组件内，不覆盖左侧原生侧边栏）================= -->
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="panel" id="panel" aria-hidden="true" aria-label="引用来源">
+    <div class="panel-head">
+      <h2>引用来源</h2>
+      <span class="tag mono" id="panelCount">0 段</span>
+      <div class="spacer"></div>
+      <button class="iconbtn" id="panelClose" type="button" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="panel-body" id="panelBody"></div>
+  </aside>
+
+</div>

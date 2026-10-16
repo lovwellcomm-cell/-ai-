@@ -35,6 +35,46 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
+## 界面结构
+
+界面分两块，改哪一块、怎么改，差别很大：
+
+| 区域 | 实现 | 说明 |
+|---|---|---|
+| 左侧文档栏 | 原生 Streamlit 控件 | 上传、文档列表、自己的 Key。**上传必须留在这里** —— 40MB 的 PDF 走组件桥会在每次 rerun 被重新序列化 |
+| 主区对话面板 | `st.components.v2` 自定义组件 | 首页、消息、引用抽屉、原页预览、输入框，全部由 `web/` 下的文件渲染 |
+
+```
+web/chat.html   组件静态骨架（Streamlit 作为 html= 参数注入）
+web/chat.css    全部样式（设计令牌挂在 .arb 上，不是 :root —— shadow root 里 :root 匹配不到）
+web/chat.js     渲染与交互（ES module，export default function(component)）
+ui/payload.py   把会话状态整形为组件需要的 data（纯函数，可单测）
+ui/chat_component.py  注册并挂载组件
+```
+
+外壳（隐藏 Streamlit 顶栏、清零留白、侧边栏配色）由 `app.py` 里的 `shell_style()` 注入。
+
+**改 `web/` 下的文件后刷新浏览器即可**，不用重启 streamlit —— `ui/chat_component.py` 会在每次
+rerun 比对文件 mtime，变了就重新注册组件。生产环境进程只启动一次，等于只注册一次。
+（已在 `streamlit==1.66.0` 上验证；`curl` 或浏览器强刷都能拿到新版本。）
+
+预览稿：
+
+```bash
+python tools/build_preview.py    # 由 web/ 三个文件生成 design/preview.html
+```
+
+`design/preview.html` 是**生成物**，不要直接编辑 —— 它是把 `web/` 的三个文件内联、再用一个假的
+component 对象驱动同一份代码，所以永远和线上实现保持一致。用它可以在不起后端、不花 API 额度的情况下
+看完整界面。`design/preview-mockup-v1.html.bak` 是最早那份手写设计稿的存档，可以删。
+
+### 两条容易踩的坑
+
+- **组件里的 HTML 不会被消毒**，而 `data` 里带着用户提问和模型输出。所以 `web/chat.js` 里所有动态文本
+  一律走 `textContent` / `createTextNode`，绝不能拼进 `innerHTML`。
+- **`data` 里混进 set / Path / numpy 标量会让整个 payload 静默降级成一段 Python repr 字符串**，
+  前端只看到 `undefined` 且不报错。`ui/payload.py:json_safe()` 会在挂载前自检并抛出，别绕过它。
+
 ## 部署到 Streamlit Community Cloud
 
 1. 把仓库推到 GitHub。
