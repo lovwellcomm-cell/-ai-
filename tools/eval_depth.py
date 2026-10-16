@@ -38,6 +38,7 @@ from rag import config  # noqa: E402
 from rag.generator import cited_numbers, generate, get_client  # noqa: E402
 from rag.indexer import load_index  # noqa: E402
 from rag.retriever import Retriever  # noqa: E402
+from tools.eval_fidelity import check as fidelity_check  # noqa: E402
 
 DEMO_ID = "2d3dee37263a663e"
 OUT_DIR = ROOT / "eval_out"
@@ -70,10 +71,16 @@ def abstained(answer: str) -> bool:
 
 
 def signal(answer: str, hits: list[dict]) -> dict:
-    """全部是可程序化计算的信号，不需要人工标注。"""
+    """全部是可程序化计算的信号，不需要人工标注。
+
+    其中「有据可依率」是唯一不依赖文本套路的指标：回答里的每个金额，
+    要么能在**检索到的片段**里找到出处，要么能用片段里的数字按明确算式推出来。
+    对财报工具来说这条最重要 —— 一个编造数字的"深度"回答比简短正确的更危险。
+    """
     sections = {h.get("section") or "" for h in hits}
     cited = cited_numbers(answer, len(hits))
     numbers = NUM_RE.findall(answer)
+    fid = fidelity_check(answer, hits)
     n_sentences = max(1, len([s for s in re.split(r"[。；\n]", answer) if s.strip()]))
     n_with_cite = len([s for s in re.split(r"[。；\n]", answer) if re.search(r"\[\d", s)])
     return {
@@ -83,8 +90,10 @@ def signal(answer: str, hits: list[dict]) -> dict:
         "回答年份数": len(set(YEAR_RE.findall(answer))),
         "含同比": bool(YOY_RE.search(answer)),
         "弃答": abstained(answer),
-        "数字个数": len(numbers),
-        # 深度代理指标：数字密度比绝对字数更能说明内容是不是实心的
+        "金额个数": fid["金额个数"],
+        "有据可依率": fid["有据可依率"],
+        "无出处": fid["无出处"],
+        "无出处样例": fid["无出处样例"],
         "数字密度": round(len(numbers) * 100 / max(1, len(answer)), 1),
         "引用编号": len(cited),
         "引用命中率": round(n_with_cite / n_sentences, 2),
@@ -174,8 +183,8 @@ def main() -> None:
             f"| {r['tag']} | {r['total_s']}s | {r['retrieve_s']}s | {r['generate_s']}s | "
             f"{len(r['queries'])} 条 | {r['rewrite'] or '-'} | "
             f"{s['命中片段']} | {s['命中章节数']} | {s['带表头片段']} | {s['回答年份数']} | "
-            f"{'是' if s['含同比'] else '否'} | {s['数字密度']} | {'★' if s['弃答'] else '否'} | "
-            f"{s['引用命中率']} | {r['completion_tokens']} |")
+            f"{'是' if s['含同比'] else '否'} | {s['金额个数']} | {s['有据可依率']} | "
+            f"{s['无出处']} | {s['引用命中率']} | {r['completion_tokens']} |")
     table = "\n".join(rows)
 
     body = [f"# 深度测量 · {args.label} · {stamp}\n",
