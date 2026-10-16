@@ -38,7 +38,7 @@ from rag import config  # noqa: E402
 from rag.generator import cited_numbers, generate, get_client  # noqa: E402
 from rag.indexer import load_index  # noqa: E402
 from rag.retriever import Retriever  # noqa: E402
-from tools.eval_fidelity import check as fidelity_check  # noqa: E402
+from tools.eval_rubric import run as rubric_run  # noqa: E402
 
 DEMO_ID = "2d3dee37263a663e"
 OUT_DIR = ROOT / "eval_out"
@@ -70,38 +70,175 @@ def abstained(answer: str) -> bool:
     return explicit and len(NUM_RE.findall(answer)) < 4
 
 
-def signal(answer: str, hits: list[dict]) -> dict:
+def signal(answer: str, hits: list[dict], tag: str = "") -> dict:
     """全部是可程序化计算的信号，不需要人工标注。
 
-    其中「有据可依率」是唯一不依赖文本套路的指标：回答里的每个金额，
+    分两层：
+
+    **台账层**（命中片段数、章节数、表头数、年份数、引用命中率…）——
+    这些是「这一轮发生了什么」，是数字不是判断。注意 `引用命中率` 对「覆盖」那道题
+    恒为 0.29，那只是 `分点依据：` 这行被当成了一个没有引用的句子，**不是质量信号**。
+
+    **细则层**（`tools/eval_rubric.py`）—— 把「有深度的回答」那份 Word 细则
+    逐条翻译成检查。其中「有据可依率」是最硬的一条：回答里的每个金额，
     要么能在**检索到的片段**里找到出处，要么能用片段里的数字按明确算式推出来。
     对财报工具来说这条最重要 —— 一个编造数字的"深度"回答比简短正确的更危险。
     """
     sections = {h.get("section") or "" for h in hits}
     cited = cited_numbers(answer, len(hits))
     numbers = NUM_RE.findall(answer)
-    fid = fidelity_check(answer, hits)
     n_sentences = max(1, len([s for s in re.split(r"[。；\n]", answer) if s.strip()]))
     n_with_cite = len([s for s in re.split(r"[。；\n]", answer) if re.search(r"\[\d", s)])
     return {
+        # 台账
         "命中片段": len(hits),
         "命中章节数": len(sections),           # 多样性限流是否生效
         "带表头片段": sum(1 for h in hits if h.get("context_header")),
         "回答年份数": len(set(YEAR_RE.findall(answer))),
         "含同比": bool(YOY_RE.search(answer)),
         "弃答": abstained(answer),
-        "金额个数": fid["金额个数"],
-        "有据可依率": fid["有据可依率"],
-        "无出处": fid["无出处"],
-        "无出处样例": fid["无出处样例"],
         "数字密度": round(len(numbers) * 100 / max(1, len(answer)), 1),
         "引用编号": len(cited),
         "引用命中率": round(n_with_cite / n_sentences, 2),
         "回答字数": len(answer),
+        # 细则（含金额个数/有据可依率/无出处/无出处样例，那几条从 eval_fidelity 来）
+        **rubric_run(answer, hits, tag),
     }
 
 
-def ask(retriever, question, client, history=None):
+# ---------- 表格排版 ----------
+# 列只在这里定义一次，表头和数据行都从它派生。
+# 上一版把表头和数据行分成两处手写，改了一处忘了另一处，跑出来表头 15 列、数据 16 列，
+# 整张表错位 —— 而列错位肉眼扫过去不一定看得出来，读的人会照着一列错位的数字下结论。
+# 所以结构上只留一个定义源，并由 tests/test_eval_depth.py 钉住「表头长度 == 数据行长度」。
+
+
+def _sig(run: dict, key: str):
+    """读信号字段；读不到返回空串。
+
+    历史语料（eval_out/ 里早期那几组）用的是旧版 9 字段 schema，容忍缺字段
+    才能拿同一套排版回头渲染它们。缺字段返回空串而不是抛异常，也让
+    「表头有的列，数据行一定有值」这条不变量可以被测试直接断言。
+    """
+    return (run.get("signal") or {}).get(key, "")
+
+
+TABLE_COLUMNS = [
+    ("题目", lambda r: str(r.get("tag") or "")),
+    ("耗时", lambda r: f"{r.get('total_s', '')}s"),
+    ("检索", lambda r: f"{r.get('retrieve_s', '')}s"),
+    ("生成", lambda r: f"{r.get('generate_s', '')}s"),
+    ("检索词", lambda r: f"{len(r.get('queries') or [])} 条"),
+    ("改写", lambda r: str(r.get("rewrite") or "-")),
+    ("命中", lambda r: str(_sig(r, "命中片段"))),
+    ("章节", lambda r: str(_sig(r, "命中章节数"))),
+    ("带表头", lambda r: str(_sig(r, "带表头片段"))),
+    ("年份", lambda r: str(_sig(r, "回答年份数"))),
+    ("同比", lambda r: "是" if _sig(r, "含同比") else "否"),
+    ("金额", lambda r: str(_sig(r, "金额个数"))),
+    ("有据可依率", lambda r: str(_sig(r, "有据可依率"))),
+    ("无出处", lambda r: str(_sig(r, "无出处"))),
+    ("引用命中率", lambda r: str(_sig(r, "引用命中率"))),
+    ("tok", lambda r: str(r.get("completion_tokens"))),
+]
+
+
+def table_header() -> list[str]:
+    return [name for name, _ in TABLE_COLUMNS]
+
+
+def row_for(run: dict) -> list[str]:
+    return [render(run) for _, render in TABLE_COLUMNS]
+
+
+# 控制台摘要要读的信号字段。
+# 和表格列一样，这里是「生产者 signal() ↔ 消费者」这个接口唯一被声明的地方。
+# `答未找到` 那次事故就是这里断了：signal() 改成产出 `弃答`，摘要还在读旧名字，
+# 于是第一道题就 KeyError。所以摘要也走纯函数，并由测试对着 signal() 的输出断言。
+SUMMARY_SIGNAL_KEYS = ("命中片段", "命中章节数", "带表头片段", "回答年份数", "含同比", "弃答")
+
+
+def summary_line(run: dict) -> str:
+    """跑完一道题打在屏幕上的那一行。抽成纯函数是为了能被测试直接调用 ——
+    原先它内联在 main() 里，测试碰不到，所以崩了也没人知道。"""
+    return (f"    {run.get('total_s')}s（检索 {run.get('retrieve_s')} / 生成 {run.get('generate_s')}）"
+            f"  命中 {_sig(run, '命中片段')} 片 / {_sig(run, '命中章节数')} 节"
+            f"  带表头 {_sig(run, '带表头片段')}"
+            f"  年份 {_sig(run, '回答年份数')}"
+            f"  同比 {'有' if _sig(run, '含同比') else '无'}"
+            f"  弃答 {'是' if _sig(run, '弃答') else '否'}")
+
+
+def _table(columns, runs: list[dict]) -> str:
+    head = "| " + " | ".join(name for name, _ in columns) + " |"
+    sep = "|" + "---|" * len(columns)
+    body = ["| " + " | ".join(render(r) for _, render in columns) + " |" for r in runs]
+    return "\n".join([head, sep] + body)
+
+
+def markdown_table(runs: list[dict]) -> str:
+    return _table(TABLE_COLUMNS, runs)
+
+
+def _anchors_cell(run: dict) -> str:
+    items = _sig(run, "锚点") or []
+    return f"{sum(1 for a in items if a.get('中'))}/{len(items)}" if items else "-"
+
+
+# 细则层单独一张表。和台账分开，是因为两者的读法根本不同：
+# 台账读**趋势**（耗时涨了没、章节多样性生效没），细则读**异常**（有没有冒出来的红旗）。
+# 混进同一张表，读者会下意识把它们当成同一个分数体系里的列 —— 而它们不是一个体系：
+# 台账里几列只是流水账，细则里每一列背后都有一条实测校准过的误报边界。
+RUBRIC_COLUMNS = [
+    ("题目", lambda r: str(r.get("tag") or "")),
+    ("有据可依率", lambda r: str(_sig(r, "有据可依率"))),
+    ("无出处", lambda r: str(_sig(r, "无出处"))),
+    ("越界引用", lambda r: str(_sig(r, "越界数"))),
+    ("换算一致", lambda r: f"{_sig(r, '换算一致')}/{_sig(r, '配对数')}"),
+    ("换算不一致", lambda r: str(len(_sig(r, "换算不一致") or []))),
+    ("自算不一致", lambda r: f"{_sig(r, '自算不一致数')}/{_sig(r, '自算率检查数')}"),
+    ("无引用条目", lambda r: str(_sig(r, "无引用条目数"))),
+    ("无据归因", lambda r: str(_sig(r, "无据归因数"))),
+    ("锚点", _anchors_cell),
+    ("口径缺注", lambda r: "有" if _sig(r, "口径缺注") else "-"),
+]
+
+
+def rubric_table(runs: list[dict]) -> str:
+    return _table(RUBRIC_COLUMNS, runs)
+
+
+def hit_sections(run: dict) -> list[str]:
+    """这道题命中了哪些章节。
+
+    现场跑时 hits 在 run 里；从 json 离线重渲染时 hits 不在、只有 hit_sections。
+    两条路都要能走，否则同一份语料没法用两种方式读。
+    """
+    sections = run.get("hit_sections")
+    if sections is None:
+        sections = [h.get("section", "") for h in (run.get("hits") or [])]
+    return sorted({s for s in sections if s})
+
+
+def render_report(runs: list[dict], meta: dict, label: str, stamp: str) -> str:
+    """整份 markdown 报告的组装。抽成纯函数，就能不花任何 API 调用验证输出路径 ——
+    上一版的输出路径从来没有被执行过，所以带着 KeyError 就交付了。"""
+    body = [f"# 深度测量 · {label} · {stamp}\n",
+            f"- 年报：{meta.get('name')}（{meta.get('pages')} 页 / {meta.get('chunks')} 片段）",
+            f"- 配置：`TOP_K={config.TOP_K}` `MAX_PER_SECTION={config.MAX_PER_SECTION}` "
+            f"`LLM={config.LLM_MODEL}` `LLM_REWRITE={config.LLM_REWRITE}`\n",
+            "## 数字\n", markdown_table(runs), "\n",
+            "## 细则\n", rubric_table(runs), "\n", "## 回答\n"]
+    for r in runs:
+        body.append(f"### [{r.get('tag', '')}] {r.get('question', '')}\n")
+        body.append(f"- 耗时 {r.get('total_s')}s（检索 {r.get('retrieve_s')}s / 生成 {r.get('generate_s')}s）")
+        body.append(f"- 检索词：{' ｜ '.join(r.get('queries') or [])}")
+        body.append(f"- 命中：{', '.join(hit_sections(r))}\n")
+        body.append((r.get("answer") or "") + "\n")
+    return "\n".join(body)
+
+
+def ask(retriever, question, client, history=None, tag=""):
     diag: dict = {}
     t0 = time.perf_counter()
     hits, queries = retriever.search_with_queries(
@@ -127,7 +264,7 @@ def ask(retriever, question, client, history=None):
         "completion_tokens": usage.get("completion_tokens"),
         "rewrite": diag.get("rewrite"),
         "rewrite_error": diag.get("rewrite_error"),
-        "signal": signal(answer, hits),
+        "signal": signal(answer, hits, tag),
     }
 
 
@@ -151,18 +288,14 @@ def main() -> None:
     runs = []
     for tag, q in QUESTIONS:
         print(f"[{tag}] {q}")
-        r = ask(retriever, q, client)
+        r = ask(retriever, q, client, tag=tag)
         r["tag"] = tag
         runs.append(r)
-        print(f"    {r['total_s']}s（检索 {r['retrieve_s']} / 生成 {r['generate_s']}）"
-              f"  命中 {r['signal']['命中片段']} 片 / {r['signal']['命中章节数']} 节"
-              f"  带表头 {r['signal']['带表头片段']}"
-              f"  年份 {r['signal']['回答年份数']}  同比 {'有' if r['signal']['含同比'] else '无'}"
-              f"  未找到 {'是' if r['signal']['答未找到'] else '否'}\n")
+        print(summary_line(r) + "\n")
 
     print(f"[追问] {FOLLOWUP[0]}  →  {FOLLOWUP[1]}")
-    r1 = ask(retriever, FOLLOWUP[0], client)
-    r2 = ask(retriever, FOLLOWUP[1], client, history=[{"q": FOLLOWUP[0]}])
+    r1 = ask(retriever, FOLLOWUP[0], client, tag="追问-1")
+    r2 = ask(retriever, FOLLOWUP[1], client, history=[{"q": FOLLOWUP[0]}], tag="追问-2")
     for tag, r in (("追问-1", r1), ("追问-2", r2)):
         r["tag"] = tag
         runs.append(r)
@@ -175,35 +308,18 @@ def main() -> None:
     OUT_DIR.mkdir(exist_ok=True)
     stamp = f"{args.label}-{time.strftime('%m%d-%H%M')}"
 
-    rows = ["| 题目 | 耗时 | 检索 | 生成 | 检索词 | 改写 | 命中 | 章节 | 带表头 | 年份 | 同比 | 数字密度 | 弃答 | 引用命中率 | tok |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
-    for r in runs:
-        s = r["signal"]
-        rows.append(
-            f"| {r['tag']} | {r['total_s']}s | {r['retrieve_s']}s | {r['generate_s']}s | "
-            f"{len(r['queries'])} 条 | {r['rewrite'] or '-'} | "
-            f"{s['命中片段']} | {s['命中章节数']} | {s['带表头片段']} | {s['回答年份数']} | "
-            f"{'是' if s['含同比'] else '否'} | {s['金额个数']} | {s['有据可依率']} | "
-            f"{s['无出处']} | {s['引用命中率']} | {r['completion_tokens']} |")
-    table = "\n".join(rows)
+    table = markdown_table(runs) + "\n\n" + rubric_table(runs)
 
-    body = [f"# 深度测量 · {args.label} · {stamp}\n",
-            f"- 年报：{meta.get('name')}（{meta.get('pages')} 页 / {len(chunks)} 片段）",
-            f"- 配置：`TOP_K={config.TOP_K}` `MAX_PER_SECTION={config.MAX_PER_SECTION}` "
-            f"`LLM={config.LLM_MODEL}` `LLM_REWRITE={config.LLM_REWRITE}`\n",
-            "## 数字\n", table, "\n", "## 回答\n"]
-    for r in runs:
-        body.append(f"### [{r['tag']}] {r['question']}\n")
-        body.append(f"- 耗时 {r['total_s']}s（检索 {r['retrieve_s']}s / 生成 {r['generate_s']}s）")
-        body.append(f"- 检索词：{' ｜ '.join(r['queries'])}")
-        body.append(f"- 命中：{', '.join(sorted({h.get('section', '') for h in r['hits']}))}\n")
-        body.append(r["answer"] + "\n")
-
-    (OUT_DIR / f"{stamp}.md").write_text("\n".join(body), encoding="utf-8")
+    (OUT_DIR / f"{stamp}.md").write_text(
+        render_report(runs, meta, args.label, stamp), encoding="utf-8")
+    # 片段正文必须一起落盘。上一版只存了 hit_sections / hit_subsection，把 hits 正文丢掉，
+    # 后果是所有依赖片段的检查（有据可依率、越界引用、引文核对、口径标注）都无法离线复算 ——
+    # 每加一条新检查就得重新花真实 API 调用跑一遍。存下来之后，历史语料可以随时被新检查回算。
     (OUT_DIR / f"{stamp}.json").write_text(
         json.dumps([{k: v for k, v in r.items() if k != "hits"} |
                     {"hit_sections": [h.get("section") for h in r["hits"]],
-                     "hit_subsection": [h.get("subsection") for h in r["hits"]]}
+                     "hit_subsection": [h.get("subsection") for h in r["hits"]],
+                     "hit_texts": [h.get("text") or "" for h in r["hits"]]}
                     for r in runs], ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(table)
