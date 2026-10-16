@@ -195,3 +195,100 @@ def test_diversity_is_a_pure_function_of_its_inputs(skewed_chunks, monkeypatch):
     before = dict(fused)
     r._select_diverse(fused, 8)
     assert fused == before
+
+
+# ---------------------------------------------------------------- 追问：指代消解
+
+import json                       # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from rag.retriever import llm_rewrite  # noqa: E402
+
+
+class FakeLLM:
+    """只实现 chat.completions.create，够 llm_rewrite 用。"""
+
+    def __init__(self, payload=None, error=None):
+        self.payload, self.error, self.calls = payload, error, []
+        self.chat = self
+        self.completions = self
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        content = json.dumps(self.payload, ensure_ascii=False)
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+
+def test_rewrite_without_history_keeps_the_old_prompt_and_cap():
+    """首轮行为必须一字不变 —— 有既有测试钉着「第一条检索词」，别改坏。"""
+    llm = FakeLLM({"queries": ["2025年 营业利润"]})
+    out = llm_rewrite("去年营业利润多少", year="2025", client=llm)
+    assert out == ["2025年 营业利润"]
+    system = llm.calls[0]["messages"][0]["content"]
+    assert "之前的问题" not in system
+    assert llm.calls[0]["messages"][1]["content"] == "去年营业利润多少"
+
+
+def test_rewrite_with_history_asks_for_pronoun_resolution():
+    llm = FakeLLM({"queries": ["2024年 营业收入"]})
+    llm_rewrite("那去年呢", year="2025", client=llm, history=["营业收入和归母净利润分别是多少？"])
+    system = llm.calls[0]["messages"][0]["content"]
+    user = llm.calls[0]["messages"][1]["content"]
+    assert "之前的问题" in system and "追问" in system
+    assert "营业收入和归母净利润" in user and "那去年呢" in user
+
+
+def test_rewrite_history_is_capped(monkeypatch):
+    monkeypatch.setattr(config, "FOLLOWUP_HISTORY_TURNS", 2)
+    llm = FakeLLM({"queries": ["x"]})
+    llm_rewrite("那去年呢", year="2025", client=llm, history=["问题一", "问题二", "问题三"])
+    user = llm.calls[0]["messages"][1]["content"]
+    assert "问题二" in user and "问题三" in user
+    assert "问题一" not in user          # 只带最近两轮
+
+
+def test_rewrite_failure_is_reported_through_diag():
+    """这个函数吞掉所有异常 —— 没有 diag 就完全看不出追问已经失效了。"""
+    diag = {}
+    out = llm_rewrite("那去年呢", year="2025", client=FakeLLM(error=TimeoutError("超时")),
+                      history=["营业收入是多少？"], diag=diag)
+    assert out == []
+    assert diag["rewrite"] == "fallback"
+    assert "TimeoutError" in diag["rewrite_error"]
+
+
+def test_rewrite_success_is_reported_through_diag():
+    diag = {}
+    llm_rewrite("那去年呢", year="2025", client=FakeLLM({"queries": ["2024年 营业收入"]}), diag=diag)
+    assert diag["rewrite"] == "ok"
+
+
+@pytest.fixture
+def followup_retriever():
+    return make_retriever(make_chunks([("第八节财务报告", "合并利润表", "营业收入 1.00 2.00\n")]))
+
+
+def test_followup_drops_the_raw_rule_rewrite(followup_retriever):
+    """「那2024年呢」的词元几乎命中所有片段，留着会把 RRF 冲淡。"""
+    llm = FakeLLM({"queries": ["2024年 营业收入"]})
+    queries = followup_retriever._expand("那去年呢", llm, True, history=["营业收入是多少？"])
+    assert queries == ["2024年 营业收入"]
+    assert not any("那" in q for q in queries)
+
+
+def test_followup_falls_back_to_rule_rewrite_when_the_model_fails(followup_retriever):
+    """退化路径必须仍然给得出检索词，不能返回空。"""
+    queries = followup_retriever._expand("去年营业利润多少", FakeLLM(error=RuntimeError("boom")), True,
+                                         history=["营业收入是多少？"])
+    assert queries, "改写失败时不能没有检索词"
+    assert "2024" in queries[0] or "营业利润" in queries[0]
+
+
+def test_first_turn_keeps_rule_rewrite_first(followup_retriever):
+    """没有历史时维持原行为：规则改写排在最前。"""
+    llm = FakeLLM({"queries": ["2025年 合并利润表 营业利润"]})
+    queries = followup_retriever._expand("去年的营业利润", llm, True)
+    assert "营业利润" in queries[0]
+    assert len(queries) == 2

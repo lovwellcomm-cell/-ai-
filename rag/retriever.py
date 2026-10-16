@@ -85,24 +85,61 @@ LLM_REWRITE_PROMPT = """你是上市公司年报检索专家。把用户问题�
 - 报告年度为 {year} 年，“今年/本期”指 {year} 年，“去年/上期”指 {prev} 年。
 只输出 JSON：{{"queries": ["...", "..."]}}"""
 
+# 带上历史时追加的规则。要点：让模型自己判断是不是追问，并且**明确禁止**
+# 把上一轮的内容硬塞进这一轮的检索词 —— 追问和换话题都用同一段提示词处理。
+LLM_REWRITE_FOLLOWUP_RULE = """
+另外给了【之前的问题】。先判断现在的问题是哪种：
+- 追问（出现「那…呢」「它」「其」「该」「这个」「去年」「同期」这类指代或省略）：
+  先把指代补全成一个完整问题，再据此改写检索词。
+- 换了话题（现在的问题本身已经说清了主题）：完全忽略【之前的问题】，只按它改写。
+无论哪种，都不要把现在的问题里没有提到的内容写进检索词。"""
 
-def llm_rewrite(query: str, year: str = "", client=None, timeout: float = 8.0) -> list[str]:
-    """用大模型把问题改写成年报术语。失败返回空列表，由调用方退回规则改写。"""
+
+def llm_rewrite(query: str, year: str = "", client=None, timeout: float = 8.0,
+                history: list[str] | None = None, diag: dict | None = None) -> list[str]:
+    """用大模型把问题改写成年报术语。失败返回空列表，由调用方退回规则改写。
+
+    history 传最近几轮的**问题**（别传回答：上一轮回答里可能有算错或臆测的数字，
+    被带进检索词会污染检索）。带上历史后模型会先消解指代，
+    「那去年呢」这种才会变成「2024年 营业收入」。
+
+    diag 传字典时可以拿到改写是成功还是退化了 —— 这个函数吞掉所有异常，
+    没有这个信号就没法知道追问功能到底有没有生效（退化成规则改写会静默地
+    把「答不出追问」变成「答未找到」）。
+    """
     try:
         from .generator import get_client
         client = client or get_client()
         y = int(year) if year else 2025
+        system = LLM_REWRITE_PROMPT.format(year=y, prev=y - 1)
+        user = query
+        if history:
+            system += LLM_REWRITE_FOLLOWUP_RULE
+            recent = "\n".join(f"- {h}" for h in history[-config.FOLLOWUP_HISTORY_TURNS:])
+            user = f"【之前的问题】\n{recent}\n\n【现在的问题】\n{query}"
         resp = client.chat.completions.create(
             model=config.LLM_MODEL,
-            messages=[{"role": "system", "content": LLM_REWRITE_PROMPT.format(year=y, prev=y - 1)},
-                      {"role": "user", "content": query}],
-            temperature=0, max_tokens=200, timeout=timeout,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0, max_tokens=config.REWRITE_MAX_TOKENS, timeout=timeout,
             response_format={"type": "json_object"},
         )
-        data = json.loads(resp.choices[0].message.content)
+        choice = resp.choices[0]
+        data = json.loads(choice.message.content or "")
         qs = [str(x).strip() for x in data.get("queries", []) if str(x).strip()]
+        if diag is not None:
+            diag["rewrite"] = "ok" if qs else "empty"
         return qs[:3]
-    except Exception:
+    except json.JSONDecodeError:
+        # 走到这里多半是被 max_tokens 截断 —— 这个模型是推理型的，
+        # 一次查询改写要烧掉上千个推理 token，上限给小了正文一个字都剩不下，
+        # 而 JSON 一截断 json.loads 就抛异常，静默退化成规则改写。
+        if diag is not None:
+            diag["rewrite"] = "truncated"
+        return []
+    except Exception as e:
+        if diag is not None:
+            diag["rewrite"] = "fallback"
+            diag["rewrite_error"] = f"{type(e).__name__}: {e}"[:160]
         return []
 
 
@@ -121,16 +158,18 @@ class Retriever:
         self.last_queries: list[str] = []
 
     def search_with_queries(self, query: str, k: int = config.TOP_K, pool: int = 50,
-                            rrf_k: int = 60, client=None, use_llm: bool | None = None):
+                            rrf_k: int = 60, client=None, use_llm: bool | None = None,
+                            history: list[str] | None = None, diag: dict | None = None):
         """检索并同时返回所用的检索词。不修改任何共享状态，多个会话可同时调用。
 
         client 为本次请求使用的大模型客户端（用于查询改写）；use_llm 覆盖实例默认值。
+        history 传最近几轮的问题，用于消解追问里的指代；diag 用来回收改写是否退化。
         """
         if not self.chunks:
             return [], []
         pool = min(pool, len(self.chunks))
         use_llm = self.use_llm_rewrite if use_llm is None else use_llm
-        queries = self._expand(query, client, use_llm)
+        queries = self._expand(query, client, use_llm, history=history, diag=diag)
         qvecs = self.embed([config.QUERY_INSTRUCTION + q for q in queries])
 
         fused: dict[int, float] = {}
@@ -207,10 +246,19 @@ class Retriever:
                 return extract_header(c.get("text") or "")
         return ""
 
-    def _expand(self, query: str, client, use_llm: bool) -> list[str]:
+    def _expand(self, query: str, client, use_llm: bool,
+                history: list[str] | None = None, diag: dict | None = None) -> list[str]:
         queries = [rule_rewrite(query, self.company, self.year)]
         if use_llm:
-            queries += llm_rewrite(query, self.year, client=client or self.llm_client)
+            extra = llm_rewrite(query, self.year, client=client or self.llm_client,
+                                history=history, diag=diag)
+            if extra and history:
+                # 追问场景要丢掉上面那条规则改写。原始问题带指代（「那2024年呢」），
+                # 它的词元「那」「年」几乎命中每一个片段，混进 RRF 会把真正相关的片段冲淡。
+                # 模型已经做过指代消解，这里只保留它给的检索词。
+                # 没有历史时行为完全不变（首轮不传 history）。
+                queries = []
+            queries += extra
         # 去重并保持顺序
         return list(dict.fromkeys(q for q in queries if q))
 

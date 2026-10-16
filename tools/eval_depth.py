@@ -76,9 +76,14 @@ def signal(answer: str, hits: list[dict]) -> dict:
 
 
 def ask(retriever, question, client, history=None):
+    diag: dict = {}
     t0 = time.perf_counter()
-    hits, queries = retriever.search_with_queries(question, client=client,
-                                                  use_llm=config.LLM_REWRITE)
+    hits, queries = retriever.search_with_queries(
+        question, client=client, use_llm=config.LLM_REWRITE,
+        # 只把**问题**传下去，不传回答：上一轮回答里可能有算错或臆测的数字
+        history=[h["q"] for h in history] if history else None,
+        diag=diag,
+    )
     t1 = time.perf_counter()
     usage: dict = {}
     answer = "".join(generate(question, hits, client=client,
@@ -94,6 +99,8 @@ def ask(retriever, question, client, history=None):
         "total_s": round(t2 - t0, 2),
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
+        "rewrite": diag.get("rewrite"),
+        "rewrite_error": diag.get("rewrite_error"),
         "signal": signal(answer, hits),
     }
 
@@ -129,26 +136,29 @@ def main() -> None:
 
     print(f"[追问] {FOLLOWUP[0]}  →  {FOLLOWUP[1]}")
     r1 = ask(retriever, FOLLOWUP[0], client)
-    r2 = ask(retriever, FOLLOWUP[1], client, history=[{"q": FOLLOWUP[0], "a": r1["answer"]}])
+    r2 = ask(retriever, FOLLOWUP[1], client, history=[{"q": FOLLOWUP[0]}])
     for tag, r in (("追问-1", r1), ("追问-2", r2)):
         r["tag"] = tag
         runs.append(r)
     print(f"    第二问检索词：{r2['queries']}")
-    print(f"    第二问是否接上第一问的主题："
-          f"{'是' if any('收入' in q or '利润' in q for q in r2['queries']) else '否'}\n")
+    print(f"    改写状态：{r2['rewrite']}"
+          + (f"（{r2['rewrite_error']}）" if r2.get("rewrite_error") else ""))
+    carried = any(("收入" in q or "利润" in q) for q in r2["queries"])
+    print(f"    第二问是否接上第一问的主题：{'是' if carried else '否'}\n")
 
     OUT_DIR.mkdir(exist_ok=True)
     stamp = f"{args.label}-{time.strftime('%m%d-%H%M')}"
 
-    rows = ["| 题目 | 耗时 | 检索 | 生成 | 命中 | 章节 | 带表头 | 年份 | 同比 | 未找到 | 引用命中率 | prompt tok | completion tok |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    rows = ["| 题目 | 耗时 | 检索 | 生成 | 检索词 | 改写 | 命中 | 章节 | 带表头 | 年份 | 同比 | 未找到 | 引用命中率 | tok |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in runs:
         s = r["signal"]
         rows.append(
             f"| {r['tag']} | {r['total_s']}s | {r['retrieve_s']}s | {r['generate_s']}s | "
+            f"{len(r['queries'])} 条 | {r['rewrite'] or '-'} | "
             f"{s['命中片段']} | {s['命中章节数']} | {s['带表头片段']} | {s['回答年份数']} | "
             f"{'是' if s['含同比'] else '否'} | {'是' if s['答未找到'] else '否'} | "
-            f"{s['引用命中率']} | {r['prompt_tokens']} | {r['completion_tokens']} |")
+            f"{s['引用命中率']} | {r['completion_tokens']} |")
     table = "\n".join(rows)
 
     body = [f"# 深度测量 · {args.label} · {stamp}\n",

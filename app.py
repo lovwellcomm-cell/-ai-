@@ -325,13 +325,24 @@ def advance_turn() -> None:
             fail(target, "未配置 DeepSeek Key，无法回答。请在 .env 或 Secrets 中配置，"
                          "或在左侧填写自己的 Key。")
             st.rerun()
+        # 带最近几轮的问题给改写，追问（「那去年呢」）里的指代才消解得掉。
+        # 只传问题不传回答：上一轮回答里可能有算错或臆测的数字，带进检索词会污染检索。
+        recent = [t["q"] for t in history[-config.FOLLOWUP_HISTORY_TURNS:]]
+        diag: dict = {}
         try:
-            hits, queries = retriever.search_with_queries(target["q"], client=client,
-                                                          use_llm=config.LLM_REWRITE)
+            hits, queries = retriever.search_with_queries(
+                target["q"], client=client, use_llm=config.LLM_REWRITE,
+                history=recent or None, diag=diag,
+            )
         except Exception as e:
             refund(target)
             fail(target, f"检索失败：{e}")
             st.rerun()
+        # 改写退化（超时 / JSON 截断）会静默变成规则改写，追问就失效了。
+        # 记在回合上，便于排查，也免得它无声无息。
+        target["rewrite"] = diag.get("rewrite", "unused")
+        if diag.get("rewrite") == "fallback":
+            target["rewrite_error"] = diag.get("rewrite_error", "")
         target["hits"] = hits
         target["queries"] = queries
         target["status"] = "generating"

@@ -58,6 +58,12 @@ MAX_PER_SECTION = int(get("MAX_PER_SECTION", "5"))
 LLM_TIMEOUT = float(get("LLM_TIMEOUT", "60"))
 # 给缺年份表头的报表片段前置表头。设为 0 可关掉（tools/eval_depth.py 做 A/B 时用）。
 HEADER_PROPAGATION = get("HEADER_PROPAGATION", "1") == "1"
+# 追问时带几轮历史给查询改写。只带问题，不带回答。
+FOLLOWUP_HISTORY_TURNS = int(get("FOLLOWUP_HISTORY_TURNS", "2"))
+# 查询改写的输出上限。这个模型是推理型的：实测一次改写要烧 1000+ 个推理 token，
+# 而 max_tokens 把推理和正文一起算。原来设 200，正文一个字都剩不下、JSON 被截断、
+# json.loads 抛异常后静默退化成规则改写 —— LLM 改写等于从来没生效过。
+REWRITE_MAX_TOKENS = int(get("REWRITE_MAX_TOKENS", "3000"))
 # 是否用大模型做查询改写（失败时自动退回规则改写）
 LLM_REWRITE = get("LLM_REWRITE", "1") == "1"
 # 索引格式版本：切分或前缀规则变化时 +1，旧索引会自动重建
