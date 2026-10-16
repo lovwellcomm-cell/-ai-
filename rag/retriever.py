@@ -21,6 +21,41 @@ STOPWORDS = {"的", "是", "多少", "什么", "有", "了", "吗", "呢", "请�
 
 CHANGE_WORDS = ("变化", "变动", "增长", "下降", "增减", "同比", "增幅", "降幅", "提升", "减少", "增加", "趋势")
 
+# ---------- 报表片段的年份表头 ----------
+# 症状：命中合并利润表的中段片段时，模型看到的是
+#   「财务费用 123,711,547.40 146,963,561.21」
+# 两列数字，却没有任何「哪列是哪年」的标注，于是给不出同比。
+# 病根：年份表头在同一个 subsection 里**往前数第一个**片段里。实测每张报表只有那一个片段带表头
+#   （合并利润表 5 个片段里只有 1 个，合并资产负债表 6 个里只有 1 个）。
+# 所以这里不追加相邻片段，而是把表头那几行**前置**到给模型看的文本上：约 20 字，零额外片段、零额外调用，
+# 一次修好全部无表头片段。只影响喂给模型的上下文，不改 chunks.json，检索索引不受影响。
+_HEADER_RE = re.compile(r"20\d\d\s*年\s*度|单位\s*[:：]\s*元|币种\s*[:：]")
+_AMOUNT_RE = re.compile(r"\d[\d,，]*\.\d{2}")
+_HEADER_SCAN_MAX = 60      # 往前最多回溯多少个片段
+# 表头最多取几行。别设太小：合并资产负债表的年份列标在第 9 行
+# （「2025 年 12 月 31 日 2024 年 12 月 31 日」前面还有标题、编制单位、单位、项目、附、注），
+# 上限卡在 8 会把最关键的那一行截掉，等于白传播。真正的终止条件是「遇到含金额的行」。
+_HEADER_MAX_LINES = 14
+
+
+def extract_header(text: str) -> str:
+    """取片段开头连续的表头行；遇到第一行含金额数字就停（那是数据行，不是表头）。"""
+    lines = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if _AMOUNT_RE.search(line):
+            break
+        lines.append(line)
+        if len(lines) >= _HEADER_MAX_LINES:
+            break
+    return "\n".join(lines)
+
+
+def needs_header(text: str) -> bool:
+    return not _HEADER_RE.search(text[:200])
+
 
 def tokenize(text: str) -> list[str]:
     return [t for t in jieba.lcut_for_search(text.lower()) if t.strip() and t not in STOPWORDS]
@@ -106,8 +141,71 @@ class Retriever:
             for ranking in (vec_rank, bm_rank):
                 for r, i in enumerate(ranking):
                     fused[int(i)] = fused.get(int(i), 0.0) + 1.0 / (rrf_k + r + 1)
-        best = sorted(fused, key=fused.get, reverse=True)[:k]
-        return [dict(self.chunks[i], score=round(fused[i], 5)) for i in best], queries
+        best = self._select_diverse(fused, k)
+        hits = [dict(self.chunks[i], score=round(fused[i], 5)) for i in best]
+        return self._attach_headers(hits), queries
+
+    def _select_diverse(self, fused: dict[int, float], k: int) -> list[int]:
+        """按 RRF 顺序取 k 个，但限制任一 section 的占比。
+
+        语料极度倾斜（实测内置示例年报：第八节财务报告 318 个片段占 67%，
+        解释“为什么”的第三节只有 56 个占 12%），纯全局 top-k 会让 8 个位置全被
+        财报数字占满，模型手里根本没有解释性材料。
+
+        按 section 而**不是** subsection 限流：合并利润表整张 5 个片段同属一个 subsection，
+        按 subsection 限 2 会把模型需要的行切掉。
+
+        配额只约束主循环，回填可以超出配额 —— 宁可变多，也不能因为限流就少给片段。
+        最终按分数返回，调用方可以依赖 hits[0] 是最相关的。
+        """
+        ordered = sorted(fused, key=fused.get, reverse=True)
+        picked: list[int] = []
+        overflow: list[int] = []
+        per_section: dict[str, int] = {}
+        for i in ordered:
+            section = self.chunks[i].get("section") or ""
+            if len(picked) < k and per_section.get(section, 0) < config.MAX_PER_SECTION:
+                picked.append(i)
+                per_section[section] = per_section.get(section, 0) + 1
+            else:
+                overflow.append(i)
+        for i in overflow:                       # 配额导致取不满时按分数回填
+            if len(picked) >= k:
+                break
+            picked.append(i)
+        return sorted(picked, key=fused.get, reverse=True)
+
+    def _attach_headers(self, hits: list[dict]) -> list[dict]:
+        """给缺年份表头的报表片段前置表头。只读 self.chunks，不写任何共享状态。"""
+        if not config.HEADER_PROPAGATION:
+            return hits
+        out = []
+        for hit in hits:
+            hit = dict(hit)
+            header = self._find_header(hit)
+            if header:
+                hit["context_header"] = header
+            out.append(hit)
+        return out
+
+    def _find_header(self, hit: dict) -> str:
+        """往回找同一 subsection 里最近那个带表头的片段，取出它的表头行。"""
+        if not needs_header(hit.get("text") or ""):
+            return ""                            # 自己就带表头
+        idx = hit.get("chunk_id")
+        if not isinstance(idx, int) or not (0 <= idx < len(self.chunks)):
+            return ""
+        if self.chunks[idx].get("chunk_id") != idx:   # chunk_id 必须等于下标，否则放弃
+            return ""
+        section, subsection = hit.get("section"), hit.get("subsection")
+        for j in range(idx - 1, max(-1, idx - 1 - _HEADER_SCAN_MAX), -1):
+            c = self.chunks[j]
+            # 走出同一个 subsection 就不再往前找，免得把别的报表的表头安上来
+            if c.get("section") != section or c.get("subsection") != subsection:
+                return ""
+            if not needs_header(c.get("text") or ""):
+                return extract_header(c.get("text") or "")
+        return ""
 
     def _expand(self, query: str, client, use_llm: bool) -> list[str]:
         queries = [rule_rewrite(query, self.company, self.year)]

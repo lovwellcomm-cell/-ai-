@@ -50,6 +50,14 @@ QUERY_INSTRUCTION = "为这个句子生成表示以用于检索相关文章："
 CHUNK_SIZE = int(get("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(get("CHUNK_OVERLAP", "80"))
 TOP_K = int(get("TOP_K", "8"))
+# 任一年报章节最多占用几个检索位。年报语料极度倾斜（第八节财务报告常占三分之二），
+# 不限制的话 TOP_K 个位置会被财报数字占满，模型拿不到“为什么”那部分材料。
+MAX_PER_SECTION = int(get("MAX_PER_SECTION", "5"))
+# 生成调用的超时（秒）。不设的话走 OpenAI 客户端默认的 600 秒，
+# 一次卡住会把免费实例的会话钉死十分钟。
+LLM_TIMEOUT = float(get("LLM_TIMEOUT", "60"))
+# 给缺年份表头的报表片段前置表头。设为 0 可关掉（tools/eval_depth.py 做 A/B 时用）。
+HEADER_PROPAGATION = get("HEADER_PROPAGATION", "1") == "1"
 # 是否用大模型做查询改写（失败时自动退回规则改写）
 LLM_REWRITE = get("LLM_REWRITE", "1") == "1"
 # 索引格式版本：切分或前缀规则变化时 +1，旧索引会自动重建

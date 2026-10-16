@@ -9,3 +9,6 @@ data/
 __pycache__/
 .pytest_cache/
 *.log
+
+# 离线测量的输出（tools/eval_depth.py 生成，可随时重跑）
+eval_out/

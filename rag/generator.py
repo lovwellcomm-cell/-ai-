@@ -24,7 +24,13 @@ def format_context(chunks: list[dict]) -> str:
         else:
             pages = f"第{c['page_start']}-{c['page_end']}页"
         where = c["section"] + (f" · {c['subsection']}" if c.get("subsection") else "")
-        parts.append(f"[{n}]（{where}，{pages}）\n{c['text']}")
+        body = c["text"]
+        # 报表片段常常只有数字没有年份表头（表头在同一个 subsection 往前数第一个片段里），
+        # 检索层会把那几行取出来挂在 context_header 上，这里前置上去，模型才分得清哪列是哪年。
+        header = c.get("context_header")
+        if header:
+            body = f"（表头，用来确认各列属于哪一年）\n{header}\n{body}"
+        parts.append(f"[{n}]（{where}，{pages}）\n{body}")
     return "\n\n".join(parts)
 
 
@@ -49,14 +55,22 @@ def get_client():
 
 
 def generate(question: str, chunks: list[dict], client=None,
-             company: str = "", year: str = "") -> Iterator[str]:
-    """流式返回回答文本片段。"""
+             company: str = "", year: str = "", usage_out: dict | None = None) -> Iterator[str]:
+    """流式返回回答文本片段。
+
+    usage_out 传字典时，会把本次调用的 token 用量填进去（需要 stream_options 才会回传）。
+    生成器不能有返回值，所以用这种方式把用量带出来。
+    """
     client = client or get_client()
     stream = client.chat.completions.create(
         model=config.LLM_MODEL, messages=build_messages(question, chunks, company, year),
-        temperature=0.1, stream=True,
+        temperature=0.1, stream=True, timeout=config.LLM_TIMEOUT,
+        stream_options={"include_usage": True},
     )
     for event in stream:
+        usage = getattr(event, "usage", None)
+        if usage is not None and usage_out is not None:
+            usage_out.update(usage.model_dump() if hasattr(usage, "model_dump") else dict(usage))
         if event.choices and event.choices[0].delta.content:
             yield event.choices[0].delta.content
 
