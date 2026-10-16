@@ -15,6 +15,18 @@ SYSTEM_PROMPT = """你是一名严谨的上市公司年报研究助手。下面�
 7. 只有片段里确实没有相关数据时，才回答“年报中未找到相关信息”，并说明找到了哪些相关内容。
 8. 使用中文，先给一句话结论，再分点列出依据。"""
 
+# 明确写出字数上限。**必须给数字** —— 实测过几种软约束，都没用：
+#     A 不限长度      48.2s  推理 8297 tok  正文 1596 字
+#     B 「600 字以内」 17.9s  推理 2845 tok  正文  760 字   ← 快 2.6 倍
+#     F 「1000 字以内」33.9s  推理 6111 tok  正文 1449 字
+#     G 「别啰嗦」     43.9s  推理 7517 tok  正文 1028 字
+#     H 「最多 5 条依据」39.2s 推理 6144 tok  正文  728 字
+# G/H 尤其说明问题：H 输出的篇幅和 B 差不多，但它照样想了 6144 个 token。
+# 这个模型是推理型的，只有明确的数字预算会让它把任务当成「有界的」来规划，
+# 文风类的要求不改变它的思考量。所以别把这条改成「请简洁一些」。
+ANSWER_BUDGET_RULE = """
+9. 回答要紧凑：先给结论，依据用要点，总长控制在 {budget} 字以内。数字给全，但不要重复啰嗦。"""
+
 
 def format_context(chunks: list[dict]) -> str:
     parts = []
@@ -37,6 +49,8 @@ def format_context(chunks: list[dict]) -> str:
 def build_messages(question: str, chunks: list[dict], company: str = "", year: str = "") -> list[dict]:
     desc = f"（{company} {year} 年年度报告）" if company or year else ""
     system = SYSTEM_PROMPT.format(doc_desc=desc)
+    if config.ANSWER_CHAR_BUDGET > 0:
+        system += ANSWER_BUDGET_RULE.format(budget=config.ANSWER_CHAR_BUDGET)
     user = f"【年报片段】\n{format_context(chunks)}\n\n【问题】\n{question}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 

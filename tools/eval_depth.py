@@ -53,13 +53,27 @@ FOLLOWUP = ("营业收入和归母净利润分别是多少？", "那去年呢？
 
 YEAR_RE = re.compile(r"20\d\d")
 YOY_RE = re.compile(r"(?:同比|增长|下降|减少|增加|上升)[^。；\n]{0,12}?(\d+(?:\.\d+)?)\s*%")
-ABSTAIN_RE = re.compile(r"未找到|没有找到|未披露|无法确定|没有相关")
+NUM_RE = re.compile(r"\d[\d,]*\.?\d*")
+
+
+def abstained(answer: str) -> bool:
+    """只把「真的答不出来」算作弃答。
+
+    这里踩过坑：一开始用 `未找到|未披露|无法确定` 做匹配，结果把
+    「年报片段未对毛利率变动原因作专门说明，但从片段可以看出…」这种
+    **有数据、只是诚实标注了不确定性**的回答也判成了弃答，得出「两题从答未找到
+    变成答出来了」的错误结论。所以现在要求：既出现明确的弃答措辞，
+    又几乎没有任何数字，才算弃答。
+    """
+    explicit = "未找到相关信息" in answer or "年报中未找到" in answer
+    return explicit and len(NUM_RE.findall(answer)) < 4
 
 
 def signal(answer: str, hits: list[dict]) -> dict:
     """全部是可程序化计算的信号，不需要人工标注。"""
     sections = {h.get("section") or "" for h in hits}
     cited = cited_numbers(answer, len(hits))
+    numbers = NUM_RE.findall(answer)
     n_sentences = max(1, len([s for s in re.split(r"[。；\n]", answer) if s.strip()]))
     n_with_cite = len([s for s in re.split(r"[。；\n]", answer) if re.search(r"\[\d", s)])
     return {
@@ -68,7 +82,10 @@ def signal(answer: str, hits: list[dict]) -> dict:
         "带表头片段": sum(1 for h in hits if h.get("context_header")),
         "回答年份数": len(set(YEAR_RE.findall(answer))),
         "含同比": bool(YOY_RE.search(answer)),
-        "答未找到": bool(ABSTAIN_RE.search(answer)),
+        "弃答": abstained(answer),
+        "数字个数": len(numbers),
+        # 深度代理指标：数字密度比绝对字数更能说明内容是不是实心的
+        "数字密度": round(len(numbers) * 100 / max(1, len(answer)), 1),
         "引用编号": len(cited),
         "引用命中率": round(n_with_cite / n_sentences, 2),
         "回答字数": len(answer),
@@ -149,7 +166,7 @@ def main() -> None:
     OUT_DIR.mkdir(exist_ok=True)
     stamp = f"{args.label}-{time.strftime('%m%d-%H%M')}"
 
-    rows = ["| 题目 | 耗时 | 检索 | 生成 | 检索词 | 改写 | 命中 | 章节 | 带表头 | 年份 | 同比 | 未找到 | 引用命中率 | tok |",
+    rows = ["| 题目 | 耗时 | 检索 | 生成 | 检索词 | 改写 | 命中 | 章节 | 带表头 | 年份 | 同比 | 数字密度 | 弃答 | 引用命中率 | tok |",
             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in runs:
         s = r["signal"]
@@ -157,7 +174,7 @@ def main() -> None:
             f"| {r['tag']} | {r['total_s']}s | {r['retrieve_s']}s | {r['generate_s']}s | "
             f"{len(r['queries'])} 条 | {r['rewrite'] or '-'} | "
             f"{s['命中片段']} | {s['命中章节数']} | {s['带表头片段']} | {s['回答年份数']} | "
-            f"{'是' if s['含同比'] else '否'} | {'是' if s['答未找到'] else '否'} | "
+            f"{'是' if s['含同比'] else '否'} | {s['数字密度']} | {'★' if s['弃答'] else '否'} | "
             f"{s['引用命中率']} | {r['completion_tokens']} |")
     table = "\n".join(rows)
 

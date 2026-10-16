@@ -54,8 +54,13 @@ TOP_K = int(get("TOP_K", "8"))
 # 不限制的话 TOP_K 个位置会被财报数字占满，模型拿不到“为什么”那部分材料。
 MAX_PER_SECTION = int(get("MAX_PER_SECTION", "5"))
 # 生成调用的超时（秒）。不设的话走 OpenAI 客户端默认的 600 秒，
-# 一次卡住会把免费实例的会话钉死十分钟。
+# 一次卡住会把免费实例的会话钉死十分钟。对**流式**调用这是「多久没收到数据」的上限，
+# 不是总时长上限；长推理期间服务器不发数据，所以别设得太小。
 LLM_TIMEOUT = float(get("LLM_TIMEOUT", "60"))
+# 回答字数上限。实测这是最有效的提速手段：600 字比不限长度快 2.6 倍，
+# 而且不是靠截断输出 —— 模型的推理量本身从 8297 个 token 降到 2845。
+# 设 0 表示不限（会明显变慢，见 rag/generator.py:ANSWER_BUDGET_RULE 的实测数据）。
+ANSWER_CHAR_BUDGET = int(get("ANSWER_CHAR_BUDGET", "600"))
 # 给缺年份表头的报表片段前置表头。设为 0 可关掉（tools/eval_depth.py 做 A/B 时用）。
 HEADER_PROPAGATION = get("HEADER_PROPAGATION", "1") == "1"
 # 追问时带几轮历史给查询改写。只带问题，不带回答。

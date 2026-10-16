@@ -49,6 +49,24 @@ def test_index_and_retrieve(sample_pdf, tmp_path, monkeypatch):
     assert hits[0]["page_start"] == 6
 
 
+def test_answer_budget_rule_is_injected_with_a_number():
+    """字数上限必须带一个明确的数字。
+
+    实测过「请简洁一些」「最多 5 条依据」这类软约束，模型照样想 6000+ 个推理 token、
+    耗时不变；只有明确数字预算能把推理量压下来。这条测试防止有人把它改成文风提示。
+    """
+    msgs = build_messages("营收多少", [{"text": "x", "section": "s", "page_start": 1, "page_end": 1}])
+    system = msgs[0]["content"]
+    assert str(config.ANSWER_CHAR_BUDGET) in system
+    assert "字以内" in system
+
+
+def test_answer_budget_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr(config, "ANSWER_CHAR_BUDGET", 0)
+    msgs = build_messages("营收多少", [{"text": "x", "section": "s", "page_start": 1, "page_end": 1}])
+    assert "字以内" not in msgs[0]["content"]
+
+
 def test_generator_prompt_and_citations():
     chunks = [
         {"text": "营业收入为128.5亿元", "section": "第二节", "page_start": 4, "page_end": 4},
