@@ -118,7 +118,11 @@
   font-family: var(--font-mono); font-size: 10.5px;
   padding: 1px 5px; border-radius: 5px; background: var(--surface-3); color: var(--ink-2);
 }
-.menu-only { display: none; }
+/* 菜单按钮恒显：它负责开合 Streamlit 侧边栏。
+   曾经用 @media (max-width:1080px) 控制显隐，结果是放大页面后视口落进
+   「Streamlit 已收起侧边栏、但宽度还大于 1080」的死角，入口彻底消失。
+   不要再按宽度推断侧边栏状态。 */
+.menu-only { display: inline-flex; }
 .ctx {
   display: flex; align-items: center; gap: 8px; min-width: 0;
   padding: 5px 11px 5px 9px; border-radius: 999px;
@@ -444,14 +448,13 @@ details.trace summary:hover { color: var(--ink-2); }
 }
 .paper-cap { font-family: var(--font-mono); font-size: 9.5px; color: var(--ink-3); margin-top: 8px; letter-spacing: .03em; }
 
-.scrim { position: absolute; inset: 0; background: rgba(0,0,0,.44); z-index: 15; }
+/* 遮罩只在手机上需要（抽屉这时是底部弹层）。桌面不加：它会盖住顶栏，
+   让顶栏按钮点不动，还会把整个对话区压暗。 */
+.scrim { display: none; position: absolute; inset: 0; background: rgba(0,0,0,.44); z-index: 15; }
 
 /* ============================================================
    自适应
    ============================================================ */
-@media (max-width: 1080px) {
-  .menu-only { display: inline-flex; }
-}
 @media (max-width: 700px) {
   .thread-inner { padding: 20px 16px 6px; gap: 22px; }
   .topbar { padding-inline: 16px; }
@@ -475,6 +478,7 @@ details.trace summary:hover { color: var(--ink-2); }
     transform: translateY(102%);
   }
   .panel.open { transform: none; }
+  .scrim { display: block; }
   .panel-head { position: relative; padding-top: 18px; }
   .panel-head::before {
     content: ""; position: absolute; top: 7px; left: 50%; transform: translateX(-50%);

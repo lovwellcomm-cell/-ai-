@@ -107,13 +107,15 @@ export default function (component) {
   const warn = q("#warn");
   if (d.warn) { q("#warnText").textContent = d.warn; warn.hidden = false; }
   else { warn.hidden = true; }
-  q("#hintLeft").textContent = d.hint || "";
 
   /* ---------------- 发送状态 ---------------- */
   const busy = !!d.busy;
+  // 生成期间输入框保持可用：用户可以先把下一条问题写好，只锁发送按钮，
+  // 这样既不会两轮并发，也不会让人觉得界面卡死了。
   const setSend = () => { sendBtn.disabled = busy || input.value.trim().length === 0; };
-  input.disabled = busy;
+  input.disabled = false;
   setSend();
+  q("#hintLeft").textContent = busy ? "正在生成回答，可以先写下一条问题" : (d.hint || "");
 
   /* ---------------- 对话流 ---------------- */
   const msgsSig = JSON.stringify(d.messages || []);
@@ -172,9 +174,18 @@ export default function (component) {
   q("#panelClose").onclick = () => { s.drawer = false; toggleDrawer(); };
   scrim.onclick = () => { s.drawer = false; toggleDrawer(); };
   q("#menuBtn").onclick = () => {
-    // 主区的 Streamlit header 被隐藏了，但折叠态的展开按钮还在 DOM 里，程序化点击即可
-    const btn = document.querySelector('[data-testid="stExpandSidebarButton"]');
-    if (btn) btn.click();
+    // 主区的 Streamlit header 被 display:none 隐藏了，但里面的展开按钮仍在 DOM 里，
+    // 程序化点击照样生效（已实测）。
+    // 按侧边栏的真实宽度决定方向，而不是猜「哪个按钮存在」——
+    // 实测 streamlit 1.66 展开状态下侧边栏里并没有 stSidebarCollapseButton，
+    // 只靠按钮有无来判断会时灵时不灵。
+    const sb = document.querySelector('[data-testid="stSidebar"]');
+    const collapsed = !sb || sb.getBoundingClientRect().width < 40;
+    const target = collapsed
+      ? document.querySelector('[data-testid="stExpandSidebarButton"]')
+      : (document.querySelector('[data-testid="stSidebarCollapseButton"] button')
+         || document.querySelector('[data-testid="stSidebarCollapseButton"]'));
+    if (target) target.click();
   };
 
   function toggleDrawer() {
