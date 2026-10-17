@@ -133,6 +133,30 @@ def test_unsourced_percentage_is_reported():
     assert check("同比增长 10.64%。", HITS)["无出处百分比"] == 0
 
 
+def test_table_unit_declaration_is_honoured():
+    """「单位：万元」的表，裸数字要按声明换算。
+
+    实测踩过：时代新材的「主要会计数据」整张表以万元计，模型写成
+    「214.71亿元（2,147,054.45万元）」完全正确，但检查器把 2,147,054.45 当成**元**
+    存进池子，于是正确换算被整片判成编造。
+
+    这个 bug 只在换一份年报时才暴露 —— 内置示例年报的报表以元为单位，
+    裸数字正好等于答案里的原值。
+    """
+    hits = [{"text": "单位：万元 币种：人民币\n主要会计数据 2025年 2024年\n"
+                     "营业收入 2,147,054.45 2,005,500.74"}]
+    assert check("营业收入 214.71亿元（2,147,054.45万元）。", hits)["无出处"] == 0
+    assert check("营业收入 200.55亿元。", hits)["无出处"] == 0
+    # 编造的数字仍然要抓住
+    assert check("营业收入 999.99亿元。", hits)["无出处"] == 1
+
+
+def test_unit_declaration_can_come_from_the_context_header():
+    """表头是检索层补上去的（缺年份表头的报表片段），量纲声明可能在它里面。"""
+    hits = [{"text": "营业收入 2,147,054.45", "context_header": "单位：万元"}]
+    assert check("营业收入 214.71亿元。", hits)["无出处"] == 0
+
+
 def test_no_hits_means_nothing_is_sourced():
     """没有片段时不能因为"没有反例"就判为有出处。"""
     res = check("营业收入 24,673,670,269.16 元。", [])

@@ -41,6 +41,9 @@ from rag.retriever import Retriever  # noqa: E402
 from tools.eval_rubric import run as rubric_run  # noqa: E402
 
 DEMO_ID = "2d3dee37263a663e"
+# 锚点是照着内置示例年报的数字写死的（`tools/rubric_questions.py`）。
+# 换一份年报跑时它们必然全不中 —— 那是噪声，不是回归，所以换文档时自动关掉。
+RUN_ANCHORS = True
 OUT_DIR = ROOT / "eval_out"
 
 # 覆盖用户报的三个缺口 + 一个速度基线。第一组是两问连发，第二问故意只说"那去年呢"。
@@ -141,7 +144,8 @@ def signal(answer: str, hits: list[dict], tag: str = "", extension: str = "",
         "引用命中率": round(n_with_cite / n_sentences, 2),
         "回答字数": len(answer),
         # 细则（含金额个数/有据可依率/无出处/无出处样例，那几条从 eval_fidelity 来）
-        **rubric_run(answer, hits, tag),
+        # tag 传空 = 不跑锚点（锚点是按某一份年报的数字写死的，换文档就没有意义）
+        **rubric_run(answer, hits, tag if RUN_ANCHORS else ""),
         # 扩展分析单独量
         **extension_signals(extension, hits, ext_status),
     }
@@ -295,7 +299,7 @@ def render_report(runs: list[dict], meta: dict, label: str, stamp: str) -> str:
     return "\n".join(body)
 
 
-def ask(retriever, question, client, history=None, tag=""):
+def ask(retriever, question, client, history=None, tag="", company="", year=""):
     diag: dict = {}
     # 只把**问题**传下去，不传回答：上一轮回答里可能有算错或臆测的数字。
     # 检索、生成、扩展三处用的是同一份。
@@ -309,7 +313,7 @@ def ask(retriever, question, client, history=None, tag=""):
     t1 = time.perf_counter()
     usage: dict = {}
     answer = "".join(generate(question, hits, client=client,
-                              company="精达股份", year="2025", usage_out=usage,
+                              company=company, year=year, usage_out=usage,
                               history=recent))
     t2 = time.perf_counter()
 
@@ -322,7 +326,7 @@ def ask(retriever, question, client, history=None, tag=""):
     if should_analyze(answer):
         try:
             extension = analyze(question, hits, answer, client=client,
-                                company="精达股份", year="2025",
+                                company=company, year=year,
                                 usage_out=a_usage, diag=a_diag, history=recent)
             a_status = a_diag.get("analyze", "ok")
         except Exception as e:
@@ -372,8 +376,13 @@ def main() -> None:
         config.ANALYZE_ENABLED = False
 
     meta, chunks, emb = load_index(args.doc)
-    retriever = Retriever(chunks, emb, company=meta.get("company", ""), year=meta.get("year", ""))
+    co, yr = meta.get("company", ""), meta.get("year", "")
+    retriever = Retriever(chunks, emb, company=co, year=yr)
     client = get_client()
+
+    # 锚点是照着内置示例年报写死的，换文档必然全不中 —— 关掉，别当成回归。
+    global RUN_ANCHORS
+    RUN_ANCHORS = args.doc == DEMO_ID
     print(f"年报：{meta.get('name')}（{meta.get('pages')} 页 / {len(chunks)} 片段）")
     print(f"配置：TOP_K={config.TOP_K} MAX_PER_SECTION={config.MAX_PER_SECTION} "
           f"LLM={config.LLM_MODEL} LLM_REWRITE={config.LLM_REWRITE} "
@@ -382,14 +391,15 @@ def main() -> None:
     runs = []
     for tag, q in QUESTIONS:
         print(f"[{tag}] {q}")
-        r = ask(retriever, q, client, tag=tag)
+        r = ask(retriever, q, client, tag=tag, company=co, year=yr)
         r["tag"] = tag
         runs.append(r)
         print(summary_line(r) + "\n")
 
     print(f"[追问] {FOLLOWUP[0]}  →  {FOLLOWUP[1]}")
-    r1 = ask(retriever, FOLLOWUP[0], client, tag="追问-1")
-    r2 = ask(retriever, FOLLOWUP[1], client, history=[{"q": FOLLOWUP[0]}], tag="追问-2")
+    r1 = ask(retriever, FOLLOWUP[0], client, tag="追问-1", company=co, year=yr)
+    r2 = ask(retriever, FOLLOWUP[1], client, history=[{"q": FOLLOWUP[0]}],
+               tag="追问-2", company=co, year=yr)
     for tag, r in (("追问-1", r1), ("追问-2", r2)):
         r["tag"] = tag
         runs.append(r)

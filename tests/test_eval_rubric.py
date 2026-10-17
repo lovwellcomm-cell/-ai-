@@ -218,6 +218,19 @@ def test_inferential_causation_tripwire():
         "据片段数据推断，成本增速高于收入0.16个百分点[1]。")["推断式归因数"] == 0
 
 
+def test_inferential_tripwire_ignores_quotes_and_structural_wording():
+    """两处实测误报，都收窄掉了。
+
+    扩展分析要求「用推断说明结构」，模型写「…的结构性原因」「…形成结构性拖累」
+    是照做；引用公司自己的「主要是…所致」正是规则 2 要求的。两者都不该报。"""
+    quoted = ('结构层面，营业收入增加“主要是由于风力发电板块收入增加所致”[4]，'
+              '其占比上升会对整体毛利率形成结构性拖累（据片段数据推断）')
+    assert inferential_causation(quoted)["推断式归因数"] == 0
+    structural = ("流入增量远大于流出增量，这是经营现金流由负转正的直接结构性原因"
+                  "（据片段数据推断）[2][4]")
+    assert inferential_causation(structural)["推断式归因数"] == 0
+
+
 def test_quoted_rate_without_marker_is_not_checked():
     answer = "2025年经营活动产生的现金流量净额同比变动比例为520.11%[7]。"
     assert computed_rates(answer)["自算率检查数"] == 0

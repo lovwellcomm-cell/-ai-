@@ -54,27 +54,43 @@ def extract_numbers(text: str) -> list[dict]:
     return out
 
 
+# 表格自己声明量纲的写法：「单位：万元 币种：人民币」。
+# 不认这个的话，模型把 `2,147,054.45` 万元写成「214.71 亿元」会被判成编造 ——
+# 而它是对的。**这个 bug 只有在换一份年报时才暴露**：内置示例年报的报表以元为单位，
+# 裸数字正好等于答案里的原值；换成以万元为单位的年报，整张表都被误判。
+_UNIT_DECL = re.compile(r"单位\s*[：:]\s*(" + _UNIT_RE + r")")
+
+
 def _chunk_index(texts: list[str]) -> dict:
     """把片段里的数字建成索引。
 
     带单位的数字同时存原值和换算到元的值：片段写「24,673,670,269.16」而回答写
     「246.74 亿元」，换算后两者才能对上。
 
+    **裸数字要按所在片段声明的量纲换算。** 报表常常在表头写「单位：万元」，
+    行里就只有 `2,147,054.45`。不换算的话，答案里正确的「214.71 亿元 ／ 2,147,054.45 万元」
+    一条都对不上，会被整片判成编造。
+
     amounts 排好序，是为了用二分做容差查找 —— 朴素两两比较是 O(n²)，
     而这里每验一个数字都要跑一遍。
     """
-    blob = "\n".join(texts or [])
     amounts: list[float] = []
     percents: set[str] = set()
-    for m in _NUM_RE.finditer(blob):
-        raw, unit = m.group(1), m.group(2)
-        if unit in ("%", "％"):
-            percents.add(raw.replace(",", ""))
-            continue
-        value = _to_float(raw)
-        amounts.append(value)
-        if unit:
-            amounts.append(value * UNIT_SCALE[unit])
+    for text in texts or []:
+        text = text or ""
+        decl = _UNIT_DECL.search(text)
+        scale = UNIT_SCALE[decl.group(1)] if decl else 1.0
+        for m in _NUM_RE.finditer(text):
+            raw, unit = m.group(1), m.group(2)
+            if unit in ("%", "％"):
+                percents.add(raw.replace(",", ""))
+                continue
+            value = _to_float(raw)
+            amounts.append(value)
+            if unit:
+                amounts.append(value * UNIT_SCALE[unit])
+            elif scale != 1.0:
+                amounts.append(value * scale)
     amounts.sort()
     return {"amounts": amounts, "percents": percents}
 
@@ -174,7 +190,10 @@ def check(answer: str, hits: list[dict]) -> dict:
     只看两件事：**有没有出处**、**能不能推导**。都是能给出确定答案的问题。
     不判断"深度"、不判断"答得好不好"—— 那些没有标准答案，靠正则猜只会自欺。
     """
-    index = _chunk_index([h.get("text") or "" for h in hits])
+    # context_header 里常常就写着「单位：元」—— 它是检索层为缺表头的报表片段补上的，
+    # 拼回去才能判断这一片标的量纲。
+    index = _chunk_index([(h.get("context_header") or "") + "\n" + (h.get("text") or "")
+                          for h in hits])
     nums = extract_numbers(answer)
     amounts = [n for n in nums if n["kind"] == "amount"]
     percents = [n for n in nums if n["kind"] == "percent"]

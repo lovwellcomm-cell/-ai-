@@ -428,22 +428,35 @@ def caliber(answer: str, hits: list[dict]) -> dict:
 _INFERENCE_MARK = "据片段数据推断"
 
 
+_QUOTED = re.compile(r"[“\"][^”\"]*[”\"]")
+
+
 def inferential_causation(answer: str) -> dict:
     """拿「据片段数据推断」给原因打掩护的句子（清单）。
 
-    扩展分析的提示词明确禁止把推断标记用于归因，但那只是一串字，模型随时能加上去。
+    扩展分析的提示词禁止把推断标记用于**归因**，但那只是一串字，模型随时能加上去。
     这条专抓「推断标记 + 因果词」同时出现的句子 —— `causal_sentences` 抓不到它，
     因为那种句子通常带着引用和数字，过得了那道闸。
 
-    这是这个功能最容易漏掉的口子：一句话既有 [n] 又有数字，看起来完全合规，
-    但它说的其实是一个片段里没有的因果。
+    两处实测出来的误报，都收窄掉了：
+      · 因果词在**引号里**：引用公司自己的「主要是…所致」正是规则 2 要求的，不算归因
+      · 句子里有「结构性」：提示词明确允许用推断说明结构（占比、拖累、差额），
+        模型照做时也常写「…的结构性原因」
+
+    真正的口子是「据片段数据推断，因为铜价上涨…」这种：没有引号、没有结构性、
+    却拿推断标记给一个片段里没有的因果打掩护。
     """
     out = []
     for s in re.split(r"[。；\n]", answer or ""):
         s = s.strip()
-        if _INFERENCE_MARK not in s or not _CAUSAL_RE.search(s):
+        if _INFERENCE_MARK not in s:
             continue
-        if _NEGATION_RE.search(s):
+        body = _QUOTED.sub("", s)          # 引号里是引文，不是模型自己的断言
+        if not _CAUSAL_RE.search(body):
+            continue
+        if "结构性" in body:
+            continue                        # 用推断说明结构，是允许的
+        if _NEGATION_RE.search(body):
             continue
         out.append(s)
     return {"推断式归因": out, "推断式归因数": len(out)}
