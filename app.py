@@ -14,13 +14,14 @@ import streamlit as st
 
 from rag import config
 from rag.chunker import chunk_pages
-from rag.generator import analyze, generate, get_client, join_answer, make_client, should_analyze
+from rag.generator import analyze, generate, get_client, make_client
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
                          is_current, list_documents, load_index)
 from rag.limits import Quota, check_and_consume
 from rag.pdf_parser import extract_doc_info, parse_pdf, render_page_png
 from rag.retriever import Retriever
 from ui import payload
+from ui import turn as turn_core
 from ui.chat_component import chat_surface
 
 st.set_page_config(page_title="年报 AI 研究助手", page_icon="📊", layout="wide")
@@ -248,10 +249,13 @@ meta = dict(meta)
 meta["doc_id"] = doc_id
 history = st.session_state.setdefault("histories", {}).setdefault(doc_id, [])
 
-# 进行中的回合。切换年报就丢弃，避免状态串到另一份文档上。
-turn = st.session_state.get("turn")
-if turn and turn.get("doc_id") != doc_id:
-    turn = None
+# 进行中的回合。切换年报就丢弃，避免状态串到另一份文档上 ——
+# 但如果扩展分析阶段的首轮回答已经产出，用户已经看到了，先把那半段落进原文档的历史。
+turn, orphan = turn_core.adopt_turn(st.session_state.get("turn"), doc_id)
+if orphan is not None:
+    old_id, entry = orphan
+    st.session_state["histories"].setdefault(old_id, []).append(entry)
+if turn is None:
     st.session_state.pop("turn", None)
 
 theme = current_theme()
@@ -309,13 +313,9 @@ def refund(target: dict) -> None:
         st.session_state.used = max(0, st.session_state.get("used", 1) - 1)
 
 
-def finish_turn(target: dict, answer: str) -> None:
-    """把一轮写进历史，并清掉进行中的回合。
-
-    `analyze` 只是排查用的状态（ok / no_add / truncated / error），组件不读它。
-    """
-    history.append({"q": target["q"], "a": answer, "hits": target["hits"],
-                    "queries": target["queries"], "analyze": target.get("analyze", "")})
+def finish_turn(entry: dict) -> None:
+    """把一轮写进历史，并清掉进行中的回合。"""
+    history.append(entry)
     st.session_state.pop("turn", None)
     st.session_state["chat_warn"] = ""
 
@@ -368,40 +368,35 @@ def advance_turn() -> None:
         st.session_state["turn"] = target
         st.rerun()
 
-    if target["status"] == "generating":
-        try:
-            answer = "".join(generate(target["q"], target["hits"], client=pick_client(),
-                                      company=meta.get("company", ""), year=meta.get("year", ""),
-                                      history=target.get("recent")))
-        except Exception as e:
-            refund(target)
-            fail(target, f"调用大模型失败：{e}")
-            st.rerun()
-        target["a"] = answer
-        # 弃答不做扩展：没有结论可解释，此时追问「为什么」只会诱发编造。
-        if should_analyze(answer):
-            target["status"] = "analyzing"
-            st.session_state["turn"] = target
-            st.rerun()
-        finish_turn(target, answer)
-        st.rerun()
+    if target["status"] in ("generating", "analyzing"):
+        # 决策（要不要扩展、什么时候收尾、失败怎么办）在 ui/turn.py 里，
+        # 是纯函数、有测试。这里只负责接真实模型和 session_state。
 
-    if target["status"] == "analyzing":
-        diag: dict = {}
-        ext = ""
-        try:
-            ext = analyze(target["q"], target["hits"], target["a"], client=pick_client(),
-                          company=meta.get("company", ""), year=meta.get("year", ""),
-                          diag=diag, history=target.get("recent"))
-        except Exception as e:
-            # 首轮回答本身是完整的，不能因为更晚的一次**补充**调用而作废它。
-            # 失败只记在回合上（测量和排查用），不弹给用户 —— 他们拿到的仍是一份可用的回答。
-            diag["analyze"] = "error"
-            diag["analyze_error"] = str(e)
-        target["analyze"] = diag.get("analyze", "")
-        if diag.get("analyze_error"):
-            target["analyze_error"] = diag["analyze_error"]
-        finish_turn(target, join_answer(target["a"], ext))
+        def _gen(q, hits, *, client, company, year, history):
+            return "".join(generate(q, hits, client=client, company=company,
+                                    year=year, history=history))
+
+        def _ana(q, hits, first, *, client, company, year, history):
+            diag: dict = {}
+            ext = analyze(q, hits, first, client=client, company=company, year=year,
+                          diag=diag, history=history)
+            return ext, diag
+
+        new_turn, entry, error = turn_core.step(
+            target, gen=_gen, ana=_ana, client=pick_client(),
+            company=meta.get("company", ""), year=meta.get("year", ""),
+            recent=target.get("recent"),
+        )
+        if error:
+            refund(target)
+            fail(target, error)
+            st.rerun()
+        if entry is not None:
+            finish_turn(entry)
+            st.rerun()
+        # 状态变了（generating → analyzing）：存回去，下一轮接着跑。
+        target.update(new_turn)
+        st.session_state["turn"] = target
         st.rerun()
 
 

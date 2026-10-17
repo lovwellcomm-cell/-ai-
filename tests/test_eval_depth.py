@@ -16,8 +16,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tools.eval_depth import (  # noqa: E402
-    RUBRIC_COLUMNS, SUMMARY_SIGNAL_KEYS, TABLE_COLUMNS, markdown_table, row_for,
-    rubric_table, signal, summary_line, table_header,
+    RUBRIC_COLUMNS, SUMMARY_SIGNAL_KEYS, TABLE_COLUMNS, extension_signals, markdown_table,
+    row_for, rubric_table, signal, summary_line, table_header,
 )
 
 
@@ -119,6 +119,26 @@ def test_rubric_columns_read_fields_signal_actually_produces():
     row = [render(fake_run()) for _, render in RUBRIC_COLUMNS]
     empty = [name for (name, _), cell in zip(RUBRIC_COLUMNS, row) if cell == ""]
     assert not empty, f"细则表这些列读不到字段：{empty}"
+
+
+def test_extension_arithmetic_is_measured():
+    """扩展段自己的算术也要查。
+
+    早先只量了扩展段的保真度和归因，于是 `X亿元（Y元）` 配错、比率算错，一条信号都不响 ——
+    而这段正是新代码，也是最可能出错的地方。
+    """
+    bad = extension_signals("差额18.53亿元（999,999,999.99元）[1]。", [{"text": "x"}], "ok")
+    assert bad["扩展换算不一致"] and bad["扩展红旗数"] >= 1
+
+    good = extension_signals("差额18.53亿元（1,852,557,535.42元）[1]。", [{"text": "x"}], "ok")
+    assert good["扩展红旗数"] == 0, good
+
+
+def test_no_extension_reports_zero_flags_not_missing_keys():
+    """没有扩展时键也要在，否则表格会出现空格、`_sig` 会静默返回空串。"""
+    r = extension_signals("", [{"text": "x"}], "no_add")
+    assert r["扩展红旗数"] == 0 and r["扩展状态"] == "no_add"
+    assert r["扩展换算不一致"] == []
 
 
 def test_row_for_tolerates_legacy_runs_without_signal_fields():
