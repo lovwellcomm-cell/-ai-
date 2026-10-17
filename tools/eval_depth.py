@@ -36,7 +36,7 @@ import numpy as np  # noqa: E402
 
 from rag import config  # noqa: E402
 from rag.generator import analyze, cited_numbers, generate, get_client, should_analyze  # noqa: E402
-from rag.indexer import load_index  # noqa: E402
+from rag.indexer import ensure_demo, load_index  # noqa: E402
 from rag.retriever import Retriever  # noqa: E402
 from tools.eval_rubric import run as rubric_run  # noqa: E402
 
@@ -375,6 +375,9 @@ def main() -> None:
         config.ANSWER_WHY_INLINE = True
         config.ANALYZE_ENABLED = False
 
+    # data/ 只是运行时缓存（已被 .gitignore），全新拉取时是空的。
+    # 这里补一次示例年报的复制，否则离线测量会直接 FileNotFoundError。
+    ensure_demo()
     meta, chunks, emb = load_index(args.doc)
     co, yr = meta.get("company", ""), meta.get("year", "")
     retriever = Retriever(chunks, emb, company=co, year=yr)
