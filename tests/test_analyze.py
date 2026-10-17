@@ -18,8 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rag import config, generator  # noqa: E402
 from rag.generator import (  # noqa: E402
-    ANALYZE_SYSTEM_PROMPT, EXTENSION_HEADING, analyze, build_analyze_messages,
-    build_messages, clean_extension, join_answer, should_analyze,
+    ABSTAIN_MARK, ANALYZE_SYSTEM_PROMPT, EXTENSION_HEADING, analyze, build_analyze_messages,
+    build_messages, clean_extension, join_answer, needs_explanation, should_analyze,
 )
 
 CHUNKS = [
@@ -100,6 +100,35 @@ def test_should_analyze_skips_abstention():
 
 def test_should_analyze_skips_empty_answer():
     assert should_analyze("   ") is False
+
+
+def test_lookup_questions_skip_the_second_call():
+    """实测 18 题（两份年报 × 三道）：题面带「是多少 / 分别是多少」的 6 题**全部**
+    返回「无补充」，一次例外都没有；带解释性措辞的 9 题出了 8 次扩展。
+
+    所以这一类不值得再调一次模型 —— 省下的是真实的调用，不是延迟。
+    """
+    for q in ("2025年营业收入是多少？", "营业收入和归母净利润分别是多少？"):
+        assert needs_explanation(q) is False
+        assert should_analyze(FIRST, q) is False
+    for q in ("近三年营业收入和归母净利润的变化趋势如何？",
+              "毛利率变动的原因是什么？",
+              "经营活动产生的现金流量净额与净利润的差异说明了什么？"):
+        assert needs_explanation(q) is True
+        assert should_analyze(FIRST, q) is True
+
+
+def test_unclear_questions_default_to_running():
+    """判不准就跑 —— 宁可多调一次，也不要把本来能解释的题漏掉。
+
+    「那去年呢？」没有解释性措辞也没有查数措辞，实测 1/3 会产出扩展，所以要跑。"""
+    for q in ("那去年呢？", "毛利率怎么样？", ""):
+        assert needs_explanation(q) is True
+
+
+def test_abstention_wins_over_the_question_shape():
+    """哪怕题目明显要解释，弃答时也不做 —— 没有材料可解释。"""
+    assert should_analyze(f"{ABSTAIN_MARK}。", "毛利率变动的原因是什么？") is False
 
 
 def test_should_analyze_respects_the_switch(monkeypatch):

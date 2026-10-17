@@ -67,6 +67,18 @@ def test_abstention_finishes_without_a_second_call():
     assert entry["analyze"] == ""
 
 
+def test_lookup_question_skips_the_analysis_call():
+    """纯查数题不进 analyzing —— 省的是真实调用，不是延迟。
+
+    实测 18 题里，题面带「是多少」的 6 题全部返回「无补充」。"""
+    called = {}
+    turn, entry, error = run(
+        turn=dict(TURN, q="2025年营业收入是多少？"),
+        ana=lambda *a, **k: called.setdefault("hit", True))
+    assert error is None and "hit" not in called
+    assert turn["status"] == "done" and entry["analyze"] == ""
+
+
 def test_generation_error_returns_error_and_no_entry():
     turn, entry, error = run(gen=boom)
     assert entry is None and error and "调用大模型失败" in error

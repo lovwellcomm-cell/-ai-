@@ -76,8 +76,9 @@ def step(turn: dict, *, gen, ana, client=None, company: str = "", year: str = ""
             return turn, None, f"调用大模型失败：{e}"
 
         new = dict(turn, a=answer)
-        # 弃答不做扩展：没有结论可解释，此时问"为什么"只会诱发编造。
-        if should_analyze(answer):
+        # 弃答不做扩展（没有结论可解释，问"为什么"只会诱发编造）；
+        # 纯查数的题也不做（实测 6/6 返回「无补充」，白调一次模型）。
+        if should_analyze(answer, turn["q"]):
             return dict(new, status="analyzing"), None, None
         return dict(new, status="done"), history_entry(new, answer), None
 

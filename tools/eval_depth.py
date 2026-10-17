@@ -323,7 +323,7 @@ def ask(retriever, question, client, history=None, tag="", company="", year=""):
     a_usage: dict = {}
     extension = ""
     a_status = "skipped"
-    if should_analyze(answer):
+    if should_analyze(answer, question):
         try:
             extension = analyze(question, hits, answer, client=client,
                                 company=company, year=year,

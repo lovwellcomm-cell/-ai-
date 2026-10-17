@@ -258,15 +258,36 @@ def analyze(question: str, chunks: list[dict], first_answer: str, client=None,
     return text
 
 
-def should_analyze(answer: str) -> bool:
+# 纯查数的问题不值得再调一次模型解释"为什么"。
+# 实测 18 题（两份年报 × 三道）：题面带「是多少 / 分别是多少」的 6 题**全部**返回
+# 「无补充」，一次例外都没有；而带「原因 / 差异 / 说明 / 变化」的 9 题出了 8 次扩展。
+_LOOKUP_HINT = re.compile(r"(是多少|为多少|分别是多少|金额是|数值|多少钱)")
+_EXPLAIN_HINT = re.compile(r"(为什么|为何|原因|导致|影响|差异|说明|意味着|趋势|变化|变动|"
+                           r"增长|下降|改善|结构|分析|比较|怎么看|评价)")
+
+
+def needs_explanation(question: str) -> bool:
+    """这道题值不值得再调一次模型解释「为什么」。
+
+    只在**一个条件明确成立**时才跳过：题面像纯查数，并且没有任何解释性措辞。
+    其余一律照做 —— 宁可多调用一次，也不要把一道本来能解释的题漏掉。
+    """
+    q = question or ""
+    return _EXPLAIN_HINT.search(q) is not None or _LOOKUP_HINT.search(q) is None
+
+
+def should_analyze(answer: str, question: str = "") -> bool:
     """这道题要不要做扩展分析。
 
     弃答时不做 —— 这是这个功能最危险的入口：让模型去解释一个它根本没找到的数据，
     它只能编。毛利率那道题就是这类：片段里确实没有原因表述，而模型当时正确地说了「未披露」。
+
+    纯查数时也不做：实测这类题 6/6 返回「无补充」，白调一次模型。
     """
-    return (bool(config.ANALYZE_ENABLED)
-            and bool((answer or "").strip())
-            and ABSTAIN_MARK not in answer)
+    if not config.ANALYZE_ENABLED or not (answer or "").strip() or ABSTAIN_MARK in answer:
+        return False
+    # question 为空（旧调用点、部分测试）时按"需要解释"处理，不改变既有行为
+    return needs_explanation(question) if question else True
 
 
 def join_answer(first: str, extension: str) -> str:
