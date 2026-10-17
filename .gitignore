@@ -10,5 +10,9 @@ __pycache__/
 .pytest_cache/
 *.log
 
+# 演示视频的原始录屏与中间产物（可由 tools/demo-video/capture.ps1 重新生成）
+demo/demo-raw.*
+tools/demo-video/timeline.started
+
 # 离线测量的输出（tools/eval_depth.py 生成，可随时重跑）
 eval_out/

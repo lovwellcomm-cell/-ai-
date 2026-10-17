@@ -2,7 +2,10 @@
 
 上传上市公司年报 PDF，用自然语言提问，得到带**原文引用和页码**的回答。每个论断后都标有 `[n]`，点开可以看到原文片段，还能一键查看 PDF 原页，方便核对。
 
-在线演示：部署后把链接填在这里。
+**[在线演示](https://xlyzp-ai.streamlit.app/)** · **[源码](https://github.com/lovwellcomm-cell/-ai-)** · **[演示视频（66 秒）](demo/demo-90s.mp4)**
+
+> 演示覆盖：可追溯引用（点击 `[n]` 打开右侧原文抽屉）· PDF 原页核对 · 同题追问 · 文档切换 · 自定义 API Key · 单文件 40 MB / 400 页上限。
+> 视频为真实录屏，LLM 等待段已标注并加速。
 
 ## 它怎么工作
 
@@ -70,7 +73,7 @@ python tools/build_preview.py    # 由 web/ 三个文件生成 design/preview.ht
 
 `design/preview.html` 是**生成物**，不要直接编辑 —— 它是把 `web/` 的三个文件内联、再用一个假的
 component 对象驱动同一份代码，所以永远和线上实现保持一致。用它可以在不起后端、不花 API 额度的情况下
-看完整界面。`design/preview-mockup-v1.html.bak` 是最早那份手写设计稿的存档，可以删。
+看完整界面。
 
 ### 两条容易踩的坑
 
