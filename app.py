@@ -344,6 +344,9 @@ def advance_turn() -> None:
         # 带最近几轮的问题给改写，追问（「那去年呢」）里的指代才消解得掉。
         # 只传问题不传回答：上一轮回答里可能有算错或臆测的数字，带进检索词会污染检索。
         recent = [t["q"] for t in history[-config.FOLLOWUP_HISTORY_TURNS:]]
+        # 存到回合上：生成阶段也要用它。检索侧把这几个问题喂给改写、
+        # 生成侧则用它消解「那去年呢」里的指代 —— 两边用的是同一份。
+        target["recent"] = recent
         diag: dict = {}
         try:
             hits, queries = retriever.search_with_queries(
@@ -368,7 +371,8 @@ def advance_turn() -> None:
     if target["status"] == "generating":
         try:
             answer = "".join(generate(target["q"], target["hits"], client=pick_client(),
-                                      company=meta.get("company", ""), year=meta.get("year", "")))
+                                      company=meta.get("company", ""), year=meta.get("year", ""),
+                                      history=target.get("recent")))
         except Exception as e:
             refund(target)
             fail(target, f"调用大模型失败：{e}")
@@ -388,7 +392,7 @@ def advance_turn() -> None:
         try:
             ext = analyze(target["q"], target["hits"], target["a"], client=pick_client(),
                           company=meta.get("company", ""), year=meta.get("year", ""),
-                          diag=diag)
+                          diag=diag, history=target.get("recent"))
         except Exception as e:
             # 首轮回答本身是完整的，不能因为更晚的一次**补充**调用而作废它。
             # 失败只记在回合上（测量和排查用），不弹给用户 —— 他们拿到的仍是一份可用的回答。

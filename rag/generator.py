@@ -50,14 +50,32 @@ def format_context(chunks: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def build_messages(question: str, chunks: list[dict], company: str = "", year: str = "") -> list[dict]:
+def _history_block(history: list[str] | None) -> str:
+    """最近几轮**问题**拼成的一段。
+
+    只给问题、不给回答：上一轮的回答里可能有算错或臆测的数字，放进提示词会污染这一轮 ——
+    检索侧的改写一直就是这么做的（app.py 只把 `t["q"]` 传下去）。
+    给问题的用途只有一个：让模型知道「那去年呢」里的「那」指的是什么。
+    """
+    questions = [q for q in (history or []) if q]
+    if not questions:
+        return ""
+    lines = "\n".join(f"用户：{q}" for q in questions)
+    return ("【对话历史】只用来理解当前问题里的指代（如“那”“它”“这个”“去年”），"
+            f"不要据此回答，也不要引用这里的任何内容。\n{lines}\n\n")
+
+
+def build_messages(question: str, chunks: list[dict], company: str = "", year: str = "",
+                   history: list[str] | None = None) -> list[dict]:
     desc = f"（{company} {year} 年年度报告）" if company or year else ""
     system = SYSTEM_PROMPT.format(doc_desc=desc)
     if config.ANSWER_CHAR_BUDGET > 0:
         system += ANSWER_BUDGET_RULE.format(budget=config.ANSWER_CHAR_BUDGET)
     if config.ANSWER_WHY_INLINE:
         system += ANSWER_WHY_RULE
-    user = f"【年报片段】\n{format_context(chunks)}\n\n【问题】\n{question}"
+    user = (f"【年报片段】\n{format_context(chunks)}\n\n"
+            f"{_history_block(history)}"
+            f"【问题】\n{question}")
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
@@ -75,15 +93,19 @@ def get_client():
 
 
 def generate(question: str, chunks: list[dict], client=None,
-             company: str = "", year: str = "", usage_out: dict | None = None) -> Iterator[str]:
+             company: str = "", year: str = "", usage_out: dict | None = None,
+             history: list[str] | None = None) -> Iterator[str]:
     """流式返回回答文本片段。
 
     usage_out 传字典时，会把本次调用的 token 用量填进去（需要 stream_options 才会回传）。
     生成器不能有返回值，所以用这种方式把用量带出来。
+
+    history 是最近几轮的**问题**，用来消解追问里的指代。不给回答。
     """
     client = client or get_client()
     stream = client.chat.completions.create(
-        model=config.LLM_MODEL, messages=build_messages(question, chunks, company, year),
+        model=config.LLM_MODEL,
+        messages=build_messages(question, chunks, company, year, history),
         temperature=0.1, stream=True, timeout=config.LLM_TIMEOUT,
         stream_options={"include_usage": True},
     )
@@ -123,11 +145,16 @@ ABSTAIN_MARK = "年报中未找到相关信息"
 
 
 def build_analyze_messages(question: str, chunks: list[dict], first_answer: str,
-                           company: str = "", year: str = "") -> list[dict]:
-    """第二次调用的消息。复用 format_context，所以 [n] 仍指向**同一批** hits。"""
+                           company: str = "", year: str = "",
+                           history: list[str] | None = None) -> list[dict]:
+    """第二次调用的消息。复用 format_context，所以 [n] 仍指向**同一批** hits。
+
+    历史同样只给问题：扩展段要解释的是这一轮的问题，而这一轮可能本身就是追问。
+    """
     desc = f"（{company} {year} 年年度报告）" if company or year else ""
     system = ANALYZE_SYSTEM_PROMPT.format(budget=config.ANALYZE_CHAR_BUDGET)
     user = (f"【年报片段】{desc}\n{format_context(chunks)}\n\n"
+            f"{_history_block(history)}"
             f"【首轮回答】\n{first_answer}\n\n"
             f"【原来的问题】\n{question}")
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -184,7 +211,7 @@ def clean_extension(first_answer: str, extension: str, n_chunks: int) -> tuple[s
 
 def analyze(question: str, chunks: list[dict], first_answer: str, client=None,
             company: str = "", year: str = "", usage_out: dict | None = None,
-            diag: dict | None = None) -> str:
+            diag: dict | None = None, history: list[str] | None = None) -> str:
     """解释「为什么」。返回扩展段**正文**（不含小标题），没有可补充的返回空串。
 
     走流式，和 `generate` 保持一致：流式下 `timeout` 是「多久没收到数据」，而不是总时长。
@@ -197,7 +224,8 @@ def analyze(question: str, chunks: list[dict], first_answer: str, client=None,
     client = client or get_client()
     stream = client.chat.completions.create(
         model=config.LLM_MODEL,
-        messages=build_analyze_messages(question, chunks, first_answer, company, year),
+        messages=build_analyze_messages(question, chunks, first_answer, company, year,
+                                        history),
         temperature=0.1, stream=True, timeout=config.ANALYZE_TIMEOUT,
         max_tokens=config.ANALYZE_MAX_TOKENS,
         stream_options={"include_usage": True},

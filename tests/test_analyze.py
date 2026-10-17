@@ -80,6 +80,13 @@ def test_analyze_messages_reuse_the_same_chunk_numbering():
     assert str(config.ANALYZE_CHAR_BUDGET) in msgs[0]["content"]
 
 
+def test_analyze_messages_carry_the_follow_up_history():
+    """扩展段也要知道这一轮是不是追问 —— 否则它会解释错对象。"""
+    user = build_analyze_messages("那去年呢", CHUNKS, FIRST,
+                                  history=["营业收入和归母净利润分别是多少？"])[1]["content"]
+    assert "【对话历史】" in user and "那去年呢" in user
+
+
 def test_first_pass_prompt_is_untouched():
     """第二次调用不许改变首轮的行为 —— 这是回归测试，不是新需求。"""
     msgs = build_messages("营收多少", CHUNKS)

@@ -283,17 +283,20 @@ def render_report(runs: list[dict], meta: dict, label: str, stamp: str) -> str:
 
 def ask(retriever, question, client, history=None, tag=""):
     diag: dict = {}
+    # 只把**问题**传下去，不传回答：上一轮回答里可能有算错或臆测的数字。
+    # 检索、生成、扩展三处用的是同一份。
+    recent = [h["q"] for h in history] if history else None
     t0 = time.perf_counter()
     hits, queries = retriever.search_with_queries(
         question, client=client, use_llm=config.LLM_REWRITE,
-        # 只把**问题**传下去，不传回答：上一轮回答里可能有算错或臆测的数字
-        history=[h["q"] for h in history] if history else None,
+        history=recent,
         diag=diag,
     )
     t1 = time.perf_counter()
     usage: dict = {}
     answer = "".join(generate(question, hits, client=client,
-                              company="精达股份", year="2025", usage_out=usage))
+                              company="精达股份", year="2025", usage_out=usage,
+                              history=recent))
     t2 = time.perf_counter()
 
     # 第二次调用：解释「为什么」。弃答时不做 —— 没有结论可解释，
@@ -306,7 +309,7 @@ def ask(retriever, question, client, history=None, tag=""):
         try:
             extension = analyze(question, hits, answer, client=client,
                                 company="精达股份", year="2025",
-                                usage_out=a_usage, diag=a_diag)
+                                usage_out=a_usage, diag=a_diag, history=recent)
             a_status = a_diag.get("analyze", "ok")
         except Exception as e:
             a_status = "error"

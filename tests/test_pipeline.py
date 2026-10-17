@@ -95,6 +95,45 @@ def test_generator_prompt_and_citations():
     assert cited_numbers("见[1，2]与[2、1]", 2) == [1, 2]
 
 
+def test_history_carries_questions_only():
+    """追问只带**问题**，不带回答 —— 上一轮回答里可能有算错或臆测的数字。
+
+    系统提示里固定写了「只依据片段回答」，但如果把上一轮回答也塞进去，
+    模型就会拿它当材料，而这些材料没有经过这一轮任何校验。
+    """
+    chunks = [{"text": "营业收入 128.5亿元", "section": "第二节", "page_start": 4, "page_end": 4}]
+    user = build_messages("那去年呢", chunks,
+                          history=["营业收入和归母净利润分别是多少？"])[1]["content"]
+    assert "【对话历史】" in user
+    assert "用户：营业收入和归母净利润分别是多少？" in user
+    assert "不要据此回答" in user
+    assert user.index("【对话历史】") < user.index("【问题】")
+
+
+def test_no_history_means_no_history_block():
+    chunks = [{"text": "x", "section": "s", "page_start": 1, "page_end": 1}]
+    for hist in (None, []):
+        assert "【对话历史】" not in build_messages("营收多少", chunks, history=hist)[1]["content"]
+
+
+def test_generate_forwards_history_into_the_prompt():
+    """`generate` 自己得把 history 传下去 —— 函数签名加了、调用处没接，是这类改动最常见的漏法。"""
+    captured = {}
+
+    class FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    captured.update(kw)
+                    d = SimpleNamespace(delta=SimpleNamespace(content="回答[1]"))
+                    return iter([SimpleNamespace(choices=[d])])
+
+    chunks = [{"text": "x", "section": "s", "page_start": 1, "page_end": 1}]
+    "".join(generate("那去年呢", chunks, client=FakeClient(), history=["营收是多少？"]))
+    assert "【对话历史】" in captured["messages"][1]["content"]
+
+
 def test_bookmarks_take_priority(bookmarked_pdf):
     pages = parse_pdf(bookmarked_pdf)
     assert [p.section for p in pages] == ["书签A", "书签B", "书签B"]
