@@ -85,6 +85,19 @@ def test_quote_normalises_whitespace_and_slashes():
 
 # ---------------------------------------------------------------- 3 逻辑链
 
+def test_quote_joined_across_two_sentences_is_not_a_misquote():
+    """误报护栏（真实原句）：把年报里相邻的两句连起来引。
+
+    原文是「…收到的现金增加**。**使用应付票据支付货款增加所致。」，
+    回答引成「…收到的现金增加**，**使用应付票据支付货款增加所致」。
+    词一字不差，只差中间的标点 —— 那不是虚构引文。"""
+    hits = [{"text": "主要是期末加大销售回款力度使销售商品、提供劳务收到的现金增加。"
+                     "使用应付票据支付货款增加所致。"}]
+    r = quote_check("公司说明为“期末加大销售回款力度使销售商品、提供劳务收到的现金增加，"
+                    "使用应付票据支付货款增加所致”[6]。", hits)
+    assert r["非原文数"] == 0, r["非原文"]
+
+
 def test_unit_conversion_consistency():
     assert unit_conversions("营业收入 246.74亿元（24,673,670,269.16元）。")["换算不一致"] == []
     bad = unit_conversions("营业收入 246.74亿元（24,673,670,269.16元）。")["换算一致"]
@@ -215,6 +228,17 @@ def test_quoted_rate_without_marker_is_not_checked():
 def test_truly_unsupported_item_is_listed():
     r = unsourced_items("- 公司经营情况良好，前景广阔。\n- 营业收入为246.74亿元[1]。")
     assert r["无引用条目数"] == 1 and "前景广阔" in r["无引用条目"][0]
+
+
+def test_bold_subheadings_are_not_unsupported_claims():
+    """误报护栏（真实原句）：加粗小标题是分组的标题，不是观点。
+
+    回归：`_ITEM_RE` 的第一个分支原来是 `[-*•]\\s*`，`\\s*` 允许零个空格，
+    于是 `**营业收入**` 被当成"以 * 开头的列表项"只吃掉一个星号 —— 两种写法都要覆盖。
+    """
+    for heading in ("- **营业收入**", "**营业收入**"):
+        answer = f"{heading}\n  - 2025年为246.74亿元（24,673,670,269.16元）[1]。\n"
+        assert unsourced_items(answer)["无引用条目数"] == 0, heading
 
 
 def test_structural_lines_are_not_unsupported_claims():

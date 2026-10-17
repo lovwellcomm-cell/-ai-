@@ -96,6 +96,18 @@ _ATTR_FRAME = re.compile(r"(说明为|说明是|列为|列示|披露为|表述�
 _QUOTE_RE = re.compile(r"“([^”]{1,120})”")
 
 
+def _norm_words(s: str) -> str:
+    """比对引文用：去掉空白、markdown 星号，**以及中英文标点**。
+
+    实测有一种合法写法是把年报里相邻的两句连起来引：原文
+    「…收到的现金增加。使用应付票据支付货款增加所致。」被引成
+    「…收到的现金增加，使用应付票据支付货款增加所致」。词一字不差，只差中间的标点。
+    那不是虚构引文 —— 读者关心的也是词，不是标点。所以只在**词**这一层比对；
+    编造的引文词就不一样，照样会被抓住。
+    """
+    return re.sub(r"[\s　*，。；：、,.;:！？!?（）()“”\"']+", "", s or "")
+
+
 def quote_check(answer: str, hits: list[dict]) -> dict:
     """转述式引文是否逐字出现在片段里。
 
@@ -104,7 +116,7 @@ def quote_check(answer: str, hits: list[dict]) -> dict:
     引用提示词自己的词（`“本期值、上期值、变化额、变化率”`）。
     收窄到转述式之后是 15 条、1 条对不上，而那 1 条也靠下面的斜杠切分修好了。
     """
-    blob = _norm("\n".join((h.get("text") or "") for h in (hits or [])))
+    blob = _norm_words("\n".join((h.get("text") or "") for h in (hits or [])))
     text = answer or ""
     checked, misses = 0, []
     for m in _QUOTE_RE.finditer(text):
@@ -114,9 +126,10 @@ def quote_check(answer: str, hits: list[dict]) -> dict:
             continue
         checked += 1
         content = m.group(1)
-        # `“营业总收入/营业收入”` 是拿两个行标签拼出来的，不是原文 —— 拆开逐段核对
-        parts = [p for p in re.split(r"[/｜、]", content) if _norm(p)]
-        if not parts or not all(_norm(p) in blob for p in parts):
+        # `“营业总收入/营业收入”` 是拿两个行标签拼出来的，不是原文 —— 拆开逐段核对。
+        # 只按斜杠拆：`、` 是正常的句内标点，按它拆会把句子切碎、把检查变松。
+        parts = [p for p in re.split(r"[/｜／]", content) if _norm_words(p)]
+        if not parts or not all(_norm_words(p) in blob for p in parts):
             misses.append(content)
     return {"转述引文数": checked, "非原文": misses, "非原文数": len(misses)}
 
@@ -314,7 +327,10 @@ _NOT_A_CLAIM = re.compile(
     r"补充[：:]|说明[：:]|注[：:]|总结[：:]|综合(来看|看)[：:]|因此|所以|"
     r"请(明确|补充|说明|指出)|若|如果|即|其中)"
 )
-_ITEM_RE = re.compile(r"^\s*(?:[-*•]\s*|\d+[.、]\s*|\*\*[^*]+\*\*\s*$)")
+# 第一个分支必须是 `[ 　]+` 而不是 `\s*`：写成 `\s*` 的话，`**营业收入**` 会被当成
+# "以 * 开头的列表项"，只吃掉一个星号，剩下 `*营业收入**` —— 于是加粗小标题被当成了一条
+# 没有证据的断言。这个 bug 是在真实语料上才暴露的。
+_ITEM_RE = re.compile(r"^\s*(?:[-*•][ 　]+|\d+[.、][ 　]+|\*\*[^*]+\*\*\s*$)")
 
 
 def unsourced_items(answer: str) -> dict:
@@ -330,7 +346,11 @@ def unsourced_items(answer: str) -> dict:
     flagged = []
     for it in items:
         body = _ITEM_RE.sub("", it).strip()
-        if not body or _NOT_A_CLAIM.match(_norm(body)):
+        # `- **营业收入**` 是加粗的小标题，不是观点。实测它会被当成"没有证据的断言"，
+        # 而它只是下一组的标题 —— 结构标签不该进入这个清单。
+        if not body or re.fullmatch(r"\*\*[^*]+\*\*", body):
+            continue
+        if _NOT_A_CLAIM.match(_norm(body)):
             continue
         if _BRACKET_RE.search(it):        # 有引用
             continue
