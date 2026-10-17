@@ -35,7 +35,7 @@ except Exception:
 import numpy as np  # noqa: E402
 
 from rag import config  # noqa: E402
-from rag.generator import cited_numbers, generate, get_client  # noqa: E402
+from rag.generator import analyze, cited_numbers, generate, get_client, should_analyze  # noqa: E402
 from rag.indexer import load_index  # noqa: E402
 from rag.retriever import Retriever  # noqa: E402
 from tools.eval_rubric import run as rubric_run  # noqa: E402
@@ -70,7 +70,34 @@ def abstained(answer: str) -> bool:
     return explicit and len(NUM_RE.findall(answer)) < 4
 
 
-def signal(answer: str, hits: list[dict], tag: str = "") -> dict:
+def extension_signals(ext: str, hits: list[dict], status: str = "") -> dict:
+    """扩展段**单独**度量，不和首轮回答混在一起。
+
+    混在一起会稀释信号：首轮那些规规矩矩的句子会把"扩展段到底有没有编造"这个
+    真正要看的点冲淡掉 —— 而扩展段正是这个功能最可能出问题的地方。
+    键永远存在（哪怕没有扩展），否则表格会出现空格。
+    """
+    ext = ext or ""
+    if not ext:
+        return {"扩展存在": False, "扩展状态": status, "扩展字数": 0,
+                "扩展未披露": False, "扩展无出处": 0, "扩展有据可依率": None,
+                "扩展无据归因数": 0, "扩展推断式归因数": 0, "扩展越界数": 0}
+    r = rubric_run(ext, hits, "")
+    return {
+        "扩展存在": True,
+        "扩展状态": status,
+        "扩展字数": len(ext),
+        "扩展未披露": "未披露" in ext,
+        "扩展无出处": r["无出处"],
+        "扩展有据可依率": r["有据可依率"],
+        "扩展无据归因数": r["无据归因数"],
+        "扩展推断式归因数": r["推断式归因数"],
+        "扩展越界数": r["越界数"],
+    }
+
+
+def signal(answer: str, hits: list[dict], tag: str = "", extension: str = "",
+           ext_status: str = "") -> dict:
     """全部是可程序化计算的信号，不需要人工标注。
 
     分两层：
@@ -103,6 +130,8 @@ def signal(answer: str, hits: list[dict], tag: str = "") -> dict:
         "回答字数": len(answer),
         # 细则（含金额个数/有据可依率/无出处/无出处样例，那几条从 eval_fidelity 来）
         **rubric_run(answer, hits, tag),
+        # 扩展分析单独量
+        **extension_signals(extension, hits, ext_status),
     }
 
 
@@ -161,12 +190,14 @@ SUMMARY_SIGNAL_KEYS = ("命中片段", "命中章节数", "带表头片段", "�
 def summary_line(run: dict) -> str:
     """跑完一道题打在屏幕上的那一行。抽成纯函数是为了能被测试直接调用 ——
     原先它内联在 main() 里，测试碰不到，所以崩了也没人知道。"""
-    return (f"    {run.get('total_s')}s（检索 {run.get('retrieve_s')} / 生成 {run.get('generate_s')}）"
+    return (f"    {run.get('total_s')}s（检索 {run.get('retrieve_s')} / 生成 {run.get('generate_s')}"
+            f" / 扩展 {run.get('analyze_s', 0)}）"
             f"  命中 {_sig(run, '命中片段')} 片 / {_sig(run, '命中章节数')} 节"
             f"  带表头 {_sig(run, '带表头片段')}"
             f"  年份 {_sig(run, '回答年份数')}"
             f"  同比 {'有' if _sig(run, '含同比') else '无'}"
-            f"  弃答 {'是' if _sig(run, '弃答') else '否'}")
+            f"  弃答 {'是' if _sig(run, '弃答') else '否'}"
+            f"  扩展 {run.get('analyze_status') or '-'}({_sig(run, '扩展字数')}字)")
 
 
 def _table(columns, runs: list[dict]) -> str:
@@ -201,6 +232,11 @@ RUBRIC_COLUMNS = [
     ("无据归因", lambda r: str(_sig(r, "无据归因数"))),
     ("锚点", _anchors_cell),
     ("口径缺注", lambda r: "有" if _sig(r, "口径缺注") else "-"),
+    ("推断式归因", lambda r: str(_sig(r, "推断式归因数"))),
+    ("扩展", lambda r: ("-" if not _sig(r, "扩展状态")
+                        else f"{_sig(r, '扩展状态')} {_sig(r, '扩展字数')}字")),
+    ("补有据可依率", lambda r: str(_sig(r, "扩展有据可依率"))),
+    ("补无据归因", lambda r: str(_sig(r, "扩展无据归因数"))),
 ]
 
 
@@ -226,15 +262,22 @@ def render_report(runs: list[dict], meta: dict, label: str, stamp: str) -> str:
     body = [f"# 深度测量 · {label} · {stamp}\n",
             f"- 年报：{meta.get('name')}（{meta.get('pages')} 页 / {meta.get('chunks')} 片段）",
             f"- 配置：`TOP_K={config.TOP_K}` `MAX_PER_SECTION={config.MAX_PER_SECTION}` "
-            f"`LLM={config.LLM_MODEL}` `LLM_REWRITE={config.LLM_REWRITE}`\n",
+            f"`LLM={config.LLM_MODEL}` `LLM_REWRITE={config.LLM_REWRITE}` "
+            f"`ANALYZE={config.ANALYZE_ENABLED}` `WHY_INLINE={config.ANSWER_WHY_INLINE}`\n",
             "## 数字\n", markdown_table(runs), "\n",
             "## 细则\n", rubric_table(runs), "\n", "## 回答\n"]
     for r in runs:
         body.append(f"### [{r.get('tag', '')}] {r.get('question', '')}\n")
-        body.append(f"- 耗时 {r.get('total_s')}s（检索 {r.get('retrieve_s')}s / 生成 {r.get('generate_s')}s）")
+        body.append(f"- 耗时 {r.get('total_s')}s（检索 {r.get('retrieve_s')}s / 生成 "
+                    f"{r.get('generate_s')}s / 扩展 {r.get('analyze_s')}s）")
         body.append(f"- 检索词：{' ｜ '.join(r.get('queries') or [])}")
         body.append(f"- 命中：{', '.join(hit_sections(r))}\n")
         body.append((r.get("answer") or "") + "\n")
+        if r.get("extension"):
+            body.append(f"#### 扩展分析（{r.get('analyze_status')}）\n")
+            body.append(r["extension"] + "\n")
+        elif r.get("analyze_status"):
+            body.append(f"#### 扩展分析：{r.get('analyze_status')}\n")
     return "\n".join(body)
 
 
@@ -252,19 +295,43 @@ def ask(retriever, question, client, history=None, tag=""):
     answer = "".join(generate(question, hits, client=client,
                               company="精达股份", year="2025", usage_out=usage))
     t2 = time.perf_counter()
+
+    # 第二次调用：解释「为什么」。弃答时不做 —— 没有结论可解释，
+    # 让模型去解释一个它根本没找到的数据，它只能编。
+    a_diag: dict = {}
+    a_usage: dict = {}
+    extension = ""
+    a_status = "skipped"
+    if should_analyze(answer):
+        try:
+            extension = analyze(question, hits, answer, client=client,
+                                company="精达股份", year="2025",
+                                usage_out=a_usage, diag=a_diag)
+            a_status = a_diag.get("analyze", "ok")
+        except Exception as e:
+            a_status = "error"
+            a_diag["analyze_error"] = str(e)
+    t3 = time.perf_counter()
+
     return {
         "question": question,
         "queries": queries,
         "hits": hits,
         "answer": answer,
+        "extension": extension,
+        "analyze_status": a_status,
+        "analyze_error": a_diag.get("analyze_error"),
         "retrieve_s": round(t1 - t0, 2),
         "generate_s": round(t2 - t1, 2),
-        "total_s": round(t2 - t0, 2),
+        "analyze_s": round(t3 - t2, 2),
+        "total_s": round(t3 - t0, 2),
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
+        "analyze_prompt_tokens": a_usage.get("prompt_tokens"),
+        "analyze_completion_tokens": a_usage.get("completion_tokens"),
         "rewrite": diag.get("rewrite"),
         "rewrite_error": diag.get("rewrite_error"),
-        "signal": signal(answer, hits, tag),
+        "signal": signal(answer, hits, tag, extension, a_status),
     }
 
 
@@ -272,18 +339,28 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--label", default="current")
     ap.add_argument("--no-llm", action="store_true", help="不使用大模型做查询改写")
+    ap.add_argument("--no-analysis", action="store_true", help="不做扩展分析（A/B 用）")
+    ap.add_argument("--why-inline", action="store_true",
+                    help="A/B：把「解释为什么」并进首轮提示词，不调第二次")
     ap.add_argument("--doc", default=DEMO_ID)
     args = ap.parse_args()
 
     if args.no_llm:
         config.LLM_REWRITE = False
+    if args.no_analysis:
+        config.ANALYZE_ENABLED = False
+    if args.why_inline:
+        # 证伪用的对照臂：如果一句话并进首轮就能拿到大部分收益，第二次调用就不划算。
+        config.ANSWER_WHY_INLINE = True
+        config.ANALYZE_ENABLED = False
 
     meta, chunks, emb = load_index(args.doc)
     retriever = Retriever(chunks, emb, company=meta.get("company", ""), year=meta.get("year", ""))
     client = get_client()
     print(f"年报：{meta.get('name')}（{meta.get('pages')} 页 / {len(chunks)} 片段）")
     print(f"配置：TOP_K={config.TOP_K} MAX_PER_SECTION={config.MAX_PER_SECTION} "
-          f"LLM={config.LLM_MODEL} LLM_REWRITE={config.LLM_REWRITE}\n")
+          f"LLM={config.LLM_MODEL} LLM_REWRITE={config.LLM_REWRITE} "
+          f"ANALYZE={config.ANALYZE_ENABLED} WHY_INLINE={config.ANSWER_WHY_INLINE}\n")
 
     runs = []
     for tag, q in QUESTIONS:

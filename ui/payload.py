@@ -19,6 +19,8 @@ from rag.generator import cited_numbers
 STATUS_TEXT = {
     "retrieving": "检索相关片段…",
     "generating": "正在生成回答…",
+    # 首轮回答已经显示出来了，这一步只是追加「为什么」的扩展分析
+    "analyzing": "正在扩展分析…",
 }
 
 

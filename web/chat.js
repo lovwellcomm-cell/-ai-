@@ -267,7 +267,11 @@ export default function (component) {
     body.appendChild(meta);
     wrap.appendChild(body);
 
-    if (m.status === "retrieving" || m.status === "generating") {
+    // 待定状态：检索和生成阶段还没有正文，只显示 spinner。
+    // 但「扩展分析」阶段首轮回答已经产出，先把正文画出来再挂指示 ——
+    // 用户不必等第二次模型调用跑完才看到东西。
+    if (m.status === "retrieving" || m.status === "generating" || m.status === "analyzing") {
+      if (m.text) appendProse(body, m.text, (m.sources || []).length);
       const th = mk("div", "thinking");
       th.appendChild(mk("i", "spin"));
       th.appendChild(mk("span", null, m.statusText || "检索相关片段…"));
@@ -282,14 +286,7 @@ export default function (component) {
       return wrap;
     }
 
-    const prose = mk("div", "prose");
-    String(m.text || "").split(/\n{2,}/).forEach((para) => {
-      if (!para.trim()) return;
-      const p = mk("p");
-      renderRich(p, para, (m.sources || []).length);
-      prose.appendChild(p);
-    });
-    body.appendChild(prose);
+    appendProse(body, m.text, (m.sources || []).length);
 
     if (m.kpis && m.kpis.length) body.appendChild(buildCard(m));
     if (m.queries && m.queries.length) body.appendChild(buildTrace(m));
@@ -329,6 +326,19 @@ export default function (component) {
       last = m.index + m[0].length;
     }
     if (last < text.length) container.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  /** 把一段回答正文按空行拆成段落渲染。生成完成和「扩展分析中」两条路径共用。 */
+  function appendProse(body, text, nSources) {
+    const prose = mk("div", "prose");
+    String(text || "").split(/\n{2,}/).forEach((para) => {
+      if (!para.trim()) return;
+      const p = mk("p");
+      renderRich(p, para, nSources);
+      prose.appendChild(p);
+    });
+    body.appendChild(prose);
+    return prose;
   }
 
   /* ---------------- 数据卡 ---------------- */

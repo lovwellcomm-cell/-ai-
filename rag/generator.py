@@ -27,6 +27,10 @@ SYSTEM_PROMPT = """你是一名严谨的上市公司年报研究助手。下面�
 ANSWER_BUDGET_RULE = """
 9. 回答要紧凑：先给结论，依据用要点，总长控制在 {budget} 字以内。数字给全，但不要重复啰嗦。"""
 
+# 只用于 A/B：把第二次调用的活并进首轮。见 config.ANSWER_WHY_INLINE 的说明。
+ANSWER_WHY_RULE = """
+10. 结论之后用 2 句话说明为什么会这样：片段里有原因表述就引原话并标 [编号]；没有就明说“年报未披露具体原因”，不要猜测。"""
+
 
 def format_context(chunks: list[dict]) -> str:
     parts = []
@@ -51,6 +55,8 @@ def build_messages(question: str, chunks: list[dict], company: str = "", year: s
     system = SYSTEM_PROMPT.format(doc_desc=desc)
     if config.ANSWER_CHAR_BUDGET > 0:
         system += ANSWER_BUDGET_RULE.format(budget=config.ANSWER_CHAR_BUDGET)
+    if config.ANSWER_WHY_INLINE:
+        system += ANSWER_WHY_RULE
     user = f"【年报片段】\n{format_context(chunks)}\n\n【问题】\n{question}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -87,6 +93,159 @@ def generate(question: str, chunks: list[dict], client=None,
             usage_out.update(usage.model_dump() if hasattr(usage, "model_dump") else dict(usage))
         if event.choices and event.choices[0].delta.content:
             yield event.choices[0].delta.content
+
+
+# ---------- 第二次调用：扩展分析 ----------
+# 首轮回答之后，再问一次模型「为什么会是这个结果」，作为独立一段追加。
+# 动机是实测发现模型一直在复述检索到的数字，没有做解释 —— 而用户对"深度"的定义正是归因。
+#
+# 整个提示词的重心是**约束**而不是鼓励发挥。要求模型"必须解释为什么"会把它推向编造：
+# 实测「毛利率变动的原因」那道题，年报确实没有单独披露原因，模型当时正确地说了"未披露"。
+# 一个逼它给原因的提示词会把这条正确答案变成一个听起来合理、但年报里没有的归因。
+
+ANALYZE_SYSTEM_PROMPT = """你是一名严谨的上市公司年报研究助手。下面给出的是【年报片段】、【已经给出的首轮回答】和【原来的问题】。
+首轮回答已经列出了数据和结论。你现在只做一件事：解释为什么会是这个结果。
+
+规则：
+1. 只能使用【年报片段】里的内容。不得引入片段之外的任何事实、数字、行业常识或宏观背景。拿不准就少说。
+2. 公司自己在片段里说明了原因（例如“主要是……所致”“系……影响”），就引原话并标注 [编号]。
+3. 片段里没有原因表述时不要猜测。明确写“年报未披露具体原因”，然后只写能从片段数字直接看出的结构性事实（例如“营业成本增速高于营业收入 0.16 个百分点[1][2]”），并在句末注明“（据片段数据推断）”。“据片段数据推断”只能用来说明结构（占比、差额、增速快慢），**不能用来给原因**。
+4. 不要重复首轮回答已经说过的数字和结论，只补充新的解释。
+5. 如果首轮回答已经把原因说清楚，或者这个问题本来不涉及原因，只输出三个字：无补充
+6. 最多 3 条，总长控制在 {budget} 字以内。
+7. 每一条都必须在句末标注 [编号]。标不出来的句子不要写。"""
+
+NO_EXTENSION = "无补充"
+EXTENSION_HEADING = "**扩展分析**"
+# 首轮回答说「没找到」时**不做**扩展分析：没有结论可解释，此时追问「为什么」只会诱发编造。
+# 这个短语由 SYSTEM_PROMPT 第 7 条强制，是固定措辞。
+ABSTAIN_MARK = "年报中未找到相关信息"
+
+
+def build_analyze_messages(question: str, chunks: list[dict], first_answer: str,
+                           company: str = "", year: str = "") -> list[dict]:
+    """第二次调用的消息。复用 format_context，所以 [n] 仍指向**同一批** hits。"""
+    desc = f"（{company} {year} 年年度报告）" if company or year else ""
+    system = ANALYZE_SYSTEM_PROMPT.format(budget=config.ANALYZE_CHAR_BUDGET)
+    user = (f"【年报片段】{desc}\n{format_context(chunks)}\n\n"
+            f"【首轮回答】\n{first_answer}\n\n"
+            f"【原来的问题】\n{question}")
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _norm_chars(s: str) -> str:
+    """比较重复句时用：去掉空白与各种标点。"""
+    return re.sub(r"[\s　*，。；：、,.;:！？!?（）()]+", "", s or "")
+
+
+def _trim_to_sentence(text: str, limit: int) -> str:
+    """超长时在最后一个完整句子边界截断，不留下半句话。"""
+    if len(text) <= limit:
+        return text
+    cut = max((text.rfind(ch, 0, limit) for ch in "。；\n"), default=-1)
+    return text[: cut + 1] if cut > 0 else text[:limit]
+
+
+def clean_extension(first_answer: str, extension: str, n_chunks: int) -> tuple[str, str]:
+    """把模型的输出整理成可追加的一段，并给出状态。
+
+    光靠提示词约束不住的事，这里再用运行时拦一道 —— 提示词是请求，代码才是保证：
+      · 模型又自己写了一遍小标题 → 去掉，免得多出两层标题
+      · 整句和首轮逐字重复 → 丢掉（这是最可能的失败形态：把首轮的话换个说法再说一遍）
+      · **一个合法的 [n] 都没有、也没说「未披露」→ 整段丢掉**。
+        没有出处就不算解释；这一条是整个功能防编造的最后一道闸。
+    """
+    t = (extension or "").strip()
+    if not t:
+        return "", "empty"
+    t = re.sub(r"^\s*(?:#{1,6}\s*[^\n]*\n+|\*\*[^*\n]+\*\*\s*\n+)", "", t).strip()
+    if not t:
+        return "", "empty"
+    if t.startswith(NO_EXTENSION):
+        return "", "no_add"
+
+    # 逐句去掉和首轮重复的（只认**归一化后完全相同**的句子，不做模糊匹配 ——
+    # 模糊匹配会误删本来是新的内容，而这条规则的目的是去水，不是改写）
+    first_sents = {_norm_chars(s) for s in re.split(r"[。！？；\n]", first_answer or "")
+                   if len(_norm_chars(s)) >= 10}
+    kept = [s for s in re.split(r"(?<=[。！？；])", t) if _norm_chars(s) not in first_sents]
+    t = "".join(kept).strip()
+    if not t:
+        return "", "duplicate"
+
+    if not cited_numbers(t, n_chunks) and "未披露" not in t:
+        return "", "ungrounded"
+
+    limit = int(config.ANALYZE_CHAR_BUDGET * 1.5)
+    if len(t) > limit:
+        return _trim_to_sentence(t, limit), "trimmed"
+    return t, "ok"
+
+
+def analyze(question: str, chunks: list[dict], first_answer: str, client=None,
+            company: str = "", year: str = "", usage_out: dict | None = None,
+            diag: dict | None = None) -> str:
+    """解释「为什么」。返回扩展段**正文**（不含小标题），没有可补充的返回空串。
+
+    走流式，和 `generate` 保持一致：流式下 `timeout` 是「多久没收到数据」，而不是总时长。
+    这个模型是推理型的，一次调用可能思考一分钟以上才吐第一个字；用非流式的话
+    `timeout` 就是总时长，会把合法的慢调用误杀掉。同时仍然记录 finish_reason ——
+    `max_tokens` 把推理和正文一起算，截断会表现成「正文为空」，
+    这正是当年查询改写静默失效的形态，绝不能当成「无补充」。
+    """
+    diag = diag if diag is not None else {}
+    client = client or get_client()
+    stream = client.chat.completions.create(
+        model=config.LLM_MODEL,
+        messages=build_analyze_messages(question, chunks, first_answer, company, year),
+        temperature=0.1, stream=True, timeout=config.ANALYZE_TIMEOUT,
+        max_tokens=config.ANALYZE_MAX_TOKENS,
+        stream_options={"include_usage": True},
+    )
+    parts: list[str] = []
+    finish = ""
+    for event in stream:
+        usage = getattr(event, "usage", None)
+        if usage is not None and usage_out is not None:
+            usage_out.update(usage.model_dump() if hasattr(usage, "model_dump") else dict(usage))
+        if event.choices:
+            choice = event.choices[0]
+            if getattr(choice, "finish_reason", None):
+                finish = choice.finish_reason
+            if choice.delta and choice.delta.content:
+                parts.append(choice.delta.content)
+
+    diag["finish"] = finish
+    raw = "".join(parts)
+    text, status = clean_extension(first_answer, raw, len(chunks))
+    # 判「截断」看的是**原始输出**，不是清洗后的结果：
+    # 正文被当成重复句丢掉也是空，但那不是 max_tokens 的问题，报"截断"会把人带偏。
+    if finish == "length" and not raw.strip():
+        diag["analyze"] = "truncated"
+        raise RuntimeError(
+            f"扩展分析被 max_tokens={config.ANALYZE_MAX_TOKENS} 截断，正文为空"
+            "（调大 ANALYZE_MAX_TOKENS，或调小 ANALYZE_CHAR_BUDGET）"
+        )
+    diag["analyze"] = status
+    return text
+
+
+def should_analyze(answer: str) -> bool:
+    """这道题要不要做扩展分析。
+
+    弃答时不做 —— 这是这个功能最危险的入口：让模型去解释一个它根本没找到的数据，
+    它只能编。毛利率那道题就是这类：片段里确实没有原因表述，而模型当时正确地说了「未披露」。
+    """
+    return (bool(config.ANALYZE_ENABLED)
+            and bool((answer or "").strip())
+            and ABSTAIN_MARK not in answer)
+
+
+def join_answer(first: str, extension: str) -> str:
+    """把扩展段接到首轮回答后面，单独成段。没有扩展就原样返回。"""
+    if not extension:
+        return first
+    return f"{first.rstrip()}\n\n{EXTENSION_HEADING}\n{extension.strip()}"
 
 
 def cited_numbers(answer: str, n_chunks: int) -> list[int]:

@@ -61,6 +61,25 @@ LLM_TIMEOUT = float(get("LLM_TIMEOUT", "60"))
 # 而且不是靠截断输出 —— 模型的推理量本身从 8297 个 token 降到 2845。
 # 设 0 表示不限（会明显变慢，见 rag/generator.py:ANSWER_BUDGET_RULE 的实测数据）。
 ANSWER_CHAR_BUDGET = int(get("ANSWER_CHAR_BUDGET", "600"))
+# ---------- 扩展分析（第二次模型调用）----------
+# 首轮回答之后再问一次模型「为什么会是这个结果」，作为独立一段追加在后面。
+# 动机：实测发现模型一直在复述检索到的数字，没有做解释；而用户对「深度」的定义正是归因。
+# 设 0 关闭，整条链路退回单次生成（测量 A/B 时用）。
+ANALYZE_ENABLED = get("ANALYZE_ENABLED", "1") == "1"
+# 扩展段的字数上限。理由同 ANSWER_CHAR_BUDGET：只有**明确的数字**才压得住推理 token，
+# 「请简洁些」这类软约束实测无效。
+ANALYZE_CHAR_BUDGET = int(get("ANALYZE_CHAR_BUDGET", "250"))
+# 第二次调用的输出上限。单独给足 —— 这个模型是推理型的，max_tokens 把推理和正文一起算，
+# 给少了正文一个字都剩不下（查询改写就是这么静默失效了几个月的）。
+# 同时调用处会检查 finish_reason == "length"，截断必须显式报出来，不能当成功。
+ANALYZE_MAX_TOKENS = int(get("ANALYZE_MAX_TOKENS", "3000"))
+# 第二次调用的超时。比 LLM_TIMEOUT 短：首轮回答已经交付给用户了，
+# 不该为了补充分析再把人挂住一分钟。
+ANALYZE_TIMEOUT = float(get("ANALYZE_TIMEOUT", "45"))
+# A/B 用：把「解释为什么」直接塞进首轮提示词，不调第二次。
+# 如果它就能拿到大部分收益，那第二次调用就是多花一倍钱买一点点 ——
+# 这是证伪这个功能最便宜的方式，所以留一个开关。
+ANSWER_WHY_INLINE = get("ANSWER_WHY_INLINE", "0") == "1"
 # 给缺年份表头的报表片段前置表头。设为 0 可关掉（tools/eval_depth.py 做 A/B 时用）。
 HEADER_PROPAGATION = get("HEADER_PROPAGATION", "1") == "1"
 # 追问时带几轮历史给查询改写。只带问题，不带回答。

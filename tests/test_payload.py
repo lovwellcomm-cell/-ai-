@@ -54,11 +54,18 @@ class TestAiMessage:
         assert msg["sources"][0]["cited"] is True
         assert "statusText" not in msg
 
-    @pytest.mark.parametrize("status", ["retrieving", "generating"])
+    @pytest.mark.parametrize("status", ["retrieving", "generating", "analyzing"])
     def test_pending_status_gets_a_caption(self, status):
         msg = payload.ai_message({"q": "问题", "status": status})
         assert msg["status"] == status
         assert msg["statusText"] == payload.STATUS_TEXT[status]
+
+    def test_first_answer_is_visible_while_analyzing(self):
+        """扩展分析阶段首轮回答已经产出，必须已经挂在 text 上 ——
+        组件对 analyzing 状态会先画它、再挂 spinner。若这里为空，用户就得干等第二次调用。"""
+        msg = payload.ai_message({"q": "问题", "status": "analyzing", "a": "首轮回答[1]"})
+        assert msg["text"] == "首轮回答[1]"
+        assert msg["statusText"] == "正在扩展分析…"
 
     def test_error_message_is_rendered_but_not_busy(self):
         msg = payload.ai_message({"q": "问题", "status": "error", "error": "调用失败"})

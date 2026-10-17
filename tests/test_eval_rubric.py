@@ -19,8 +19,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tools.eval_rubric import (  # noqa: E402
-    causal_sentences, citations, caliber, computed_rates, quote_check, run,
-    unit_conversions, unsourced_items,
+    causal_sentences, citations, caliber, computed_rates, inferential_causation,
+    quote_check, run, unit_conversions, unsourced_items,
 )
 from tools.rubric_questions import anchors  # noqa: E402
 
@@ -109,6 +109,10 @@ def test_magnitude_written_with_a_direction_word_matches_the_signed_value():
     """误报护栏（真实原句）：外侧写的是差额的**大小**，括号里是**带符号**的值。"""
     r = unit_conversions("2024年经营现金流净额比净利润少11.66亿元（-1,166,119,050.51元，据[1]数字计算）[1]。")
     assert r["换算不一致"] == []
+    # 「低」单字也要认 —— 只写「低于」覆盖不到这一句
+    r2 = unit_conversions("2025年经营现金流比净利润高18.53亿元（1,852,557,535.42元）；"
+                          "2024年则低11.66亿元（-1,166,119,050.51元，据片段数字计算）。")
+    assert r2["换算不一致"] == [], r2["换算不一致"]
 
 
 def test_paren_may_hold_a_note_and_units_may_differ():
@@ -180,6 +184,25 @@ def test_a_marker_belonging_to_another_number_does_not_leak():
     answer = ("2025年经营现金流净额同比增加30.64亿元（3,064,235,972.99元，据[1][2][7]数字计算），"
               "变动比例为520.11%[7]。")
     assert computed_rates(answer)["自算率检查数"] == 0
+
+
+def test_inference_marker_also_triggers_the_rate_check():
+    """回归：`_MARK_CORE` 原来只认「计算/给出」，而扩展分析的核心标记是
+    「据片段数据推断」—— 整个被跳过，等于给新功能开了个后门。"""
+    answer = "营业收入246.74亿元，上年223.23亿元，增长约10.53%（据片段数据推断）[1]。"
+    assert computed_rates(answer)["自算率检查数"] == 1
+
+
+def test_inferential_causation_tripwire():
+    """拿「推断」标记给原因打掩护。
+
+    这种句子**有引用也有数字**，过得了一般的证据检查，但它说的其实是一个
+    片段里没有的因果 —— 只有这条能把它挑出来。"""
+    assert inferential_causation(
+        "毛利率下降（据片段数据推断），主要是铜价上涨导致[1]。")["推断式归因数"] == 1
+    # 结构性推断（不是在说原因）不算
+    assert inferential_causation(
+        "据片段数据推断，成本增速高于收入0.16个百分点[1]。")["推断式归因数"] == 0
 
 
 def test_quoted_rate_without_marker_is_not_checked():

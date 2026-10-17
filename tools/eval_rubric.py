@@ -127,8 +127,10 @@ def quote_check(answer: str, hits: list[dict]) -> dict:
 _UNIT_OCC_RE = re.compile(r"(-?)(\d[\d,]*(?:\.\d+)?)(亿元|万元|千元|元)")
 _UNIT_SCALE = {"亿元": 1e8, "万元": 1e4, "千元": 1e3, "元": 1.0}
 _INNER_RE = re.compile(r"^(-?)(\d[\d,]*(?:\.\d+)?)(亿元|万元|千元|元)?")
-# 「少 / 低于 / 净流出」这类方向词说明外侧写的是差额的大小而非带符号的值
-_DIRECTION = re.compile(r"(少|低于|下降|减少|负|缺口|差额|净流出|净增加)$")
+# 「少 / 低 / 净流出」这类方向词说明外侧写的是差额的大小而非带符号的值。
+# `高`/`低` 单字也要：实测「2024年则**低**11.66亿元（-1,166,119,050.51元）」
+# 只写「低于」覆盖不到，于是又把正确的带符号原值判成不一致。
+_DIRECTION = re.compile(r"(少|低于|高|低|下降|减少|负|缺口|差额|净流出|净增加)$")
 
 
 def unit_conversions(answer: str) -> dict:
@@ -212,7 +214,7 @@ def unit_conversions(answer: str) -> dict:
 # 「据片段数字计算」的各种真实写法，实测至少有六种表面形式：
 #   （据片段数字计算） ｜ 据片段数字计算增长约24.67% ｜ （据[5]数字计算）
 #   （据[1][2][7]数字计算） ｜ 据片段[1][7]数字计算 ｜ （据“减少 0.13 个百分点”计算）
-_MARK_CORE = r"据[^）)。，；\n]{0,20}(?:计算|给出)"
+_MARK_CORE = r"据[^）)。，；\n]{0,20}(?:计算|给出|推断)"
 # 必须**紧邻**才算这个比率的标记。早先用 26 字的宽松窗口，结果
 # `…增加30.64亿元（3,064,235,972.99元，据[1][2][7]数字计算），变动比例为520.11%[7]`
 # 里属于"30.64亿元"的那个标记，被算到了照抄来的"520.11%"头上，凭空造出 3 个误报。
@@ -403,6 +405,29 @@ def caliber(answer: str, hits: list[dict]) -> dict:
 
 # ---------------------------------------------------------------- 组装
 
+_INFERENCE_MARK = "据片段数据推断"
+
+
+def inferential_causation(answer: str) -> dict:
+    """拿「据片段数据推断」给原因打掩护的句子（清单）。
+
+    扩展分析的提示词明确禁止把推断标记用于归因，但那只是一串字，模型随时能加上去。
+    这条专抓「推断标记 + 因果词」同时出现的句子 —— `causal_sentences` 抓不到它，
+    因为那种句子通常带着引用和数字，过得了那道闸。
+
+    这是这个功能最容易漏掉的口子：一句话既有 [n] 又有数字，看起来完全合规，
+    但它说的其实是一个片段里没有的因果。
+    """
+    out = []
+    for s in re.split(r"[。；\n]", answer or ""):
+        s = s.strip()
+        if _INFERENCE_MARK not in s or not _CAUSAL_RE.search(s):
+            continue
+        if _NEGATION_RE.search(s):
+            continue
+        out.append(s)
+    return {"推断式归因": out, "推断式归因数": len(out)}
+
 def run(answer: str, hits: list[dict], tag: str = "") -> dict:
     """一道题的全部度量。
 
@@ -430,6 +455,8 @@ def run(answer: str, hits: list[dict], tag: str = "") -> dict:
         # 4 证据 / 5 解释层次（只出清单）
         **unsourced_items(answer),
         **causal_sentences(answer),
+        # 扩展分析专用：拿"推断"标记给原因打掩护的句子
+        **inferential_causation(answer),
         # 2 完整性（锚点下限 + 条件触发的口径标注）
         **anchors(tag, answer),
         **caliber(answer, hits),

@@ -74,8 +74,15 @@ RICH = {
     },
 }
 
+# 扩展分析进行中的一帧：首轮回答已经画出来了，下面挂着「正在扩展分析」的指示。
+# 这是两段式呈现最容易做坏的地方（一返回 spinner 就把正文丢掉），所以放进预览里，
+# 每次改前端都能对着看一眼。
+ANALYZING = dict(RICH, status="analyzing", statusText="正在扩展分析…",
+                 text=RICH["text"].split("\n\n")[0])
+
 ANSWERS = {
     "营业收入和归母净利润分别是多少？": RICH,
+    "毛利率变动的原因是什么？": ANALYZING,
 }
 DEFAULT_ANSWER = dict(RICH, text=(
     "（离线预览只会播放固定的示例回答，真实系统里这一条由 DeepSeek 依据检索到的年报片段生成。）\n\n"

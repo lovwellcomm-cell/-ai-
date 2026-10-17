@@ -5,7 +5,7 @@
     rerun 被重新序列化，不划算）。样式由 web/streamlit-shell.css 刷成设计稿的样子。
   · 主区对话面板 = ui/chat_component.py 里的 st.components.v2 自定义组件。
 
-一次提问按「回合状态机」跑四轮脚本（见 advance_turn）。这么做是为了在整段呈现回答的前提下，
+一次提问按「回合状态机」跑四到五轮脚本（见 advance_turn）。这么做是为了在整段呈现回答的前提下，
 仍然给出真实的分阶段状态文案，而不是拿假计时器糊弄。
 """
 import base64
@@ -14,7 +14,7 @@ import streamlit as st
 
 from rag import config
 from rag.chunker import chunk_pages
-from rag.generator import generate, get_client, make_client
+from rag.generator import analyze, generate, get_client, join_answer, make_client, should_analyze
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
                          is_current, list_documents, load_index)
 from rag.limits import Quota, check_and_consume
@@ -309,11 +309,27 @@ def refund(target: dict) -> None:
         st.session_state.used = max(0, st.session_state.get("used", 1) - 1)
 
 
+def finish_turn(target: dict, answer: str) -> None:
+    """把一轮写进历史，并清掉进行中的回合。
+
+    `analyze` 只是排查用的状态（ok / no_add / truncated / error），组件不读它。
+    """
+    history.append({"q": target["q"], "a": answer, "hits": target["hits"],
+                    "queries": target["queries"], "analyze": target.get("analyze", "")})
+    st.session_state.pop("turn", None)
+    st.session_state["chat_warn"] = ""
+
+
 def advance_turn() -> None:
-    """回合状态机：retrieving -> generating -> done。
+    """回合状态机：retrieving -> generating -> analyzing -> done。
 
     关键是「先挂载组件、再做耗时工作」：组件挂载的增量会在几十毫秒内送达浏览器并绘制，
     之后的阻塞调用（检索、生成）期间用户看到的就是刚挂上去的那一帧。已实测成立。
+
+    analyzing 是后加的第二步：首轮回答产出后不直接收尾，而是再问一次模型「为什么」，
+    把结果作为独立一段追加。**首轮回答在这一步就已经显示出来了** ——
+    组件对 analyzing 状态会先渲染已有的正文，再挂「正在扩展分析」的指示，
+    所以用户不必等第二次调用跑完才看到东西。
     """
     target = st.session_state.get("turn")
     if not target or target.get("status") == "error":
@@ -357,10 +373,31 @@ def advance_turn() -> None:
             refund(target)
             fail(target, f"调用大模型失败：{e}")
             st.rerun()
-        history.append({"q": target["q"], "a": answer, "hits": target["hits"],
-                        "queries": target["queries"]})
-        st.session_state.pop("turn", None)
-        st.session_state["chat_warn"] = ""
+        target["a"] = answer
+        # 弃答不做扩展：没有结论可解释，此时追问「为什么」只会诱发编造。
+        if should_analyze(answer):
+            target["status"] = "analyzing"
+            st.session_state["turn"] = target
+            st.rerun()
+        finish_turn(target, answer)
+        st.rerun()
+
+    if target["status"] == "analyzing":
+        diag: dict = {}
+        ext = ""
+        try:
+            ext = analyze(target["q"], target["hits"], target["a"], client=pick_client(),
+                          company=meta.get("company", ""), year=meta.get("year", ""),
+                          diag=diag)
+        except Exception as e:
+            # 首轮回答本身是完整的，不能因为更晚的一次**补充**调用而作废它。
+            # 失败只记在回合上（测量和排查用），不弹给用户 —— 他们拿到的仍是一份可用的回答。
+            diag["analyze"] = "error"
+            diag["analyze_error"] = str(e)
+        target["analyze"] = diag.get("analyze", "")
+        if diag.get("analyze_error"):
+            target["analyze_error"] = diag["analyze_error"]
+        finish_turn(target, join_answer(target["a"], ext))
         st.rerun()
 
 
