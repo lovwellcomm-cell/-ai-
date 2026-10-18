@@ -93,6 +93,24 @@ LLM_REWRITE = get("LLM_REWRITE", "1") == "1"
 # 索引格式版本：切分或前缀规则变化时 +1，旧索引会自动重建
 INDEX_VERSION = 3
 
+# ---------- 外部工具（Search / Fetch / 计算） ----------
+# 只有首轮回答明确说「年报中未找到相关信息」时才启用：让模型调用工具补充公开信息，
+# 而不是凭语言模型自身的记忆猜测。年报里能答的问题不会触发，保证引用仍然可核验。
+WEB_SEARCH_ENABLED = get("WEB_SEARCH_ENABLED", "1") == "1"
+# 一次搜索取几条。Search 接口按请求计费（0.005 元/次），不按条数。
+WEB_SEARCH_MAX_RESULTS = int(get("WEB_SEARCH_MAX_RESULTS", "5"))
+WEB_SEARCH_TIMEOUT = float(get("WEB_SEARCH_TIMEOUT", "15"))
+WEB_FETCH_TIMEOUT = float(get("WEB_FETCH_TIMEOUT", "20"))
+# 工具循环最多几轮「模型要工具 → 我们执行 → 再问模型」。
+WEB_TOOL_MAX_ROUNDS = int(get("WEB_TOOL_MAX_ROUNDS", "2"))
+WEB_TOOL_MAX_TOKENS = int(get("WEB_TOOL_MAX_TOKENS", "2000"))
+# 非流式调用的总时长上限。外部补充是追加段，不值得让用户无限等。
+WEB_TOOL_TIMEOUT = float(get("WEB_TOOL_TIMEOUT", "60"))
+# 补充段的字数上限。和扩展分析同理：只有明确的数字压得住推理 token。
+WEB_CHAR_BUDGET = int(get("WEB_CHAR_BUDGET", "300"))
+# 一轮最多登记多少个网页来源，防止模型反复搜索把引用编号撑爆。
+WEB_MAX_SOURCES = int(get("WEB_MAX_SOURCES", "8"))
+
 # ---------- 公开演示模式 ----------
 # 部署到公网时设 PUBLIC_DEMO=1：限制提问次数、限制上传、按会话隔离上传的年报。
 PUBLIC_DEMO = get("PUBLIC_DEMO", "0") == "1"

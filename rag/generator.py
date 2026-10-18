@@ -12,7 +12,7 @@ SYSTEM_PROMPT = """你是一名严谨的上市公司年报研究助手。下面�
 4. 财务报表行通常是“科目 本期金额 上期金额”。“主要会计数据”表通常是“科目 本年 上年 本期比上年同期增减(%) 前年”。据此区分年份。
 5. 问到变化或增长时，给出本期值、上期值、变化额和变化率。片段已给出增减比例的，直接引用；没给的，按片段数字计算，并注明“据片段数字计算”。
 6. 金额先换算成“亿元”或“万元”（保留两位小数），再在括号里附原值和单位，例如：8.09 亿元（808,978,679.37 元）。
-7. 只有片段里确实没有相关数据时，才回答“年报中未找到相关信息”，并说明找到了哪些相关内容。
+7. 只有片段里确实没有相关数据时，回答的第一句必须是“年报中未找到相关信息”，然后再说明找到了哪些相关内容；不要改写成“片段中未找到”等其他说法。
 8. 使用中文，先给一句话结论，再分点列出依据。"""
 
 # 明确写出字数上限。**必须给数字** —— 实测过几种软约束，都没用：
@@ -142,6 +142,19 @@ EXTENSION_HEADING = "**扩展分析**"
 # 首轮回答说「没找到」时**不做**扩展分析：没有结论可解释，此时追问「为什么」只会诱发编造。
 # 这个短语由 SYSTEM_PROMPT 第 7 条强制，是固定措辞。
 ABSTAIN_MARK = "年报中未找到相关信息"
+
+# 模型经常把上面那句改写成「年报片段中未找到 …」「片段中没有相关数据」。
+# 只认固定短语会让弃答判定漏掉一大半 —— 实测第一次端到端跑，模型写的是
+# 「结论：年报片段中未找到精达股份 2025 年股价最高值」，于是联网兜底没有触发。
+# 所以再加一层容错：在**开头 160 字**（结论区）里出现「年报/片段 + 未找到」就算弃答。
+_ABSTAIN_RE = re.compile(
+    r"(?:年报|报告|片段)[^。！？\n]{0,12}"
+    r"(?:未找到|没有找到|未检索到|没有相关数据|未包含)")
+
+
+def is_abstention(answer: str) -> bool:
+    a = (answer or "").strip()
+    return bool(a) and bool(_ABSTAIN_RE.search(a[:160]))
 
 
 def build_analyze_messages(question: str, chunks: list[dict], first_answer: str,
@@ -284,7 +297,7 @@ def should_analyze(answer: str, question: str = "") -> bool:
 
     纯查数时也不做：实测这类题 6/6 返回「无补充」，白调一次模型。
     """
-    if not config.ANALYZE_ENABLED or not (answer or "").strip() or ABSTAIN_MARK in answer:
+    if not config.ANALYZE_ENABLED or not (answer or "").strip() or is_abstention(answer):
         return False
     # question 为空（旧调用点、部分测试）时按"需要解释"处理，不改变既有行为
     return needs_explanation(question) if question else True

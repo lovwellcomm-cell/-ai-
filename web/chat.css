@@ -319,6 +319,11 @@ details.trace summary:hover { color: var(--ink-2); }
 .src-sub { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .src-pg { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
 
+/* 外部来源用 <a>；保留 .src 的卡片外观，只去掉链接默认样式 */
+.web-src { text-decoration: none; color: inherit; cursor: pointer; }
+.web-src:hover { text-decoration: none; }
+.web-src:hover .src-path { color: var(--accent); }
+
 .acts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: -3px; }
 .act {
   display: inline-flex; align-items: center; gap: 6px;

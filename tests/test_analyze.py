@@ -98,6 +98,11 @@ def test_should_analyze_skips_abstention():
     assert should_analyze("年报中未找到相关信息。片段里只有营业收入。") is False
 
 
+def test_should_analyze_skips_paraphrased_abstention():
+    """弃答检测不能只认固定短语：模型会写「年报片段中未找到…」。"""
+    assert should_analyze("结论：年报片段中未找到精达股份 2025 年股价最高值。") is False
+
+
 def test_should_analyze_skips_empty_answer():
     assert should_analyze("   ") is False
 

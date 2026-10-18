@@ -37,6 +37,17 @@ def ana(text="成本增速慢于收入[1]。", diag=None, record=None):
     return _a
 
 
+def web(text="公开信息显示公司发布了回购公告[网1]。", sources=None, diag=None, record=None):
+    def _w(q, first, *, client, company, year, history):
+        if record is not None:
+            record["web"] = history
+            record["first"] = first
+        return (text, list(sources if sources is not None
+                           else [{"n": 1, "title": "公告", "url": "https://example.com/a"}]),
+                dict(diag if diag is not None else {"web": "ok"}))
+    return _w
+
+
 def boom(*a, **k):
     raise TimeoutError("timeout")
 
@@ -77,6 +88,59 @@ def test_lookup_question_skips_the_analysis_call():
         ana=lambda *a, **k: called.setdefault("hit", True))
     assert error is None and "hit" not in called
     assert turn["status"] == "done" and entry["analyze"] == ""
+
+
+def test_abstention_goes_to_web_search_when_available():
+    """年报里没有的，才允许外部补充 —— 这是联网能力唯一的入口。"""
+    rec = {}
+    turn, entry, error = run(
+        gen=gen(text=f"{ABSTAIN_MARK}，片段里没有相关信息。"), web=web(record=rec))
+    # 第一跳只切状态，不在这里调用外部接口
+    assert error is None and entry is None and turn["status"] == "searching"
+    assert "web" not in rec
+    turn, entry, error = run(turn=turn, web=web(record=rec))
+    assert error is None and "web" in rec
+    assert turn["status"] == "done"
+    assert entry["web"] == "ok" and entry["web_sources"]
+    assert "公开信息补充" in entry["a"]
+    assert entry["a"].startswith(ABSTAIN_MARK)
+
+
+def test_web_is_not_called_for_a_normal_answer():
+    """年报答得出就不查外网 —— 否则引用就不再只指向年报。"""
+    called = {}
+
+    def w(*a, **k):
+        called["hit"] = True
+
+    turn, entry, error = run(web=w)
+    assert "hit" not in called
+    assert turn["status"] == "analyzing"
+
+
+def test_web_failure_keeps_the_first_answer():
+    def boom(*a, **k):
+        raise TimeoutError("timeout")
+
+    _t, entry, error = run(turn=dict(TURN, status="searching", a=FIRST), web=boom)
+    assert error is None                      # 整轮不算失败
+    assert entry["a"] == FIRST               # 首轮回答原样保留
+    assert entry["web"] == "error"
+    assert "timeout" in entry["web_error"]
+
+
+def test_web_no_result_keeps_the_first_answer():
+    _t, entry, error = run(turn=dict(TURN, status="searching", a=FIRST),
+                           web=web(text="", diag={"web": "no_result"}))
+    assert entry["a"] == FIRST and entry["web"] == "no_result"
+
+
+def test_web_gets_history_and_the_first_answer():
+    rec = {}
+    run(turn=dict(TURN, status="searching", a=FIRST), web=web(record=rec),
+        recent=["营业收入是多少？"])
+    assert rec["web"] == ["营业收入是多少？"]
+    assert rec["first"] == FIRST
 
 
 def test_generation_error_returns_error_and_no_entry():
@@ -136,8 +200,9 @@ def test_step_does_not_mutate_the_input_turn():
 
 def test_history_entry_shape():
     e = history_entry(dict(TURN, analyze="ok"), "回答")
-    assert set(e) == {"q", "a", "hits", "queries", "analyze"}
+    assert set(e) == {"q", "a", "hits", "queries", "analyze", "web", "web_sources"}
     assert e["a"] == "回答" and e["analyze"] == "ok"
+    assert e["web"] == "" and e["web_sources"] == []
 
 
 def test_history_entry_keeps_the_failure_reason():
@@ -172,6 +237,15 @@ def test_switching_during_analysis_keeps_the_first_answer():
     old_id, entry = orphan
     assert old_id == "d1" and entry["a"] == FIRST
     assert entry["analyze"] == "aborted"
+
+
+def test_switching_during_search_keeps_the_first_answer():
+    """外部查询阶段用户也已经在看首轮回答了 —— 切文档同样要留下它。"""
+    kept, orphan = adopt_turn(dict(TURN, status="searching", a=FIRST), "d2")
+    assert kept is None
+    old_id, entry = orphan
+    assert old_id == "d1" and entry["a"] == FIRST
+    assert entry["web"] == "aborted"
 
 
 def test_no_turn_is_a_no_op():

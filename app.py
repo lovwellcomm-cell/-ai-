@@ -14,6 +14,7 @@ import streamlit as st
 
 from rag import config
 from rag.chunker import chunk_pages
+from rag.external import answer_with_tools
 from rag.generator import analyze, generate, get_client, make_client
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
                          is_current, list_documents, load_index)
@@ -321,7 +322,7 @@ def finish_turn(entry: dict) -> None:
 
 
 def advance_turn() -> None:
-    """回合状态机：retrieving -> generating -> analyzing -> done。
+    """回合状态机：retrieving -> generating -> analyzing / searching -> done。
 
     关键是「先挂载组件、再做耗时工作」：组件挂载的增量会在几十毫秒内送达浏览器并绘制，
     之后的阻塞调用（检索、生成）期间用户看到的就是刚挂上去的那一帧。已实测成立。
@@ -368,7 +369,7 @@ def advance_turn() -> None:
         st.session_state["turn"] = target
         st.rerun()
 
-    if target["status"] in ("generating", "analyzing"):
+    if target["status"] in ("generating", "analyzing", "searching"):
         # 决策（要不要扩展、什么时候收尾、失败怎么办）在 ui/turn.py 里，
         # 是纯函数、有测试。这里只负责接真实模型和 session_state。
 
@@ -382,8 +383,17 @@ def advance_turn() -> None:
                           diag=diag, history=history)
             return ext, diag
 
+        def _web(q, first, *, client, company, year, history):
+            diag: dict = {}
+            text, sources, diag = answer_with_tools(
+                q, first, client=client,
+                api_key=getattr(client, "api_key", "") or config.DEEPSEEK_API_KEY,
+                company=company, year=year, diag=diag,
+            )
+            return text, sources, diag
+
         new_turn, entry, error = turn_core.step(
-            target, gen=_gen, ana=_ana, client=pick_client(),
+            target, gen=_gen, ana=_ana, web=_web, client=pick_client(),
             company=meta.get("company", ""), year=meta.get("year", ""),
             recent=target.get("recent"),
         )

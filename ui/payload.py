@@ -21,6 +21,8 @@ STATUS_TEXT = {
     "generating": "正在生成回答…",
     # 首轮回答已经显示出来了，这一步只是追加「为什么」的扩展分析
     "analyzing": "正在扩展分析…",
+    # 年报里没有这条信息，正在调用 Search / Fetch 补充公开信息
+    "searching": "正在查询公开信息…",
 }
 
 
@@ -70,6 +72,18 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
         msg["error"] = error
     if page:
         msg["page"] = page
+    # 外部补充的网页来源。编号与正文里的 [网n] 对应，组件据此渲染可点击的链接。
+    if turn.get("web_sources"):
+        msg["webSources"] = [
+            {
+                "n": int(s.get("n") or 0),
+                "title": s.get("title") or "",
+                "url": s.get("url") or "",
+                "site": s.get("site") or "",
+                "date": s.get("date") or "",
+            }
+            for s in turn["web_sources"]
+        ]
     # 结构化财务卡片：目前后端不产出这些字段，组件收到就用、收不到就不渲染。
     # 位置留在这里，等接入「主要会计数据」抽取后直接填即可。
     for key in ("kpis", "charts", "table", "demo"):
