@@ -448,3 +448,15 @@ if result.open_page and isinstance(result.open_page, dict):
         st.rerun()
 
 advance_turn()
+
+# ---------- 临时网络自检（?netcheck=1） ----------
+# 验证部署环境（Streamlit Cloud）能否访问巨潮资讯。只有显式带参数时才渲染，
+# 访客默认看不到；两个请求都是只读的，不落盘、不消耗 API 额度。
+if str(st.query_params.get("netcheck", "")) == "1":
+    from rag.netcheck import probe
+
+    with st.sidebar:
+        with st.expander("网络自检（临时）", expanded=True):
+            st.caption("验证当前部署环境能否访问巨潮资讯；只发两个只读请求。")
+            if st.button("开始检测", key="netcheck_btn"):
+                st.json(probe())
