@@ -10,8 +10,16 @@
 """
 import base64
 import json
+import os
 
 import streamlit as st
+
+# 部署不一定重启进程：app.py 每次 rerun 都从磁盘重读，rag/*.py 与 ui/*.py 却留在
+# sys.modules 里。下面这行必须在**其他项目模块之前**执行，比对源码戳并在需要时
+# 卸载旧模块（见 rag/freshness.py）。
+from rag.freshness import ensure_fresh
+
+SOURCE_STAMP = ensure_fresh()
 
 from rag import config
 from rag.chunker import chunk_pages
@@ -19,7 +27,8 @@ from rag.company import extract_target
 try:
     from rag.disclosure import download_pdf, ensure_report, source_site
 except Exception as _import_error:          # 部署环境里的 import 失败要能被看见
-    st.error(f"模块导入失败：{type(_import_error).__name__}: {_import_error}")
+    st.error(f"模块导入失败：{type(_import_error).__name__}: {_import_error}"
+             f"（源码戳 {SOURCE_STAMP}，重载于 {os.environ.get('ARB_RELOAD_AT', '未重载')}）")
     raise
 from rag.external import answer_with_tools
 from rag.generator import analyze, generate, get_client, make_client
@@ -33,6 +42,19 @@ from ui import turn as turn_core
 from ui.chat_component import chat_surface
 
 st.set_page_config(page_title="年报 AI 研究助手", page_icon="📊", layout="wide")
+
+# ---------- 临时构建自检（?build=1） ----------
+# 用来分辨两种「线上还是旧代码」：
+#   · process_started 晚于文件更新时间 → 你连的是部署之前的旧进程，刷新即可；
+#   · 进程跨部署存活 → 看 reload_count，说明 freshness 守卫刚刚卸载并重导了模块。
+# 放在这里（而不是文件末尾）是为了在 st.stop() 或异常之前就能看到。只读、不落盘。
+if str(st.query_params.get("build", "")) == "1":
+    from rag.freshness import build_report
+
+    with st.sidebar:
+        with st.expander("构建自检（临时）", expanded=True):
+            st.caption("当前进程跑的是哪一份代码。stamp 与本地一致即说明线上已是最新。")
+            st.json(build_report(SOURCE_STAMP))
 
 SHELL_CSS = """
   /* 1. 隐藏 Streamlit 自带顶栏。侧边栏折叠后，展开按钮仍在这个 header 里，
@@ -116,36 +138,55 @@ def shell_style(theme: str) -> str:
 
 @st.cache_resource
 def get_quota() -> Quota:
-    """全站共用的每日额度计数器（进程内共享）。"""
+    """全站共用的每日额度计数器（进程内共享）。
+
+    刻意不带源码戳：模块重载时若换掉这个对象，当日已用次数会被清零。
+    旧模块里的 Quota 实例照样能用 —— check_and_consume 只按鸭子类型调用它。
+    """
     return Quota(config.DAILY_LIMIT)
 
 
 @st.cache_resource(ttl=3600)
-def startup() -> None:
-    """进程启动时复制内置示例年报；公开模式下每小时清理过期的访客上传。"""
+def startup(stamp: str) -> None:
+    """进程启动（或部署后的第一次运行）时复制内置示例年报、清理过期上传。"""
     ensure_demo()
     if config.PUBLIC_DEMO:
         cleanup_uploads(config.UPLOAD_TTL_HOURS)
 
 
-startup()
+startup(SOURCE_STAMP)
 
 
 @st.cache_resource(show_spinner="加载索引…")
-def get_retriever(doc_id: str, index_version: int):
+def get_retriever(doc_id: str, index_version: int, stamp: str):
+    """stamp 进缓存键：部署后自动换掉用旧代码构造的 Retriever。
+
+    参数名不能带前导下划线 —— Streamlit 会把 `_` 开头的参数排除在缓存键之外。
+    """
     meta, chunks, emb = load_index(doc_id)
     return meta, Retriever(chunks, emb, company=meta.get("company", ""), year=meta.get("year", ""))
 
 
 @st.cache_data(show_spinner=False)
-def render_page(doc_id: str, page_no: int) -> bytes:
+def render_page(doc_id: str, page_no: int, stamp: str) -> bytes:
     return render_page_png(doc_dir(doc_id) / "source.pdf", page_no)
 
 
 @st.cache_data(show_spinner=False)
-def page_data_uri(doc_id: str, page_no: int) -> str:
+def page_data_uri(doc_id: str, page_no: int, stamp: str) -> str:
     """渲染原页并转成 data URI。base64 一起缓存，免得每次 rerun 重新编码。"""
-    return "data:image/png;base64," + base64.b64encode(render_page(doc_id, page_no)).decode("ascii")
+    return "data:image/png;base64," + base64.b64encode(
+        render_page(doc_id, page_no, stamp)).decode("ascii")
+
+
+# 刚卸载过旧模块的那一次运行，把旧代码构造的缓存对象清掉（只清这三个，
+# 绝不调用 st.cache_resource.clear() —— 那会连 get_quota 一起清、额度归零）。
+from rag.freshness import take_cache_bust  # noqa: E402  （重载后这里拿到的是新版本）
+
+if take_cache_bust(SOURCE_STAMP):
+    get_retriever.clear()
+    render_page.clear()
+    page_data_uri.clear()
 
 
 def _patch_meta(doc_id: str, company: str = "", year: str = "",
@@ -320,7 +361,7 @@ if not docs:
     st.stop()
 
 doc_id = st.session_state.doc_id
-meta, retriever = get_retriever(doc_id, config.INDEX_VERSION)
+meta, retriever = get_retriever(doc_id, config.INDEX_VERSION, SOURCE_STAMP)
 meta = dict(meta)
 meta["doc_id"] = doc_id
 history = st.session_state.setdefault("histories", {}).setdefault(doc_id, [])
@@ -604,7 +645,7 @@ if result.open_page and isinstance(result.open_page, dict):
     if hits and 1 <= n <= len(hits):
         try:
             st.session_state["page"] = {
-                "n": n, "png": page_data_uri(doc_id, int(hits[n - 1]["page_start"])),
+                "n": n, "png": page_data_uri(doc_id, int(hits[n - 1]["page_start"]), SOURCE_STAMP),
             }
         except Exception:
             st.session_state["page"] = None

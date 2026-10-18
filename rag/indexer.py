@@ -1,4 +1,5 @@
 """④ 建立检索索引：向量（bge）+ 关键词（BM25），持久化到 data/<doc_id>/。"""
+import builtins
 import hashlib
 import json
 import shutil
@@ -13,6 +14,7 @@ from .chunker import Chunk
 
 EmbedFn = Callable[[list[str]], np.ndarray]
 _model = None
+_MODEL_KEY = "arb.embed.default"
 
 
 def doc_id_of(data: bytes) -> str:
@@ -23,11 +25,26 @@ def doc_dir(doc_id: str) -> Path:
     return config.DATA_DIR / doc_id
 
 
+def _shared_models() -> dict:
+    """进程级的模型缓存。放在 builtins 里，而不是模块变量。
+
+    `rag` 包会被 `rag/freshness.py` 整体卸载重导（部署后进程没重启时），
+    模块级变量随之归零；如果这时旧的检索器还活着，就会再建一份 ONNX 会话，
+    免费实例上多出上百 MB，很容易 OOM。
+    """
+    return builtins.__dict__.setdefault("_arb_shared_models", {})
+
+
 def _load_model():
     """从 hf-mirror 下载 bge-small-zh-v1.5 的 ONNX 版本，用 onnxruntime 在 CPU 上推理。
 
     不用 PyTorch：本机 Smart App Control 会拦截 torch 的原生 DLL。
     """
+    cache = _shared_models()
+    hit = cache.get(_MODEL_KEY)
+    if hit is not None:
+        return hit
+
     import onnxruntime as ort
     from huggingface_hub import snapshot_download
     from tokenizers import Tokenizer
@@ -37,6 +54,7 @@ def _load_model():
     tok.enable_truncation(max_length=512)
     tok.enable_padding(pad_id=0, pad_token="[PAD]")
     sess = ort.InferenceSession(str(path / config.EMBED_ONNX_FILE), providers=["CPUExecutionProvider"])
+    cache[_MODEL_KEY] = (tok, sess)
     return tok, sess
 
 
