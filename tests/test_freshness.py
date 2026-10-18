@@ -57,6 +57,15 @@ def test_source_stamp_ignores_mtime(tmp_path):
     assert freshness.source_stamp([a]) == stamp
 
 
+def test_source_stamp_ignores_line_endings(tmp_path):
+    """同一份提交在 Windows 检出是 CRLF、在 Cloud 是 LF，对账要用同一个戳。"""
+    a = tmp_path / "a.py"
+    a.write_bytes(b"x = 1\ny = 2\n")
+    lf = freshness.source_stamp([a])
+    a.write_bytes(b"x = 1\r\ny = 2\r\n")
+    assert freshness.source_stamp([a]) == lf
+
+
 def test_source_stamp_gives_up_on_unreadable_file(tmp_path):
     a = _write(tmp_path, "a.py", "x = 1\n")
     assert freshness.source_stamp([a, tmp_path / "missing.py"]) == ""

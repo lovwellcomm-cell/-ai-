@@ -61,13 +61,16 @@ def source_stamp(paths: Iterable[Path] | None = None) -> str:
 
     不用 mtime / size：部署工具（tar、rsync、镜像层）可能保留时间戳，
     内容哈希才是真相。全部文件加起来一百多 KB，每个 rerun 读一遍可以忽略。
+
+    行尾统一成 LF 再算：同一份提交在 Windows 检出是 CRLF、在 Cloud 是 LF，
+    不归一化的话本地和线上永远对不上，`?build=1` 的对账就没法用。
     """
     files = sorted((Path(p) for p in (paths if paths is not None else tracked_sources())),
                    key=lambda p: str(p).lower())
     h = hashlib.sha256()
     for path in files:
         try:
-            data = path.read_bytes()
+            data = path.read_bytes().replace(b"\r\n", b"\n")
         except OSError:
             return ""
         try:
