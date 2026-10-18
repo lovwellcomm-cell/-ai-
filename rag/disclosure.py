@@ -1,11 +1,11 @@
-"""从巨潮资讯下载年报 PDF。
+"""巨潮资讯：下载年报 PDF，并按公司名/年份检索年报公告。
 
-第 1 阶段只做“粘贴链接 → 下载 → 复用现有 ingest”，不做公司检索。
-安全边界：
-  · 只接受 https、只接受白名单域名，禁止用户名密码、禁止非 443 端口；
-  · 重定向目标也必须过同一套白名单（防 SSRF）；
-  · 限制 40 MB、30 秒超时，内容必须以 %PDF 开头；
-  · 不落盘，直接把 bytes 交给 ingest。
+两部分：
+  · download_pdf：白名单、重定向校验、大小与 %PDF 校验；
+  · search_company / find_report / ensure_report：公司名 → orgId → 年报公告 → 下载。
+
+第 1 阶段只做“粘贴链接”；第 2 阶段加了公司检索与自动导入，函数的共同边界不变：
+只接受 https 的巨潮地址，不信任模型直接给出的 PDF URL。
 """
 from __future__ import annotations
 

@@ -16,7 +16,11 @@ import streamlit as st
 from rag import config
 from rag.chunker import chunk_pages
 from rag.company import extract_target
-from rag.disclosure import download_pdf, ensure_report, source_site
+try:
+    from rag.disclosure import download_pdf, ensure_report, source_site
+except Exception as _import_error:          # 部署环境里的 import 失败要能被看见
+    st.error(f"模块导入失败：{type(_import_error).__name__}: {_import_error}")
+    raise
 from rag.external import answer_with_tools
 from rag.generator import analyze, generate, get_client, make_client
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
