@@ -6,6 +6,8 @@ Streamlit 在**模块导入时**就把 html/css/js 的内容抓走了，而 web/
 这里按文件 mtime 判断内容有没有变，变了就重新注册一次。生产环境进程启动一次、
 mtime 不会再变，等于只注册一次；本地改样式则省掉重启。重新注册同名组件时
 Streamlit 会记一条 "already registered" 警告并以最后注册的为准，属于预期行为。
+
+2026-10: 增加 on_new_chat_change，用于顶栏与引用抽屉里的「新对话」。
 """
 from __future__ import annotations
 

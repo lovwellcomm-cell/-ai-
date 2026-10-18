@@ -6,6 +6,8 @@
 一次提问的生命周期（见 app.py 的回合状态机）：
     retrieving -> generating -> done
 组件按 status 决定显示「检索相关片段…」「已改写检索词…正在生成回答…」还是完整回答。
+
+2026-10: 加入自动导入文档的来源字段（巨潮徽章）与「优先检索当前年报」的文案。
 """
 from __future__ import annotations
 
