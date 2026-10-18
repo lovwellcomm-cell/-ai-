@@ -247,8 +247,8 @@ with st.sidebar:
     # 第 1 阶段：粘贴巨潮链接 → 服务器下载 → 复用同一条 ingest 链路。
     # 只接受白名单域名；下载失败只报错，不影响已导入的文档。
     if config.REPORT_FETCH_ENABLED:
-        with st.expander("让助手找年报（粘贴链接）"):
-            st.caption("只支持巨潮资讯的 PDF 链接。打开年报页面，复制 PDF 文件本身的地址。")
+        with st.expander("手动添加年报（粘贴巨潮链接）"):
+            st.caption("自动查找失败时，可以在这里粘贴巨潮 PDF 链接；只支持 cninfo 的地址。")
             report_url = st.text_input(
                 "巨潮 PDF 链接", key="report_url",
                 placeholder="https://static.cninfo.com.cn/finalpage/...PDF")
@@ -311,7 +311,8 @@ with st.sidebar:
                                  ).strip()
     elif not config.DEEPSEEK_API_KEY:
         st.warning("未检测到 DEEPSEEK_API_KEY，请在 .env 中配置。")
-    st.caption("每次提问只检索上方选中的这一份年报；切换年报不会丢失各自的对话。")
+    st.caption("提问优先检索上方选中的年报；问到别的公司时，助手会先去找它的年报。"
+               "切换年报不会丢失各自的对话。")
     st.caption("若侧边栏显示异常，请关闭浏览器的“翻译此页”后刷新。")
 
 if not docs:
@@ -560,6 +561,17 @@ def advance_turn() -> None:
 
 
 # ---------- 来自组件的事件 ----------
+# 新对话：清掉当前文档的对话，保留文档和索引；生成中的一轮如果还没产出回答，退还额度。
+if getattr(result, "new_chat", None):
+    pending = st.session_state.get("turn")
+    if pending and pending.get("counted") and not pending.get("a"):
+        refund(pending)
+    st.session_state.pop("turn", None)
+    st.session_state["histories"][doc_id] = []
+    st.session_state.pop("page", None)
+    st.session_state["chat_warn"] = ""
+    st.rerun()
+
 if result.ask and not busy:
     asked = result.ask.get("text", "") if isinstance(result.ask, dict) else ""
     text = asked.strip()

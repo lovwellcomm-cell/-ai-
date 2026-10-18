@@ -31,6 +31,8 @@ const HERO_SUGS = [
   { key: "margin", tag: "经营分析",   text: "毛利率同比变化的原因是什么？" },
   { key: "risk",   tag: "客户与风险", text: "前五大客户与供应商集中度如何？" },
   { key: "rd",     tag: "研发投入",   text: "研发投入的金额与资本化比例？" },
+  // 教用户用“自动找年报”：点了会去巨潮导入七匹狼，再基于它的年报回答
+  { key: "switch", tag: "换家公司",   text: "七匹狼利润率变化如何？" },
 ];
 
 /* 拼进 innerHTML 的动态字符串一律先转义。
@@ -85,6 +87,9 @@ export default function (component) {
   /* ---------------- 顶栏 ---------------- */
   const doc = d.doc || {};
   q("#ctxCo").textContent = [doc.company, doc.year].filter(Boolean).join(" ") || "未选择年报";
+  const ctxSrc = q("#ctxSrc");
+  ctxSrc.textContent = doc.source || "";
+  ctxSrc.hidden = !doc.source;
   q("#ctxMeta").textContent = doc.pages ? doc.pages + " 页 · " + doc.chunks + " 片段" : "";
   q("#docChipText").textContent = doc.name || "";
   // 窄屏放不下长占位符，换成短句，免得被截断
@@ -115,6 +120,9 @@ export default function (component) {
   const setSend = () => { sendBtn.disabled = busy || input.value.trim().length === 0; };
   input.disabled = false;
   setSend();
+  // 生成中不允许开新对话：中途清空会让上一轮的状态没地方落
+  q("#newChatBtn").disabled = busy;
+  q("#panelNewChat").disabled = busy;
   q("#hintLeft").textContent = busy ? "正在生成回答，可以先写下一条问题" : (d.hint || "");
 
   /* ---------------- 对话流 ---------------- */
@@ -165,6 +173,19 @@ export default function (component) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
   };
   sendBtn.onclick = submit;
+
+  function newChat() {
+    if (busy) return;
+    s.drawer = false;
+    toggleDrawer();
+    input.value = "";
+    input.style.height = "auto";
+    s.draft = "";
+    setSend();
+    setTriggerValue("new_chat", { at: Date.now() });
+  }
+  q("#newChatBtn").onclick = newChat;
+  q("#panelNewChat").onclick = newChat;
 
   q("#themeBtn").onclick = () => {
     s.themeOverride = theme === "dark" ? "light" : "dark";
@@ -222,6 +243,7 @@ export default function (component) {
     p.appendChild(document.createTextNode(" 引用。点开引用可以读到原文片段，并翻到 "));
     p.appendChild(mk("b", null, "PDF 原页"));
     p.appendChild(document.createTextNode("核对。"));
+    p.appendChild(document.createTextNode(" 也可以直接问别的公司，助手会先去找它的年报。"));
     head.appendChild(p);
     hero.appendChild(head);
 

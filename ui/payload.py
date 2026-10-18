@@ -158,13 +158,15 @@ def build_data(
         "heroEyebrow": f"{who} 年度报告 · 已建索引" if who else "年报已建索引",
         "heroFoot": (
             f"{pages} 页全文已切分为 {chunks} 个片段，章节、页码与报表名一并保留；"
-            "提问只检索当前选中的这一份年报。"
+            "提问优先检索当前选中的年报，问到别的公司时会先导入它的年报。"
         ) if pages else "",
         "placeholder": f"就《{name}》提问，例如：营业收入和归母净利润分别是多少？",
         "placeholderShort": "就当前年报提问，例如：营业收入是多少？",
         "doc": {
             "company": company, "year": year, "name": name,
             "pages": int(pages), "chunks": int(chunks),
+            # 巨潮导入的文档在顶栏显示来源；本地上传没有这个字段
+            "source": doc.get("source_site") or doc.get("source") or "",
         },
         "messages": messages,
     })

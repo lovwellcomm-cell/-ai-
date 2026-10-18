@@ -118,6 +118,8 @@
   font-family: var(--font-mono); font-size: 10.5px;
   padding: 1px 5px; border-radius: 5px; background: var(--surface-3); color: var(--ink-2);
 }
+.iconbtn[disabled] { opacity: .4; cursor: not-allowed; }
+.new-chat-label { font-size: 12px; font-weight: 500; }
 /* 菜单按钮恒显：它负责开合 Streamlit 侧边栏。
    曾经用 @media (max-width:1080px) 控制显隐，结果是放大页面后视口落进
    「Streamlit 已收起侧边栏、但宽度还大于 1080」的死角，入口彻底消失。
@@ -130,6 +132,13 @@
 }
 .ctx-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); flex: none; }
 .ctx-co { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.ctx-src {
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .04em;
+  padding: 2px 6px; border-radius: 5px;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  white-space: nowrap;
+}
 .ctx-meta { font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
 
 /* ============================================================
@@ -165,6 +174,18 @@
 .hero p { margin: 0; color: var(--ink-2); font-size: 14px; max-width: 56ch; }
 .hero p b { color: var(--ink); font-weight: 600; }
 .sugs { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+/* 5 张建议卡：最后一张做成横跨两列的「换公司」入口，避免右下角空一格 */
+.sugs .sug:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+  flex-direction: row; align-items: center; gap: 14px;
+  background: linear-gradient(90deg, var(--accent-soft), transparent 72%), var(--surface);
+}
+.sugs .sug:last-child:nth-child(odd) .sug-text { flex: 1; }
+.sugs .sug:last-child:nth-child(odd)::after {
+  content: "→"; font-family: var(--font-mono); color: var(--accent); font-size: 16px;
+  transition: transform var(--dur) var(--ease);
+}
+.sugs .sug:last-child:nth-child(odd):hover::after { transform: translateX(3px); }
 .sug {
   display: flex; flex-direction: column; gap: 9px; text-align: left;
   padding: 14px 15px; border-radius: var(--r-lg);
@@ -326,13 +347,18 @@ details.trace summary:hover { color: var(--ink-2); }
 
 /* 自动导入 / 自动切换文档的提示：比正文轻，不抢引用和答案的注意力 */
 .notice {
+  display: flex; align-items: flex-start; gap: 8px;
   margin: 2px 0 8px;
   padding: 6px 10px;
   border-left: 2px solid var(--accent-line);
   border-radius: 0 var(--r-sm) var(--r-sm) 0;
   background: var(--accent-soft);
-  font-size: 11.5px;
+  font-size: 11.5px; font-weight: 500;
   color: var(--ink-2);
+}
+.notice::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); margin-top: 6px; flex: none;
 }
 
 .acts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: -3px; }
@@ -420,6 +446,18 @@ details.trace summary:hover { color: var(--ink-2); }
 }
 /* 弹性列里的卡片不能被压缩高度（overflow:hidden 会把 min-height:auto 归零） */
 .panel-body > * { flex: none; }
+/* 抽屉底部的新对话入口：把“可以问别的公司”这句话放在按钮里，点哪都行 */
+.panel-foot { flex: none; padding: 10px 16px 14px; border-top: 1px solid var(--line); }
+.panel-new {
+  display: flex; flex-direction: column; gap: 3px; width: 100%;
+  padding: 10px 12px; border-radius: var(--r-md); text-align: left;
+  border: 1px solid var(--accent-line); background: var(--accent-soft);
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.panel-new:hover { background: var(--surface-2); }
+.panel-new .pn-t { font-size: 12.5px; font-weight: 600; color: var(--accent); }
+.panel-new .pn-d { font-size: 10.5px; line-height: 1.5; color: var(--ink-2); }
+.panel-new[disabled] { opacity: .45; cursor: not-allowed; }
 .pcard { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; transition: border-color var(--dur) var(--ease); }
 .pcard.hi { border-color: var(--accent-line); }
 .pcard-head { display: flex; align-items: flex-start; gap: 10px; padding: 12px 13px 10px; }
@@ -486,6 +524,7 @@ details.trace summary:hover { color: var(--ink-2); }
   .msg-gutter { width: 20px; }
   .mark-sm { width: 19px; height: 19px; }
   .ctx-meta { display: none; }
+  .new-chat-label { display: none; }
   .hintline .kbd { display: none; }
   .panel {
     top: auto; left: 0; right: 0; width: 100%; height: 82%;
@@ -500,6 +539,7 @@ details.trace summary:hover { color: var(--ink-2); }
     content: ""; position: absolute; top: 7px; left: 50%; transform: translateX(-50%);
     width: 34px; height: 4px; border-radius: 2px; background: var(--line-2);
   }
+  .panel-foot { padding-bottom: max(14px, env(safe-area-inset-bottom, 0px)); }
 }
 @media (prefers-reduced-motion: reduce) {
   .arb *, .arb *::before, .arb *::after {
