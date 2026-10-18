@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rag.generator import ABSTAIN_MARK, EXTENSION_HEADING  # noqa: E402
-from ui.turn import adopt_turn, history_entry, step  # noqa: E402
+from ui.turn import adopt_turn, history_entry, plan_resolution, step  # noqa: E402
 
 TURN = {"q": "毛利率为什么变", "status": "generating", "doc_id": "d1",
         "hits": [{"text": "x"}], "queries": ["q1"], "counted": False}
@@ -212,6 +212,77 @@ def test_history_entry_keeps_the_failure_reason():
 
 def test_history_entry_defaults_analyze_when_absent():
     assert history_entry(TURN, "回答")["analyze"] == ""
+
+
+def test_history_entry_keeps_the_notice():
+    e = history_entry(dict(TURN, notice="已自动导入《七匹狼 2025 年报》"), "回答")
+    assert e["notice"] == "已自动导入《七匹狼 2025 年报》"
+
+
+# ---------------------------------------------------------------- 目标文档
+
+DOCS = [
+    {"doc_id": "a", "company": "精达股份", "year": "2025", "demo": True},
+    {"doc_id": "b", "company": "七匹狼", "year": "2024", "demo": False},
+    {"doc_id": "c", "company": "七匹狼", "year": "2025", "demo": False},
+]
+
+
+def plan(company="", year=None, **kw):
+    return plan_resolution({"company": company, "year": year, "multiple": False},
+                           current_company="精达股份", current_year="2025",
+                           docs=DOCS, **kw)
+
+
+def test_plan_uses_current_when_no_company_is_named():
+    assert plan()["action"] == "current"
+
+
+def test_plan_uses_current_for_the_same_company_without_a_year():
+    assert plan("精达")["action"] == "current"
+
+
+def test_plan_uses_current_for_the_same_company_and_year():
+    assert plan("精达股份", 2025)["action"] == "current"
+
+
+def test_plan_switches_to_the_local_doc_for_another_company():
+    out = plan("七匹狼")
+    assert out["action"] == "switch" and out["doc"]["doc_id"] == "c"   # 取最新年度
+
+
+def test_plan_switches_to_the_requested_year_when_local():
+    out = plan("七匹狼", 2024)
+    assert out["action"] == "switch" and out["doc"]["doc_id"] == "b"
+
+
+def test_plan_imports_when_the_company_is_not_local():
+    out = plan("贵州茅台", 2025)
+    assert out == {"action": "import", "company": "贵州茅台", "year": 2025}
+
+
+def test_plan_treats_a_bare_year_followup_as_the_current_company():
+    """「那2024年呢？」没有公司名，但年份变了 —— 应该是当前公司的 2024 年报。"""
+    out = plan("", 2024)
+    assert out == {"action": "import", "company": "精达股份", "year": 2024}
+
+
+def test_plan_switches_for_a_bare_year_followup_when_local():
+    docs = DOCS + [{"doc_id": "d", "company": "精达股份", "year": "2024"}]
+    out = plan_resolution({"company": "", "year": 2024, "multiple": False},
+                          current_company="精达股份", current_year="2025", docs=docs)
+    assert out["action"] == "switch" and out["doc"]["doc_id"] == "d"
+
+
+def test_plan_imports_another_year_of_the_current_company():
+    out = plan("精达股份", 2024)
+    assert out["action"] == "import"
+
+
+def test_plan_rejects_multiple_companies():
+    out = plan_resolution({"company": "七匹狼", "year": None, "multiple": True},
+                          current_company="精达股份", current_year="2025", docs=DOCS)
+    assert out["action"] == "multiple"
 
 
 # ---------------------------------------------------------------- 切换年报

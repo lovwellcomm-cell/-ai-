@@ -116,6 +116,16 @@ WEB_MAX_SOURCES = int(get("WEB_MAX_SOURCES", "8"))
 REPORT_FETCH_ENABLED = get("REPORT_FETCH_ENABLED", "1") == "1"
 REPORT_DOWNLOAD_MAX_MB = int(get("REPORT_DOWNLOAD_MAX_MB", "40"))
 REPORT_DOWNLOAD_TIMEOUT = float(get("REPORT_DOWNLOAD_TIMEOUT", "30"))
+# 巨潮公告检索的超时（公司名 → orgId → 年报列表）。
+REPORT_SEARCH_TIMEOUT = float(get("REPORT_SEARCH_TIMEOUT", "20"))
+
+# 提问时自动识别公司并导入年报（“七匹狼利润率变化如何”）。
+# 识别用一次小模型调用；识别失败或没提到公司时，一律用当前选中的年报。
+AUTO_IMPORT_ENABLED = get("AUTO_IMPORT_ENABLED", "1") == "1"
+# 意图识别调用的输出上限与超时。这个模型是推理型的，max_tokens 太小会只剩推理、
+# 正文为空（查询改写踩过同样的坑），所以给足。
+TARGET_MAX_TOKENS = int(get("TARGET_MAX_TOKENS", "2000"))
+TARGET_TIMEOUT = float(get("TARGET_TIMEOUT", "20"))
 
 # ---------- 公开演示模式 ----------
 # 部署到公网时设 PUBLIC_DEMO=1：限制提问次数、限制上传、按会话隔离上传的年报。

@@ -17,6 +17,7 @@ from rag.generator import cited_numbers
 # 组件不做流式输出（Streamlit 的 rerun 模型做逐字流式会卡顿、闪烁），
 # 等待时间由这几档真实状态文案填补。
 STATUS_TEXT = {
+    "resolving": "正在查找年报…",
     "retrieving": "检索相关片段…",
     "generating": "正在生成回答…",
     # 首轮回答已经显示出来了，这一步只是追加「为什么」的扩展分析
@@ -72,6 +73,9 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
         msg["error"] = error
     if page:
         msg["page"] = page
+    # 自动导入 / 自动切换文档的提示，跟着这一轮回答保留。
+    if turn.get("notice"):
+        msg["notice"] = turn["notice"]
     # 外部补充的网页来源。编号与正文里的 [网n] 对应，组件据此渲染可点击的链接。
     if turn.get("web_sources"):
         msg["webSources"] = [

@@ -54,11 +54,19 @@ class TestAiMessage:
         assert msg["sources"][0]["cited"] is True
         assert "statusText" not in msg
 
-    @pytest.mark.parametrize("status", ["retrieving", "generating", "analyzing"])
+    @pytest.mark.parametrize("status", ["resolving", "retrieving", "generating",
+                                        "analyzing", "searching"])
     def test_pending_status_gets_a_caption(self, status):
         msg = payload.ai_message({"q": "问题", "status": status})
         assert msg["status"] == status
         assert msg["statusText"] == payload.STATUS_TEXT[status]
+
+    def test_notice_is_passed_through(self):
+        msg = payload.ai_message({"q": "问题", "a": "回答", "notice": "已自动导入《七匹狼 2025 年报》"})
+        assert msg["notice"] == "已自动导入《七匹狼 2025 年报》"
+
+    def test_no_notice_key_when_absent(self):
+        assert "notice" not in payload.ai_message({"q": "问题", "a": "回答"})
 
     def test_first_answer_is_visible_while_analyzing(self):
         """扩展分析阶段首轮回答已经产出，必须已经挂在 text 上 ——

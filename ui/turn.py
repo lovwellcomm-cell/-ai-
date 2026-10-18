@@ -9,6 +9,7 @@ grep `advance_turn` 在 tests/ 里没有任何结果。
 """
 from __future__ import annotations
 
+from rag.company import same_company
 from rag.external import join_external, should_search
 from rag.generator import join_answer, should_analyze
 
@@ -34,7 +35,46 @@ def history_entry(turn: dict, answer: str) -> dict:
         entry["analyze_error"] = turn["analyze_error"]
     if turn.get("web_error"):
         entry["web_error"] = turn["web_error"]
+    # 自动导入的提示要跟着回答保留下来；没有就不写键，保持旧条目形状不变。
+    if turn.get("notice"):
+        entry["notice"] = turn["notice"]
     return entry
+
+
+def plan_resolution(target: dict, *, current_company: str = "", current_year: str = "",
+                    docs=()) -> dict:
+    """根据识别到的目标，决定这一轮用哪份文档。
+
+    返回：
+      {"action": "current"}                    用当前选中的年报
+      {"action": "switch", "doc": meta}        本地已有这份年报，直接切换
+      {"action": "import", "company", "year"}  本地没有，需要去巨潮下载
+      {"action": "multiple"}                   一次问了多家，暂不支持
+
+    纯函数：不读 session_state、不发请求，方便把“切错文档”这类错误挡在测试里。
+    """
+    company = (target.get("company") or "").strip()
+    year = target.get("year")
+    if target.get("multiple"):
+        return {"action": "multiple"}
+    if not company:
+        # 「那2024年呢？」这类追问没有公司名，但年份变了 —— 按当前公司理解。
+        if year is not None and current_company and str(year) != str(current_year):
+            company = current_company
+        else:
+            return {"action": "current"}
+    if same_company(company, current_company) and (
+            year is None or str(year) == str(current_year)):
+        return {"action": "current"}
+
+    candidates = [d for d in docs if same_company(d.get("company", ""), company)]
+    if year is not None:
+        candidates = [d for d in candidates if str(d.get("year", "")) == str(year)]
+    if candidates:
+        best = max(candidates, key=lambda d: (str(d.get("year", "")),
+                                              bool(d.get("demo"))))
+        return {"action": "switch", "doc": best}
+    return {"action": "import", "company": company, "year": year}
 
 
 def adopt_turn(turn: dict | None, doc_id: str):

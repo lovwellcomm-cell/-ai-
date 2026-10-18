@@ -9,16 +9,21 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import date
 
 from . import config
+from .company import normalize
 
 ALLOWED_HOSTS = ("www.cninfo.com.cn", "static.cninfo.com.cn")
 QUERY_PAGE_HOST = "www.cninfo.com.cn"
 PDF_HOST = "static.cninfo.com.cn"
+TOPSEARCH_URL = "https://www.cninfo.com.cn/new/information/topSearch/query"
+ANNOUNCEMENT_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120 Safari/537.36")
 
@@ -118,3 +123,117 @@ def download_pdf(url: str, max_bytes: int | None = None,
                                "复制 PDF 文件本身的地址。")
         raise RuntimeError("下载内容不是 PDF。")
     return data, _filename(headers, url)
+
+
+# ---------------------------------------------------------------- 巨潮检索
+
+class ReportNotFound(RuntimeError):
+    """公司或年报查不到。调用方应明确告知用户，而不是拿当前文档硬答。"""
+
+
+def _post_form(url: str, form: dict, timeout: float) -> dict | list:
+    data = urllib.parse.urlencode(form).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST", headers={
+        "User-Agent": UA,
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"巨潮接口 HTTP {e.code}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"巨潮接口连接失败：{e.reason}") from e
+
+
+def _current_year() -> int:
+    """单独抽出来，测试里可以固定年份。"""
+    return date.today().year
+
+
+def search_company(keyword: str) -> list[dict]:
+    """公司名/代码/拼音 → [{code, org_id, name}]。中文必须 UTF-8 编码。"""
+    keyword = (keyword or "").strip()[:32]
+    if not keyword:
+        return []
+    data = _post_form(TOPSEARCH_URL, {"keyWord": keyword, "maxNum": 10},
+                      config.REPORT_SEARCH_TIMEOUT)
+    out = []
+    for x in data or []:
+        code = str(x.get("code") or "")
+        org_id = str(x.get("orgId") or "")
+        name = str(x.get("zwjc") or "")
+        if code and org_id and name:
+            out.append({"code": code, "org_id": org_id, "name": name})
+    return out
+
+
+def pick_company(results: list[dict], keyword: str) -> dict | None:
+    """优先精确匹配简称，其次包含匹配，最后取第一条。"""
+    if not results:
+        return None
+    k = normalize(keyword)
+    for r in results:
+        if normalize(r["name"]) == k:
+            return r
+    for r in results:
+        n = normalize(r["name"])
+        if k and (k in n or n in k):
+            return r
+    return results[0]
+
+
+def list_annual_reports(code: str, org_id: str, year: int) -> list[dict]:
+    """查某公司某报告年度的年报公告（披露日期在次年）。"""
+    column = "sse" if str(code).startswith("6") else "szse"
+    form = {
+        "pageNum": 1, "pageSize": 30, "column": column, "tabName": "fulltext",
+        "plate": "", "stock": f"{code},{org_id}", "searchkey": "", "secid": "",
+        "category": "category_ndbg_szsh", "trade": "",
+        "seDate": f"{year + 1}-01-01~{year + 1}-12-31",
+        "sortName": "", "sortType": "", "isHLtitle": "true",
+    }
+    data = _post_form(ANNOUNCEMENT_URL, form, config.REPORT_SEARCH_TIMEOUT) or {}
+    want = f"{year}年年度报告"
+    out = []
+    for a in data.get("announcements") or []:
+        title = str(a.get("announcementTitle") or "").strip()
+        compact = re.sub(r"\s+", "", title)
+        if want not in compact:
+            continue
+        if any(x in compact for x in ("摘要", "英文", "已取消")):
+            continue
+        url = "https://static.cninfo.com.cn/" + str(a.get("adjunctUrl") or "")
+        if not is_allowed_url(url):
+            continue
+        try:
+            size = int(a.get("adjunctSize") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        out.append({"title": title, "url": url, "year": year, "size_kb": size,
+                    "date": str(a.get("announcementTime") or "")})
+    return out
+
+
+def find_report(company: str, year: int | None = None) -> dict:
+    """公司名 + 年份 → 年报公告。年份为空时从最近三年往前找。"""
+    picked = pick_company(search_company(company), company)
+    if not picked:
+        raise ReportNotFound(f"巨潮没有找到名为“{company}”的上市公司")
+    years = [int(year)] if year else [_current_year() - 1, _current_year() - 2,
+                                      _current_year() - 3]
+    for y in years:
+        reports = list_annual_reports(picked["code"], picked["org_id"], y)
+        if reports:
+            reports.sort(key=lambda r: r.get("date") or "", reverse=True)
+            best = dict(reports[0])
+            best.update({"company": picked["name"], "code": picked["code"]})
+            return best
+    raise ReportNotFound(f"没有找到“{company}” {year or '最近三年'}的年报公告")
+
+
+def ensure_report(company: str, year: int | None = None) -> tuple[bytes, str, dict]:
+    """找公告 → 下载 PDF。返回 (bytes, 文件名, 公告信息)。"""
+    info = find_report(company, year)
+    data, filename = download_pdf(info["url"])
+    return data, filename, info

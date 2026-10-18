@@ -167,3 +167,92 @@ def test_non_allowlisted_url_fails_before_any_request(monkeypatch):
 def test_source_site_label():
     assert disclosure.source_site(PDF_URL) == "巨潮资讯"
     assert disclosure.source_site("https://example.com/x.pdf") == ""
+
+
+# ---------------------------------------------------------------- 巨潮检索
+
+COMPANY = [{"code": "002029", "orgId": "gssz0002029", "zwjc": "七匹狼"}]
+
+
+def mock_posts(monkeypatch, responses):
+    calls = []
+
+    def fake(url, form, timeout):
+        calls.append((url, form))
+        return responses.pop(0)
+
+    monkeypatch.setattr(disclosure, "_post_form", fake)
+    return calls
+
+
+def test_search_company_parses_topsearch(monkeypatch):
+    mock_posts(monkeypatch, [COMPANY])
+    out = disclosure.search_company("七匹狼")
+    assert out == [{"code": "002029", "org_id": "gssz0002029", "name": "七匹狼"}]
+
+
+def test_pick_company_prefers_exact_short_name():
+    results = [{"code": "600519", "org_id": "x", "name": "贵州茅台"},
+               {"code": "002029", "org_id": "y", "name": "七匹狼"}]
+    assert disclosure.pick_company(results, "七匹狼")["code"] == "002029"
+    assert disclosure.pick_company(results, "七匹狼股份")["code"] == "002029"
+    assert disclosure.pick_company([], "七匹狼") is None
+
+
+def test_list_annual_reports_filters_summaries_and_builds_url(monkeypatch):
+    payload = {"announcements": [
+        {"announcementTitle": "七匹狼 2025 年年度报告",
+         "adjunctUrl": "finalpage/2026-04-03/1225077462.PDF",
+         "adjunctSize": 3892, "announcementTime": 1},
+        {"announcementTitle": "七匹狼2025年年度报告摘要",
+         "adjunctUrl": "finalpage/2026-04-03/1225077461.PDF", "adjunctSize": 392},
+        {"announcementTitle": "七匹狼2025年年度报告（英文版）",
+         "adjunctUrl": "finalpage/2026-04-03/1225077463.PDF", "adjunctSize": 1602},
+    ]}
+    calls = mock_posts(monkeypatch, [payload])
+    out = disclosure.list_annual_reports("002029", "gssz0002029", 2025)
+    assert len(out) == 1
+    assert out[0]["url"] == ("https://static.cninfo.com.cn/finalpage/2026-04-03/"
+                             "1225077462.PDF")
+    assert out[0]["size_kb"] == 3892
+    form = calls[0][1]
+    assert form["seDate"] == "2026-01-01~2026-12-31"   # 年报在次年披露
+    assert form["stock"] == "002029,gssz0002029"
+    assert form["column"] == "szse"
+    assert form["category"] == "category_ndbg_szsh"
+
+
+def test_find_report_walks_back_to_the_latest_available_year(monkeypatch):
+    monkeypatch.setattr(disclosure, "_current_year", lambda: 2026)
+    report = {"announcementTitle": "七匹狼2024年年度报告",
+              "adjunctUrl": "finalpage/2025-04-03/1.PDF", "adjunctSize": 4153,
+              "announcementTime": 2}
+    calls = mock_posts(monkeypatch, [COMPANY, {"announcements": []},
+                                     {"announcements": [report]}])
+    out = disclosure.find_report("七匹狼")
+    assert out["year"] == 2024 and out["company"] == "七匹狼"
+    assert len(calls) == 3                       # 搜索 + 2025 空 + 2024 命中
+
+
+def test_find_report_uses_the_requested_year(monkeypatch):
+    report = {"announcementTitle": "七匹狼2024年年度报告",
+              "adjunctUrl": "finalpage/2025-04-03/1.PDF", "adjunctSize": 4153}
+    calls = mock_posts(monkeypatch, [COMPANY, {"announcements": [report]}])
+    out = disclosure.find_report("七匹狼", 2024)
+    assert out["year"] == 2024
+    assert calls[1][1]["seDate"] == "2025-01-01~2025-12-31"
+
+
+def test_find_report_raises_when_company_is_unknown(monkeypatch):
+    mock_posts(monkeypatch, [[]])
+    with pytest.raises(disclosure.ReportNotFound):
+        disclosure.find_report("不存在的公司")
+
+
+def test_ensure_report_downloads_the_selected_pdf(monkeypatch):
+    monkeypatch.setattr(disclosure, "find_report",
+                        lambda company, year=None: {"url": PDF_URL, "year": 2025,
+                                                    "company": company})
+    monkeypatch.setattr(disclosure, "download_pdf", lambda url: (b"%PDF-1.7", "x.pdf"))
+    data, name, info = disclosure.ensure_report("七匹狼", 2025)
+    assert data.startswith(b"%PDF") and name == "x.pdf" and info["year"] == 2025

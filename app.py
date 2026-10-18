@@ -9,12 +9,14 @@
 仍然给出真实的分阶段状态文案，而不是拿假计时器糊弄。
 """
 import base64
+import json
 
 import streamlit as st
 
 from rag import config
 from rag.chunker import chunk_pages
-from rag.disclosure import download_pdf, source_site
+from rag.company import extract_target
+from rag.disclosure import download_pdf, ensure_report, source_site
 from rag.external import answer_with_tools
 from rag.generator import analyze, generate, get_client, make_client
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
@@ -142,11 +144,35 @@ def page_data_uri(doc_id: str, page_no: int) -> str:
     return "data:image/png;base64," + base64.b64encode(render_page(doc_id, page_no)).decode("ascii")
 
 
+def _patch_meta(doc_id: str, company: str = "", year: str = "",
+                source_url: str = "", source_site: str = "", name: str = "") -> None:
+    """索引已存在时补齐元数据（自动导入知道公司/年份，但从 PDF 里可能抽不出来）。"""
+    path = doc_dir(doc_id) / "meta.json"
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    changed = False
+    for key, val in (("company", company), ("year", str(year or "")),
+                     ("source_url", source_url), ("source_site", source_site),
+                     ("name", name)):
+        if val and meta.get(key) != val:
+            meta[key] = val
+            changed = True
+    if changed:
+        path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+
 def ingest(data: bytes, name: str, demo: bool = False, check_limits: bool = False,
-           source_url: str = "", source_site: str = ""):
-    """解析并建立索引。返回 (doc_id, 错误信息)；失败时 doc_id 为 None。"""
+           source_url: str = "", source_site: str = "",
+           company: str = "", year: str = ""):
+    """解析并建立索引。返回 (doc_id, 错误信息)；失败时 doc_id 为 None。
+
+    company / year 是调用方已知的覆盖值（自动导入时来自巨潮公告），优先于从 PDF 里抽到的。
+    """
     did = doc_id_of(data)
     if is_current(did):
+        _patch_meta(did, company, str(year or ""), source_url, source_site, name)
         return did, ""
     with st.status(f"处理 {name}", expanded=True) as status:
         st.write("② 提取文本、页码与章节…")
@@ -159,9 +185,11 @@ def ingest(data: bytes, name: str, demo: bool = False, check_limits: bool = Fals
             return None, "该 PDF 几乎没有可提取文本，可能是扫描件，当前版本不支持 OCR。"
         st.write(f"共 {len(pages)} 页。③ 切分文本…")
         info = extract_doc_info(pages)
+        eff_company = company or info.company
+        eff_year = str(year or info.year or "")
         chunks = chunk_pages(pages, config.CHUNK_SIZE, config.CHUNK_OVERLAP, info)
         st.write(f"{len(chunks)} 个片段。④ 向量化并建立索引（首次需下载模型）…")
-        build_index(did, data, name, len(pages), chunks, company=info.company, year=info.year,
+        build_index(did, data, name, len(pages), chunks, company=eff_company, year=eff_year,
                     demo=demo, source_url=source_url, source_site=source_site)
         status.update(label=f"{name} 已建立索引", state="complete", expanded=False)
     return did, ""
@@ -251,7 +279,9 @@ with st.sidebar:
             ingest((doc_dir(d["doc_id"]) / "source.pdf").read_bytes(), d["name"],
                    demo=d.get("demo", False),
                    source_url=d.get("source_url", ""),
-                   source_site=d.get("source_site", ""))
+                   source_site=d.get("source_site", ""),
+                   company=d.get("company", ""),
+                   year=d.get("year", ""))
 
     docs = {d["doc_id"]: d for d in list_documents(visible_ids())}
     if docs:
@@ -362,7 +392,7 @@ def finish_turn(entry: dict) -> None:
 
 
 def advance_turn() -> None:
-    """回合状态机：retrieving -> generating -> analyzing / searching -> done。
+    """回合状态机：resolving -> retrieving -> generating -> analyzing / searching -> done。
 
     关键是「先挂载组件、再做耗时工作」：组件挂载的增量会在几十毫秒内送达浏览器并绘制，
     之后的阻塞调用（检索、生成）期间用户看到的就是刚挂上去的那一帧。已实测成立。
@@ -375,6 +405,81 @@ def advance_turn() -> None:
     target = st.session_state.get("turn")
     if not target or target.get("status") == "error":
         return
+
+    if target["status"] == "resolving":
+        # 先判断这一问是不是在问另一家公司/另一个年度；是的话先把年报找来。
+        # 识别失败或没提到公司 → 用当前文档，不额外联网。
+        client = pick_client()
+        if client is None:
+            refund(target)
+            fail(target, "未配置 DeepSeek Key，无法回答。请在 .env 或 Secrets 中配置，"
+                         "或在左侧填写自己的 Key。")
+            st.rerun()
+        try:
+            tgt = extract_target(target["q"], client=client,
+                                 current_company=meta.get("company", ""))
+        except Exception:
+            tgt = {"company": "", "year": None, "multiple": False}
+        target["target"] = tgt
+        plan = turn_core.plan_resolution(
+            tgt, current_company=meta.get("company", ""),
+            current_year=meta.get("year", ""),
+            docs=list_documents(visible_ids()))
+
+        if plan["action"] == "multiple":
+            refund(target)
+            fail(target, "一次只能查一家公司。请先问其中一家，或分别上传后再对比。")
+            st.rerun()
+
+        if plan["action"] == "current":
+            # 当前文档就是目标：不 rerun，继续走下面的检索分支。
+            target["status"] = "retrieving"
+            st.session_state["turn"] = target
+
+        elif plan["action"] == "switch":
+            d = plan["doc"]
+            st.session_state.doc_id = d["doc_id"]
+            target["doc_id"] = d["doc_id"]
+            target["notice"] = f"已切换到《{doc_label(d)}》，基于该文档回答"
+            target["status"] = "retrieving"
+            st.session_state.pop("page", None)
+            st.session_state["turn"] = target
+            st.rerun()
+
+        else:
+            if config.PUBLIC_DEMO and len(st.session_state.get("my_docs", ())) \
+                    >= config.MAX_UPLOADS_PER_SESSION:
+                refund(target)
+                fail(target, f"本会话最多导入 {config.MAX_UPLOADS_PER_SESSION} 份年报。"
+                             "请切换到已有文档，或手动上传/粘贴链接。")
+                st.rerun()
+            try:
+                data, fname, info = ensure_report(plan["company"], plan["year"])
+                auto_company = info.get("company") or plan["company"]
+                auto_year = str(info.get("year") or "")
+                pretty = f"{auto_company} {auto_year} 年报.pdf".strip()
+                new_id, err = ingest(data, pretty or fname,
+                                     check_limits=config.PUBLIC_DEMO,
+                                     source_url=info["url"],
+                                     source_site=source_site(info["url"]),
+                                     company=auto_company, year=auto_year)
+                if not new_id:
+                    raise RuntimeError(err)
+            except Exception as e:
+                refund(target)
+                fail(target, f"{e}。可以在左侧上传 PDF，或粘贴巨潮链接。")
+                st.rerun()
+            visible = visible_ids()
+            if visible is not None:
+                visible.add(new_id)
+            st.session_state.doc_id = new_id
+            target["doc_id"] = new_id
+            label = f"{auto_company} {auto_year}".strip()
+            target["notice"] = f"已自动导入《{label} 年报》，基于该文档回答"
+            target["status"] = "retrieving"
+            st.session_state.pop("page", None)
+            st.session_state["turn"] = target
+            st.rerun()
 
     if target["status"] == "retrieving":
         client = pick_client()
@@ -471,7 +576,9 @@ if result.ask and not busy:
         st.session_state["page"] = None
         st.session_state["chat_warn"] = ""
         st.session_state["turn"] = {
-            "doc_id": doc_id, "q": text, "status": "retrieving", "counted": count_it,
+            "doc_id": doc_id, "q": text,
+            "status": "resolving" if config.AUTO_IMPORT_ENABLED else "retrieving",
+            "counted": count_it,
         }
         st.rerun()
 

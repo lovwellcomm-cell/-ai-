@@ -267,12 +267,13 @@ export default function (component) {
     meta.appendChild(mk("span", "mono", d.model || ""));
     if (m.demo) meta.appendChild(mk("span", "tag", "演示回答"));
     body.appendChild(meta);
+    if (m.notice) body.appendChild(mk("div", "notice", m.notice));
     wrap.appendChild(body);
 
     // 待定状态：检索和生成阶段还没有正文，只显示 spinner。
     // 但「扩展分析」阶段首轮回答已经产出，先把正文画出来再挂指示 ——
     // 用户不必等第二次模型调用跑完才看到东西。
-    if (m.status === "retrieving" || m.status === "generating" || m.status === "analyzing" || m.status === "searching") {
+    if (m.status === "resolving" || m.status === "retrieving" || m.status === "generating" || m.status === "analyzing" || m.status === "searching") {
       if (m.text) appendProse(body, m.text, (m.sources || []).length);
       const th = mk("div", "thinking");
       th.appendChild(mk("i", "spin"));
