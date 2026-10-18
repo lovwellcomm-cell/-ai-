@@ -14,6 +14,7 @@ import streamlit as st
 
 from rag import config
 from rag.chunker import chunk_pages
+from rag.disclosure import download_pdf, source_site
 from rag.external import answer_with_tools
 from rag.generator import analyze, generate, get_client, make_client
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
@@ -141,7 +142,8 @@ def page_data_uri(doc_id: str, page_no: int) -> str:
     return "data:image/png;base64," + base64.b64encode(render_page(doc_id, page_no)).decode("ascii")
 
 
-def ingest(data: bytes, name: str, demo: bool = False, check_limits: bool = False):
+def ingest(data: bytes, name: str, demo: bool = False, check_limits: bool = False,
+           source_url: str = "", source_site: str = ""):
     """解析并建立索引。返回 (doc_id, 错误信息)；失败时 doc_id 为 None。"""
     did = doc_id_of(data)
     if is_current(did):
@@ -160,7 +162,7 @@ def ingest(data: bytes, name: str, demo: bool = False, check_limits: bool = Fals
         chunks = chunk_pages(pages, config.CHUNK_SIZE, config.CHUNK_OVERLAP, info)
         st.write(f"{len(chunks)} 个片段。④ 向量化并建立索引（首次需下载模型）…")
         build_index(did, data, name, len(pages), chunks, company=info.company, year=info.year,
-                    demo=demo)
+                    demo=demo, source_url=source_url, source_site=source_site)
         status.update(label=f"{name} 已建立索引", state="complete", expanded=False)
     return did, ""
 
@@ -210,11 +212,46 @@ with st.sidebar:
                    f"{config.MAX_UPLOADS_PER_SESSION} 份。上传的文件会交给服务器处理，不保证长期保存，"
                    "请勿上传敏感资料。")
 
+    # 第 1 阶段：粘贴巨潮链接 → 服务器下载 → 复用同一条 ingest 链路。
+    # 只接受白名单域名；下载失败只报错，不影响已导入的文档。
+    if config.REPORT_FETCH_ENABLED:
+        with st.expander("让助手找年报（粘贴链接）"):
+            st.caption("只支持巨潮资讯的 PDF 链接。打开年报页面，复制 PDF 文件本身的地址。")
+            report_url = st.text_input(
+                "巨潮 PDF 链接", key="report_url",
+                placeholder="https://static.cninfo.com.cn/finalpage/...PDF")
+            at_limit = (config.PUBLIC_DEMO
+                        and len(st.session_state.get("my_docs", ())) >= config.MAX_UPLOADS_PER_SESSION)
+            if st.button("下载并导入", key="report_import", use_container_width=True,
+                         disabled=at_limit):
+                st.session_state.report_error = ""
+                try:
+                    with st.spinner("正在下载并校验 PDF…"):
+                        data, fname = download_pdf(report_url)
+                    new_id, err = ingest(data, fname, check_limits=config.PUBLIC_DEMO,
+                                         source_url=report_url.strip(),
+                                         source_site=source_site(report_url))
+                    st.session_state.report_error = err
+                    if new_id:
+                        visible = visible_ids()
+                        if visible is not None:
+                            visible.add(new_id)
+                        st.session_state.doc_id = new_id
+                        st.rerun()
+                except Exception as e:
+                    st.session_state.report_error = str(e)
+            if at_limit:
+                st.caption(f"每个会话最多导入 {config.MAX_UPLOADS_PER_SESSION} 份。")
+            if st.session_state.get("report_error"):
+                st.error(st.session_state.report_error)
+
     # 旧版本索引自动用保存的原 PDF 重建，无需重新上传
     for d in list_documents(visible_ids()):
         if d.get("index_version", 1) != config.INDEX_VERSION:
             ingest((doc_dir(d["doc_id"]) / "source.pdf").read_bytes(), d["name"],
-                   demo=d.get("demo", False))
+                   demo=d.get("demo", False),
+                   source_url=d.get("source_url", ""),
+                   source_site=d.get("source_site", ""))
 
     docs = {d["doc_id"]: d for d in list_documents(visible_ids())}
     if docs:
@@ -227,6 +264,9 @@ with st.sidebar:
                 st.session_state.doc_id = did
                 st.session_state.pop("page", None)
                 st.rerun()
+        cur = docs.get(st.session_state.get("doc_id"))
+        if cur and cur.get("source_url"):
+            st.caption(f"来源：{cur.get('source_site') or '外部链接'}")
 
     # 大模型 Key：公开模式下访客可以填自己的，不计入免费额度
     user_key = ""

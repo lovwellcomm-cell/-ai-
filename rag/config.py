@@ -111,6 +111,12 @@ WEB_CHAR_BUDGET = int(get("WEB_CHAR_BUDGET", "300"))
 # 一轮最多登记多少个网页来源，防止模型反复搜索把引用编号撑爆。
 WEB_MAX_SOURCES = int(get("WEB_MAX_SOURCES", "8"))
 
+# ---------- 年报获取：粘贴巨潮链接 ----------
+# 只接受巨潮资讯（cninfo）的 https PDF 地址；域名白名单写在 rag/disclosure.py。
+REPORT_FETCH_ENABLED = get("REPORT_FETCH_ENABLED", "1") == "1"
+REPORT_DOWNLOAD_MAX_MB = int(get("REPORT_DOWNLOAD_MAX_MB", "40"))
+REPORT_DOWNLOAD_TIMEOUT = float(get("REPORT_DOWNLOAD_TIMEOUT", "30"))
+
 # ---------- 公开演示模式 ----------
 # 部署到公网时设 PUBLIC_DEMO=1：限制提问次数、限制上传、按会话隔离上传的年报。
 PUBLIC_DEMO = get("PUBLIC_DEMO", "0") == "1"

@@ -63,7 +63,8 @@ def default_embed(texts: list[str], batch_size: int = 16) -> np.ndarray:
 
 def build_index(doc_id: str, pdf_bytes: bytes, name: str, n_pages: int,
                 chunks: list[Chunk], embed: EmbedFn = default_embed,
-                company: str = "", year: str = "", demo: bool = False) -> Path:
+                company: str = "", year: str = "", demo: bool = False,
+                source_url: str = "", source_site: str = "") -> Path:
     d = doc_dir(doc_id)
     d.mkdir(parents=True, exist_ok=True)
     src = d / "source.pdf"
@@ -74,11 +75,14 @@ def build_index(doc_id: str, pdf_bytes: bytes, name: str, n_pages: int,
     np.save(d / "embeddings.npy", emb)
     (d / "chunks.json").write_text(
         json.dumps([c.to_dict() for c in chunks], ensure_ascii=False), encoding="utf-8")
-    (d / "meta.json").write_text(
-        json.dumps({"doc_id": doc_id, "name": name, "pages": n_pages, "chunks": len(chunks),
-                    "company": company, "year": year, "index_version": config.INDEX_VERSION,
-                    **({"demo": True} if demo else {})},
-                   ensure_ascii=False), encoding="utf-8")
+    meta = {"doc_id": doc_id, "name": name, "pages": n_pages, "chunks": len(chunks),
+            "company": company, "year": year, "index_version": config.INDEX_VERSION,
+            **({"demo": True} if demo else {})}
+    # 来源只在上传/导入时留痕；本地上传没有来源，就不写这两个键。
+    if source_url:
+        meta["source_url"] = source_url
+        meta["source_site"] = source_site
+    (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     return d
 
 

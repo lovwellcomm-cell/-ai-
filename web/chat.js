@@ -118,7 +118,9 @@ export default function (component) {
   q("#hintLeft").textContent = busy ? "正在生成回答，可以先写下一条问题" : (d.hint || "");
 
   /* ---------------- 对话流 ---------------- */
-  const msgsSig = JSON.stringify(d.messages || []);
+  // 首页文案也跟着文档走：两份年报的对话历史都为空时，只比较 messages 会让
+  // 切换文档后的 hero 停留在上一份年报（实测导入茅台后仍显示精达）。
+  const msgsSig = JSON.stringify([d.doc, d.heroEyebrow, d.heroFoot, d.messages || []]);
   if (s.msgsSig !== msgsSig) {
     clear(threadInner);
     const ms = d.messages || [];
