@@ -115,6 +115,17 @@ SHELL_CSS = """
     border-radius: 11px;
   }
   [data-testid="stSidebar"] hr { margin: 10px 0; border-color: var(--arb-line); }
+
+  /* 5. rerun 期间 Streamlit 会把「本轮还没重新渲染」的元素标成 stale，按
+        opacity:.33 + 1s 淡入过渡整块发灰（streamlit 前端写死的样式）。
+        对话面板在一次 rerun 里排在检索器加载之后才渲染，问答、翻原页、切年报
+        都会先灰上 1~3 秒，看起来像页面卡死或蒙了一层雾。面板自己有分阶段的
+        状态文案，「正在…」比整块变淡更准确，所以只对这一个组件关掉。
+        类名来自挂载时的 key="chat"（stElementContainer 会带 st-key-chat）。 */
+  [data-testid="stElementContainer"].st-key-chat[data-stale="true"] {
+    opacity: 1 !important;
+    transition: none !important;
+  }
 """
 
 # 侧边栏用的令牌。注意必须整段放在 <style> 标签**里面**，
