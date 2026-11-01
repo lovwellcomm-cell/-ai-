@@ -1,0 +1,260 @@
+/* ============================================================
+   开屏页。视觉语言沿用对话面板（web/chat.css）的令牌：石墨底、金色强调、系统黑体。
+   构图参考 MOTDES「Ledgely 双色光晕金融首屏」：大标题 + 真实产品截图 + 两团光晕，
+   光晕换成我们的金色和 A 股的红色；背景是自绘的流动走势线（landing.js）。
+   令牌挂在 .lp 上（shadow root 里 :root 匹配不到元素），深浅色由 data-theme 切换。
+   ============================================================ */
+.lp {
+  --bg: #F6F5F2;
+  --surface: #FFFFFF;
+  --line: rgba(12,13,15,.09);
+  --line-2: rgba(12,13,15,.16);
+  --ink: #0C0D0F;
+  --ink-2: #4E535A;
+  --ink-3: #868B92;
+  --accent: #8A6608;
+  --accent-2: #B98A18;
+  --accent-ink: #FFFFFF;
+  --accent-soft: rgba(138,102,8,.10);
+  --accent-line: rgba(138,102,8,.32);
+  --halo-a: rgba(222,160,30,.5);
+  --halo-b: rgba(214,70,56,.34);
+  --shot-line: rgba(12,13,15,.14);
+  --shadow: 0 30px 80px -30px rgba(40,30,8,.45);
+  --font-ui: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI',
+             'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei',
+             'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+               'PingFang SC', 'Microsoft YaHei UI', monospace;
+  --ease: cubic-bezier(.32,.72,0,1);
+  color-scheme: light;
+}
+.lp[data-theme="dark"] {
+  --bg: #070809;
+  --surface: #121417;
+  --line: rgba(255,255,255,.075);
+  --line-2: rgba(255,255,255,.15);
+  --ink: #EDEEF0;
+  --ink-2: #A4AAB2;
+  --ink-3: #6E757E;
+  --accent: #E0B24E;
+  --accent-2: #F1CF7E;
+  --accent-ink: #16130A;
+  --accent-soft: rgba(224,178,78,.12);
+  --accent-line: rgba(224,178,78,.34);
+  --halo-a: rgba(232,172,52,.75);
+  --halo-b: rgba(220,74,60,.6);
+  --shot-line: rgba(255,255,255,.14);
+  --shadow: 0 40px 100px -30px rgba(0,0,0,.9);
+  color-scheme: dark;
+}
+
+.lp, .lp *, .lp *::before, .lp *::after { box-sizing: border-box; }
+.lp {
+  position: relative; overflow: hidden;
+  min-height: 100vh;
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-ui); font-size: 15px; line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+.lp button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.lp h1, .lp h2, .lp h3, .lp p { margin: 0; }
+
+/* 背景走势线：只铺首屏高度，往下自然淡出 */
+.lp-bg {
+  position: absolute; left: 0; top: 0; width: 100%; height: 980px;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+}
+
+/* ---------- 导航 ---------- */
+.lp-nav {
+  position: relative; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  max-width: 1160px; margin: 0 auto;
+  padding: 20px max(24px, env(safe-area-inset-right, 0px)) 0 max(24px, env(safe-area-inset-left, 0px));
+}
+.lp-brand { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; letter-spacing: .01em; }
+.lp-mark { width: 26px; height: 26px; color: var(--accent); flex: none; }
+.lp-links { display: flex; align-items: center; gap: 6px; }
+.lp .lp-link { padding: 8px 12px; border-radius: 999px; font-size: 13px; color: var(--ink-2);
+  transition: color .2s var(--ease), background .2s var(--ease); }
+.lp .lp-link:hover { color: var(--ink); background: var(--accent-soft); }
+
+/* ---------- 按钮 ---------- */
+.lp .lp-btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 13px 24px; border-radius: 999px;
+  font-size: 15px; font-weight: 600; letter-spacing: .02em;
+  color: var(--accent-ink); background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 10px 30px -10px var(--halo-a);
+  transition: transform .25s var(--ease), box-shadow .25s var(--ease), background .25s var(--ease);
+}
+.lp .lp-btn span { transition: transform .25s var(--ease); }
+.lp .lp-btn:hover { transform: translateY(-1px); background: var(--accent-2);
+  box-shadow: 0 0 0 1px var(--accent-2), 0 16px 40px -12px var(--halo-a); }
+.lp .lp-btn:hover span { transform: translateX(3px); }
+.lp .lp-btn:focus-visible, .lp .lp-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.lp .lp-btn-sm { padding: 8px 16px; font-size: 13px; }
+.lp .lp-btn-ghost {
+  color: var(--ink); background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.lp .lp-btn-ghost:hover { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); }
+
+/* ---------- 首屏 ---------- */
+.lp main { position: relative; z-index: 1; }
+.lp-hero {
+  max-width: 860px; margin: 0 auto; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 22px;
+  padding: 96px max(24px, env(safe-area-inset-right, 0px)) 0 max(24px, env(safe-area-inset-left, 0px));
+}
+.lp-eyebrow {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 6px 14px; border-radius: 999px;
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: .04em; color: var(--ink-2);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border: 1px solid var(--line-2);
+  backdrop-filter: blur(6px);
+}
+.lp-eyebrow i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft); }
+.lp-title {
+  font-size: clamp(36px, 6.4vw, 68px); line-height: 1.12; font-weight: 700;
+  letter-spacing: -.01em; text-wrap: balance;
+}
+.lp-gold {
+  background: linear-gradient(100deg, var(--accent) 10%, var(--accent-2) 55%, var(--accent) 95%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.lp-sub { max-width: 620px; font-size: 16.5px; line-height: 1.75; color: var(--ink-2); text-wrap: pretty; }
+.lp-cta { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 6px; }
+.lp-fine { font-size: 12px; color: var(--ink-3); }
+
+/* 首屏入场：内容一次性淡入上浮，不做逐字动画 */
+.lp-hero > * { animation: lp-rise .9s var(--ease) both; }
+.lp-hero > *:nth-child(2) { animation-delay: .06s; }
+.lp-hero > *:nth-child(3) { animation-delay: .12s; }
+.lp-hero > *:nth-child(4) { animation-delay: .18s; }
+.lp-hero > *:nth-child(5) { animation-delay: .24s; }
+.lp-shot { animation: lp-rise 1.1s .3s var(--ease) both; }
+@keyframes lp-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+/* ---------- 产品截图 + 光晕 ---------- */
+.lp-shot {
+  position: relative; max-width: 1040px; margin: 64px auto 0;
+  padding: 0 max(24px, env(safe-area-inset-right, 0px)) 0 max(24px, env(safe-area-inset-left, 0px));
+}
+.lp-halo {
+  position: absolute; top: -22%; width: 62%; height: 95%;
+  border-radius: 50%; filter: blur(64px); pointer-events: none;
+  animation: lp-breathe 9s ease-in-out infinite alternate;
+}
+/* 两团光晕从截图左上、右上溢出来：金色在左，A 股的红色在右 */
+.lp-halo-a { left: -12%; background: radial-gradient(closest-side, var(--halo-a), transparent 75%); }
+.lp-halo-b { right: -12%; background: radial-gradient(closest-side, var(--halo-b), transparent 75%); animation-delay: -4.5s; }
+@keyframes lp-breathe { from { opacity: .75; transform: scale(.96); } to { opacity: 1; transform: scale(1.04); } }
+.lp-frame {
+  position: relative; border-radius: 18px; padding: 7px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, transparent),
+                                      color-mix(in srgb, var(--surface) 60%, transparent));
+  border: 1px solid var(--shot-line);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+/* 顶边一道细光，模拟 Ledgely 那种屏幕边缘被光晕照亮 */
+.lp-frame::before {
+  content: ""; position: absolute; left: 8%; right: 8%; top: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-2), transparent);
+  opacity: .8;
+}
+.lp-frame img { display: block; width: 100%; height: auto; border-radius: 12px; }
+/* 截图下沿淡出，像屏幕延伸到页面里 */
+.lp-frame::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 32%;
+  background: linear-gradient(to bottom, transparent, var(--bg));
+}
+.lp-shot figcaption {
+  position: relative; margin-top: 14px; text-align: center;
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); letter-spacing: .03em;
+}
+
+/* ---------- 它怎么工作 ---------- */
+.lp-how {
+  max-width: 1040px; margin: 0 auto;
+  padding: 120px max(24px, env(safe-area-inset-right, 0px)) 0 max(24px, env(safe-area-inset-left, 0px));
+  display: flex; flex-direction: column; gap: 22px;
+}
+.lp-kicker { font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em; color: var(--accent); }
+.lp-h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.2; font-weight: 700; text-wrap: balance; }
+.lp-steps {
+  list-style: none; margin: 18px 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0;
+  border-top: 1px solid var(--line-2);
+}
+.lp-steps li {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 22px 24px 4px 0; min-width: 0;
+}
+.lp-steps li + li { padding-left: 24px; border-left: 1px solid var(--line); }
+.lp-num { font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
+.lp-steps b { font-size: 17px; font-weight: 600; }
+.lp-steps li > span:last-child { font-size: 14px; color: var(--ink-2); }
+
+.lp-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 34px;
+}
+.lp-card {
+  position: relative; display: flex; flex-direction: column; gap: 10px;
+  padding: 26px 26px 28px; border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 1px solid var(--line);
+  transition: border-color .3s var(--ease), transform .3s var(--ease);
+}
+.lp-card:hover { border-color: var(--accent-line); transform: translateY(-2px); }
+.lp-tag {
+  align-self: flex-start; padding: 3px 10px; border-radius: 999px;
+  font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .04em;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
+}
+.lp-card h3 { font-size: 19px; line-height: 1.35; font-weight: 600; }
+.lp-card p:last-child { font-size: 14.5px; line-height: 1.75; color: var(--ink-2); }
+
+/* ---------- 收尾 ---------- */
+.lp-end {
+  max-width: 760px; margin: 0 auto; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+  padding: 130px max(24px, env(safe-area-inset-right, 0px)) 110px max(24px, env(safe-area-inset-left, 0px));
+}
+.lp-foot {
+  position: relative; z-index: 1;
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px;
+  max-width: 1160px; margin: 0 auto;
+  padding: 22px max(24px, env(safe-area-inset-right, 0px)) max(26px, env(safe-area-inset-bottom, 0px)) max(24px, env(safe-area-inset-left, 0px));
+  border-top: 1px solid var(--line);
+  font-size: 12px; color: var(--ink-3);
+}
+
+/* ---------- 手机 ---------- */
+@media (max-width: 760px) {
+  .lp-nav { padding-top: 14px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .lp .lp-link { display: none; }
+  .lp-hero { padding-top: 64px; gap: 18px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .lp-sub { font-size: 15px; }
+  .lp-cta { flex-direction: column; align-items: stretch; width: 100%; max-width: 340px; }
+  .lp-cta .lp-btn { justify-content: center; }
+  .lp-shot, .lp-how, .lp-end, .lp-foot { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .lp-shot { margin-top: 44px; }
+  .lp-frame { padding: 4px; border-radius: 12px; }
+  .lp-frame img { border-radius: 9px; }
+  .lp-how { padding-top: 84px; }
+  .lp-steps { grid-template-columns: 1fr; }
+  .lp-steps li, .lp-steps li + li { padding: 16px 0; border-left: 0; border-bottom: 1px solid var(--line); }
+  .lp-grid { grid-template-columns: 1fr; }
+  .lp-end { padding-top: 90px; padding-bottom: 80px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-hero > *, .lp-shot, .lp-halo { animation: none; }
+}

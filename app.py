@@ -298,6 +298,34 @@ def current_theme() -> str:
         return "light"
 
 
+# ---------- 开屏页 ----------
+# 第一次打开先看开屏页，点「开始聊天」后在网址上记 ?chat=1：刷新、分享链接都直接进助手。
+# 放在侧边栏之前、st.stop() 收尾：开屏页不加载检索器和模型，打开得快。
+# ?build=1 自检页、以及这次会话里已经进过助手的，都不再显示开屏页。
+LANDING_CSS = """
+  [data-testid="stHeader"], [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"],
+  [data-testid="stExpandSidebarButton"] { display: none !important; }
+  [data-testid="stMainBlockContainer"] { padding: 0 !important; max-width: none !important; }
+  [data-testid="stElementContainer"]:has(> [data-testid="stMarkdown"] style) { display: none !important; }
+  [data-testid="stAppViewContainer"], [data-testid="stMain"] { background: transparent; }
+"""
+if (not st.session_state.get("entered")
+        and str(st.query_params.get("chat", "")) != "1"
+        and str(st.query_params.get("build", "")) != "1"):
+    from ui.landing_component import landing_surface
+
+    _theme = current_theme()
+    _bg = "#070809" if _theme == "dark" else "#F6F5F2"
+    st.markdown(f"<style>{LANDING_CSS} .stApp {{ background: {_bg}; }}</style>",
+                unsafe_allow_html=True)
+    landing = landing_surface({"theme": _theme})
+    if getattr(landing, "enter", None):
+        st.session_state["entered"] = True
+        st.query_params["chat"] = "1"
+        st.rerun()
+    st.stop()
+st.session_state["entered"] = True
+
 # ---------- 侧边栏：① 上传与文档选择 ----------
 # 选择状态只有一个来源：st.session_state["doc_id"]。
 # 上传只在“新文件”时把选择切过去一次，之后用户可以自由切换到任意已上传的年报。
