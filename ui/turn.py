@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from rag.company import normalize, same_company
 from rag.external import join_external, should_search
+from rag.fidelity import unverified_in_tables
 from rag.generator import join_answer, should_analyze
 from ui.card import CARD_KEYS
 
@@ -60,6 +61,11 @@ def history_entry(turn: dict, answer: str) -> dict:
     for key in CARD_KEYS:
         if turn.get(key):
             entry[key] = turn[key]
+    # 回答里有表格时逐格核对：找不到出处的数字交给界面用虚线标出来。
+    # 在回合完成时算一次存下来，而不是每次 rerun 重算。
+    check = unverified_in_tables(answer, turn.get("hits") or [])
+    if check:
+        entry["tableCheck"] = check
     return entry
 
 

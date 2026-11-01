@@ -225,6 +225,30 @@
 .prose { display: flex; flex-direction: column; gap: 12px; font-size: 14.5px; line-height: 1.78; }
 .prose p { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .prose strong { font-weight: 600; }
+/* 回答正文里的 Markdown 表格：数字右对齐、等宽数字，窄屏横向滚动而不是挤压 */
+.md-tbl-wrap {
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
+}
+table.md-tbl { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.5; }
+.md-tbl th {
+  text-align: right; font-weight: 500; color: var(--ink-3); white-space: nowrap;
+  font-size: 11.5px; padding: 8px 12px; background: var(--surface-2); border-bottom: 1px solid var(--line);
+}
+.md-tbl td {
+  text-align: right; padding: 8px 12px; border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.md-tbl th:first-child, .md-tbl td.rowname { text-align: left; }
+.md-tbl td.rowname { font-weight: 500; white-space: normal; min-width: 7.5em; }
+.md-tbl tr:last-child td { border-bottom: 0; }
+.md-tbl .cite { vertical-align: baseline; }
+/* 未能在引用片段中核对到出处的数字：虚线提示，不用刺眼的红底 */
+.md-tbl td.unv { text-decoration: underline dashed var(--neg); text-underline-offset: 4px; cursor: help; }
+.tbl-check { font-size: 11.5px; color: var(--ink-3); display: flex; align-items: center; gap: 6px; }
+.tbl-check::before { content: ""; width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--pos); }
+.tbl-check.bad { color: var(--neg); }
+.tbl-check.bad::before { background: var(--neg); }
 .cite {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 17px; height: 17px; padding: 0 3px; margin: 0 2px;

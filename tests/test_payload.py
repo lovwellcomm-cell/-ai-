@@ -91,6 +91,11 @@ class TestAiMessage:
         # 卡片说明跟着消息走：全局默认值写着「演示数据」，不能挂到真实数字上
         assert msg["cardNote"] == "程序抽取 · 年报第 7 页"
 
+    def test_table_check_passes_through(self):
+        check = {"numbers": 3, "unverified": ["9.99 亿元"]}
+        assert payload.ai_message({"q": "q", "a": "a", "tableCheck": check})["tableCheck"] == check
+        assert "tableCheck" not in payload.ai_message({"q": "q", "a": "a"})
+
 
 class TestBuildMessages:
     def test_history_then_pending_turn(self):

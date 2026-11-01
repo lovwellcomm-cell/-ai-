@@ -93,7 +93,8 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
         ]
     # 结构化财务卡片（ui/card.py 产出）：组件收到就用、收不到就不渲染。
     # cardTitle / cardNote 跟着消息走 —— 全局默认值是「演示数据」，不能挂到真实数字上。
-    for key in CARD_KEYS + ("table", "demo"):
+    # tableCheck：回答里 Markdown 表格的逐格核对结果（ui/turn.py:history_entry 算好存下）。
+    for key in CARD_KEYS + ("tableCheck", "table", "demo"):
         if turn.get(key):
             msg[key] = turn[key]
     return msg

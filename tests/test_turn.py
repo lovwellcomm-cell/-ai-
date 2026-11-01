@@ -242,6 +242,16 @@ def test_different_companies_and_unknown_company_stay_separate():
         conversation_key({"doc_id": "u2", "company": ""})
 
 
+def test_history_entry_checks_answer_tables():
+    """回答里有表格时，完成那一刻逐格核对一次并存下来；没有表格时不写这个键。"""
+    turn = dict(TURN, hits=[{"text": "营业收入 24,673,670,269.16 22,322,579,930.98"}])
+    table = ("结论[1]。\n\n| 项目 | 2025年 | 来源 |\n|---|---|---|\n"
+             "| 营业收入 | 246.74 亿元 | [1] |\n| 编造 | 9.99 亿元 | [1] |\n")
+    e = history_entry(turn, table)
+    assert e["tableCheck"] == {"numbers": 2, "unverified": ["9.99 亿元"]}
+    assert "tableCheck" not in history_entry(turn, "营业收入 246.74 亿元[1]。")
+
+
 def test_history_entry_keeps_the_card():
     """指标卡挂在回合上；写历史时漏掉，回合一结束卡片就消失。"""
     card = {"kpis": [{"k": "营业收入", "v": "246.74", "u": "亿元"}],

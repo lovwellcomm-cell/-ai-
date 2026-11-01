@@ -54,6 +54,10 @@ function localState(key) {
   return s;
 }
 
+// 回答正文里的 Markdown 表格：表格行与「|---|---|」分隔行（见 appendProse）
+const TABLE_LINE = /^\s*\|.*\|\s*$/;
+const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+
 export default function (component) {
   const { parentElement, data, key, setStateValue, setTriggerValue } = component;
   const d = data && typeof data === "object" ? data : {};
@@ -313,7 +317,7 @@ export default function (component) {
       return wrap;
     }
 
-    appendProse(body, m.text, (m.sources || []).length);
+    appendProse(body, m.text, (m.sources || []).length, m.tableCheck);
 
     if (m.kpis && m.kpis.length) body.appendChild(buildCard(m));
     if (m.queries && m.queries.length) body.appendChild(buildTrace(m));
@@ -357,16 +361,85 @@ export default function (component) {
   }
 
   /** 把一段回答正文按空行拆成段落渲染。生成完成和「扩展分析中」两条路径共用。 */
-  function appendProse(body, text, nSources) {
+  /* 正文：段落 + Markdown 表格。表格行以「|」开头，模型不一定在表格前后空一行，
+     所以按行切分成「文字段 / 表格段」，而不是只按空行分段。
+     check 是后端对表格的逐格核对（rag/fidelity.py:unverified_in_tables）。
+     TABLE_LINE / TABLE_SEP 定义在模块顶层：组件函数体是从上往下执行的，渲染发生在这里之前，
+     写在这里的 const 会撞上暂时性死区（实测：整条助手消息渲染失败）。 */
+  function appendProse(body, text, nSources, check) {
     const prose = mk("div", "prose");
-    String(text || "").split(/\n{2,}/).forEach((para) => {
-      if (!para.trim()) return;
-      const p = mk("p");
-      renderRich(p, para, nSources);
-      prose.appendChild(p);
+    const bad = (check && check.unverified) || [];
+    let lines = [], inTable = false, nTables = 0;
+    const flush = () => {
+      if (!lines.length) return;
+      if (inTable) {
+        prose.appendChild(buildMdTable(lines, nSources, bad));
+        nTables += 1;
+      } else {
+        lines.join("\n").split(/\n{2,}/).forEach((para) => {
+          if (!para.trim()) return;
+          const p = mk("p");
+          renderRich(p, para, nSources);
+          prose.appendChild(p);
+        });
+      }
+      lines = [];
+    };
+    String(text || "").split("\n").forEach((ln) => {
+      const isRow = TABLE_LINE.test(ln);
+      if (isRow !== inTable) { flush(); inTable = isRow; }
+      lines.push(ln);
     });
+    flush();
+    // 核对结论：所有表格合起来给一句，挂在正文末尾
+    if (nTables && check && check.numbers) {
+      const note = mk("div", "tbl-check " + (bad.length ? "bad" : "ok"));
+      note.textContent = bad.length
+        ? "表格中有 " + bad.length + " 个数字未能在引用片段中核对到出处（虚线标出），请点引用核对原文"
+        : "表格中 " + check.numbers + " 个数字均可在引用片段中找到出处，或由片段数字算出";
+      prose.appendChild(note);
+    }
     body.appendChild(prose);
     return prose;
+  }
+
+  /* 单元格里是否含这个数字：前面不能紧挨数字或小数点，免得「11.23 亿元」命中「1.23 亿元」 */
+  function hasNumber(cell, num) {
+    const esc = num.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp("(^|[^\\d.])" + esc).test(cell);
+  }
+
+  function buildMdTable(rows, nSources, bad) {
+    const wrap = mk("div", "md-tbl-wrap");
+    const table = mk("table", "md-tbl");
+    const split = (ln) => ln.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+    // 第二行是「|---|---|」分隔行时，第一行是表头
+    const hasHead = rows.length > 1 && TABLE_SEP.test(rows[1]);
+    const body = hasHead ? rows.slice(2) : rows.filter((r) => !TABLE_SEP.test(r));
+    if (hasHead) {
+      const thead = mk("thead"), tr = mk("tr");
+      split(rows[0]).forEach((h) => { const th = mk("th"); renderRich(th, h, nSources); tr.appendChild(th); });
+      thead.appendChild(tr);
+      table.appendChild(thead);
+    }
+    const tbody = mk("tbody");
+    body.forEach((ln) => {
+      const tr = mk("tr");
+      split(ln).forEach((c, i) => {
+        const td = mk("td", i === 0 ? "rowname" : null);
+        renderRich(td, c, nSources);
+        // 行名列不核对（后端也跳过了它）；其余单元格里含未核对数字的，虚线标出
+        if (i > 0 && bad.some((b) => hasNumber(c, b))) {
+          td.classList.add("unv");
+          td.title = "未在引用片段中找到出处，请点引用核对原文";
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    return wrap;
   }
 
   /* ---------------- 数据卡 ---------------- */
