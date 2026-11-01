@@ -48,7 +48,7 @@ const S = new Map();
 function localState(key) {
   let s = S.get(key);
   if (!s) {
-    s = { draft: "", scrollTop: 0, atBottom: true, drawer: false, turnIdx: -1, srcIdx: 0, activeCite: null, collapsed: new Set(), msgsSig: null, drawerSig: null, themeOverride: null };
+    s = { draft: "", scrollTop: 0, atBottom: true, drawer: false, turnIdx: -1, srcIdx: 0, activeCite: null, collapsed: new Set(), srcOpen: new Set(), msgsSig: null, drawerSig: null, themeOverride: null };
     S.set(key, s);
   }
   return s;
@@ -137,6 +137,8 @@ export default function (component) {
     clear(threadInner);
     const ms = d.messages || [];
     if (!ms.length) {
+      // 新对话：消息序号从头开始，旧的「哪些来源列表展开过」不能带进来
+      s.srcOpen.clear();
       threadInner.classList.add("empty");
       threadInner.appendChild(buildHero());
     } else {
@@ -322,7 +324,7 @@ export default function (component) {
     if (m.kpis && m.kpis.length) body.appendChild(buildCard(m));
     if (m.queries && m.queries.length) body.appendChild(buildTrace(m));
     if (m.sources && m.sources.length) body.appendChild(buildSources(m, idx));
-    if (m.webSources && m.webSources.length) body.appendChild(buildWebSources(m));
+    if (m.webSources && m.webSources.length) body.appendChild(buildWebSources(m, idx));
     body.appendChild(buildActions(m));
     return wrap;
   }
@@ -615,9 +617,27 @@ export default function (component) {
   }
 
   /* ---------------- 来源列表 ---------------- */
+  /* 来源列表默认折叠：正文里的 [n] 已经能直接打开原文抽屉，列表平时只占地方。
+     标题行写明「回答用到几段」，展开状态按消息记在 s.srcOpen 里 —— 新消息到来时
+     整个对话流会重建，不记的话用户刚展开的列表会自己收回去。 */
+  function foldable(title, key) {
+    const det = mk("details", "srcs");
+    det.open = s.srcOpen.has(key);
+    det.ontoggle = () => { if (det.open) s.srcOpen.add(key); else s.srcOpen.delete(key); };
+    const sum = mk("summary", "srcs-h");
+    sum.appendChild(mk("span", null, title));
+    sum.appendChild(mk("span", "srcs-line"));
+    sum.appendChild(mk("span", "srcs-tog"));
+    det.appendChild(sum);
+    const list = mk("div", "srcs-list");
+    det.appendChild(list);
+    return [det, list];
+  }
+
   function buildSources(m, idx) {
-    const block = mk("div", "srcs");
-    block.appendChild(mk("div", "srcs-h", "引用来源 " + m.sources.length + " 段"));
+    const used = m.sources.filter((x) => x.cited).length;
+    const [block, list] = foldable(
+      "引用来源 " + m.sources.length + " 段" + (used ? " · 回答用到 " + used + " 段" : ""), "y" + idx);
     m.sources.forEach((src) => {
       const b = mk("button", "src");
       b.type = "button";
@@ -628,16 +648,15 @@ export default function (component) {
       b.appendChild(mid);
       b.appendChild(mk("span", "src-pg", pageLabel(src)));
       b.onclick = () => openSource(src.n, idx);
-      block.appendChild(b);
+      list.appendChild(b);
     });
     return block;
   }
 
   /* 外部补充的网页来源：和年报片段分开渲染，标题写明未经核验。 */
-  function buildWebSources(m) {
-    const block = mk("div", "srcs");
-    block.appendChild(mk("div", "srcs-h",
-      "公开信息来源 " + m.webSources.length + " 条 · 未经年报核验"));
+  function buildWebSources(m, idx) {
+    const [block, list] = foldable(
+      "公开信息来源 " + m.webSources.length + " 条 · 未经年报核验", "w" + idx);
     m.webSources.forEach((s) => {
       const a = document.createElement("a");
       a.className = "src web-src";
@@ -653,7 +672,7 @@ export default function (component) {
       const sub = [s.site, s.date].filter(Boolean).join(" · ");
       if (sub) mid.appendChild(mk("span", "src-sub", sub));
       a.appendChild(mid);
-      block.appendChild(a);
+      list.appendChild(a);
     });
     return block;
   }

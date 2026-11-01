@@ -342,12 +342,19 @@ details.trace summary:hover { color: var(--ink-2); }
 .trace-line b { color: var(--ink-2); font-weight: 400; }
 
 /* 来源列表 */
-.srcs { display: flex; flex-direction: column; gap: 7px; }
+/* 默认折叠（details），标题行可点；展开后列表与标题之间留同样的间距 */
+details.srcs { display: block; }
 .srcs-h {
-  display: flex; align-items: center; gap: 9px;
+  display: flex; align-items: center; gap: 9px; cursor: pointer; list-style: none;
   font-family: var(--font-mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3);
+  padding: 4px 0;
 }
-.srcs-h::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.srcs-h::-webkit-details-marker { display: none; }
+.srcs-h:hover { color: var(--ink-2); }
+.srcs-line { flex: 1; height: 1px; background: var(--line); }
+.srcs-tog::before { content: "展开 ＋"; letter-spacing: .04em; }
+details.srcs[open] .srcs-tog::before { content: "收起 －"; }
+.srcs-list { display: flex; flex-direction: column; gap: 7px; margin-top: 7px; }
 .src {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px;
   text-align: left; width: 100%;
