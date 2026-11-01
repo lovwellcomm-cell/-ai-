@@ -42,6 +42,7 @@ from rag.periods import FY, SHORT, period_of, report_label
 from rag.retriever import Retriever
 from ui import payload
 from ui import turn as turn_core
+from ui import memory as chat_memory
 from ui.card import build_card, wants_card
 from ui.chat_component import chat_surface
 
@@ -276,6 +277,11 @@ def doc_label(d: dict) -> str:
     return who or d["name"]
 
 
+def uploads_used() -> int:
+    """本会话导入/上传了几份（计入上限）。刷新后从浏览器恢复回来的报告不算新导入。"""
+    return len(st.session_state.get("my_docs", set()) - st.session_state.get("restored_docs", set()))
+
+
 def visible_ids():
     """公开模式下，每个会话只能看到示例年报和自己上传的；本地模式看到全部。"""
     return st.session_state.setdefault("my_docs", set()) if config.PUBLIC_DEMO else None
@@ -298,7 +304,7 @@ def current_theme() -> str:
 with st.sidebar:
     up = st.file_uploader("上传年报或季报 PDF", type=["pdf"],
                           disabled=config.PUBLIC_DEMO
-                          and len(st.session_state.get("my_docs", ())) >= config.MAX_UPLOADS_PER_SESSION)
+                          and uploads_used() >= config.MAX_UPLOADS_PER_SESSION)
     if up is not None and st.session_state.get("last_upload_id") != up.file_id:
         st.session_state.last_upload_id = up.file_id
         new_id, err = ingest(up.getvalue(), up.name, check_limits=config.PUBLIC_DEMO)
@@ -324,7 +330,7 @@ with st.sidebar:
                 "巨潮 PDF 链接", key="report_url",
                 placeholder="https://static.cninfo.com.cn/finalpage/...PDF")
             at_limit = (config.PUBLIC_DEMO
-                        and len(st.session_state.get("my_docs", ())) >= config.MAX_UPLOADS_PER_SESSION)
+                        and uploads_used() >= config.MAX_UPLOADS_PER_SESSION)
             if st.button("下载并导入", key="report_import", use_container_width=True,
                          disabled=at_limit):
                 st.session_state.report_error = ""
@@ -442,6 +448,15 @@ busy = bool(turn) and turn.get("status") != "error"
 page = st.session_state.get("page")
 messages = payload.build_messages(history, turn, page=page,
                                   doc_labels={did: doc_label(d) for did, d in docs.items()})
+# 浏览器里的对话存档：刷新后由组件送回来（restore），之后每次历史有变化就送一份新的让它存。
+# 恢复完成之前不送存档 —— 否则空历史会先把浏览器里存着的对话覆盖掉。
+persist = None
+if st.session_state.get("restored"):
+    sig = (conv_key, len(history), history[-1]["q"] if history else "")
+    if st.session_state.get("persist_sig") != sig:
+        persist = {"key": conv_key, "entries": chat_memory.pack(history)}
+        st.session_state["persist_sig"] = sig
+
 result = chat_surface(
     payload.build_data(
         doc=meta,
@@ -453,6 +468,8 @@ result = chat_surface(
         model=config.LLM_MODEL,
         embed_model=config.EMBED_MODEL,
         reports=payload.report_menu(docs.values(), meta),
+        persist=persist,
+        restore_wanted=not st.session_state.get("restored"),
     ),
     key="chat",
 )
@@ -539,7 +556,7 @@ def advance_turn() -> None:
             st.rerun()
 
         else:
-            if config.PUBLIC_DEMO and len(st.session_state.get("my_docs", ())) \
+            if config.PUBLIC_DEMO and uploads_used() \
                     >= config.MAX_UPLOADS_PER_SESSION:
                 refund(target)
                 fail(target, f"本会话最多导入 {config.MAX_UPLOADS_PER_SESSION} 份报告。"
@@ -584,6 +601,9 @@ def advance_turn() -> None:
         # 带最近几轮的问题给改写，追问（「那去年呢」）里的指代才消解得掉。
         # 只传问题不传回答：上一轮回答里可能有算错或臆测的数字，带进检索词会污染检索。
         recent = [t["q"] for t in history[-config.FOLLOWUP_HISTORY_TURNS:]]
+        # 生成侧另外带上一轮回答的结论摘要（去掉数字），检索侧仍然只用问题
+        target["recent_ctx"] = chat_memory.recent_context(history,
+                                                          config.FOLLOWUP_HISTORY_TURNS)
         # 存到回合上：生成阶段也要用它。检索侧把这几个问题喂给改写、
         # 生成侧则用它消解「那去年呢」里的指代 —— 两边用的是同一份。
         target["recent"] = recent
@@ -658,7 +678,7 @@ def advance_turn() -> None:
         new_turn, entry, error = turn_core.step(
             target, gen=_gen, ana=_ana, web=_web, ind=_ind, client=pick_client(),
             company=meta.get("company", ""), year=meta.get("year", ""),
-            recent=target.get("recent"),
+            recent=target.get("recent_ctx") or target.get("recent"),
         )
         if error:
             refund(target)
@@ -713,6 +733,26 @@ if result.ask and not busy:
             **({"kind": "industry"} if wants_industry(text) else {}),
         }
         st.rerun()
+
+# 刷新后浏览器送回来的对话存档。数据由访客控制：ui/memory.unpack 只收白名单字段，
+# 文档 id 必须是服务器上真有的。只填空着的对话，不覆盖这次会话里已经有的。
+if getattr(result, "restore", None) is not None and not st.session_state.get("restored"):
+    st.session_state["restored"] = True
+    known = {d["doc_id"] for d in list_documents(None)}
+    convs, last = chat_memory.unpack(result.restore, known)
+    hs = st.session_state["histories"]
+    for k, entries in convs.items():
+        if not hs.get(k):
+            hs[k] = entries
+    back = chat_memory.doc_ids_in(convs) | ({last} if last else set())
+    visible = visible_ids()
+    if visible is not None:
+        visible.update(back)
+        st.session_state.setdefault("restored_docs", set()).update(back)
+    if last and not st.session_state.get("turn"):
+        st.session_state.doc_id = last
+    st.session_state.pop("persist_sig", None)
+    st.rerun()
 
 # 顶栏下拉里选了同一家公司的另一份报告：只换依据的文档，对话不断（同一个对话键）。
 if getattr(result, "pick_doc", None) and isinstance(result.pick_doc, dict) and not busy:

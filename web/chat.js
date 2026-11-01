@@ -31,6 +31,57 @@ const ICONS = {
 // 组件函数体里的 let 会在渲染路径先用到时撞上暂时性死区。
 let WEB_LIST = [];
 
+// 对话存档（ui/memory.py 定形状）：localStorage 里一个键，{convs: {对话键: [条目…]}, last: 文档id}。
+// 只存在访客自己的浏览器里；服务器每次历史有变化就把当前公司那段送来（d.persist）。
+const STORE_KEY = "arb.chat.v1";
+const STORE_MAX_CONVS = 20;
+let RESTORE_AT = 0;          // 上次把存档送回服务器的时间：渲染路径里触发，必须限流
+
+function readStore() {
+  try {
+    const raw = window.localStorage.getItem(STORE_KEY);
+    const obj = raw ? JSON.parse(raw) : null;
+    return obj && typeof obj === "object" && obj.convs && typeof obj.convs === "object"
+      ? obj : { convs: {}, last: "" };
+  } catch (e) { return { convs: {}, last: "" }; }
+}
+
+function writeStore(obj) {
+  // 存不下（隐私模式、配额满）就从最久没动过的公司开始丢，丢到存得下为止
+  for (let i = 0; i < STORE_MAX_CONVS + 1; i++) {
+    try { window.localStorage.setItem(STORE_KEY, JSON.stringify(obj)); return; }
+    catch (e) {
+      const keys = Object.keys(obj.convs);
+      if (!keys.length) return;
+      delete obj.convs[keys[0]];
+    }
+  }
+}
+
+function syncStore(d, setTriggerValue) {
+  if (d.restoreWanted) {
+    // 刷新后的第一次渲染：把存档送回去。只送一次（服务器收到就不再要），限流防止重跑叠加。
+    if (Date.now() - RESTORE_AT > 5000) {
+      RESTORE_AT = Date.now();
+      const obj = readStore();
+      setTriggerValue("restore", { convs: obj.convs, last: obj.last || "" });
+    }
+    return;                                   // 恢复完成之前不写，免得空历史盖掉存档
+  }
+  const p = d.persist;
+  const lastChanged = d.docId && readStore().last !== d.docId;
+  if (!(p && typeof p.key === "string") && !lastChanged) return;
+  const obj = readStore();
+  if (p && typeof p.key === "string") {
+    delete obj.convs[p.key];                  // 删了再加：键的顺序就是「最近用过」的顺序
+    if (Array.isArray(p.entries) && p.entries.length) obj.convs[p.key] = p.entries;
+    const keys = Object.keys(obj.convs);
+    keys.slice(0, Math.max(0, keys.length - STORE_MAX_CONVS)).forEach((k) => delete obj.convs[k]);
+  }
+  if (d.docId) obj.last = d.docId;
+  writeStore(obj);
+}
+
 const HERO_SUGS = [
   { key: "rev",    tag: "财务摘要",   text: "营业收入和归母净利润分别是多少？" },
   { key: "margin", tag: "经营分析",   text: "毛利率同比变化的原因是什么？" },
@@ -71,6 +122,7 @@ export default function (component) {
   const q = (sel) => parentElement.querySelector(sel);
   const root = q("#arb");
   if (!root) return;
+  syncStore(d, setTriggerValue);
 
   const thread = q("#thread");
   const threadInner = q("#threadInner");

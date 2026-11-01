@@ -59,6 +59,7 @@ def chat_surface(
     on_theme: Callable[[], None] | None = None,
     on_new_chat: Callable[[], None] | None = None,
     on_pick_doc: Callable[[], None] | None = None,
+    on_restore: Callable[[], None] | None = None,
 ):
     """挂载对话面板，返回 ComponentResult。
 
@@ -76,6 +77,7 @@ def chat_surface(
         on_theme_change=on_theme or _noop,
         on_new_chat_change=on_new_chat or _noop,
         on_pick_doc_change=on_pick_doc or _noop,
+        on_restore_change=on_restore or _noop,
     )
 
 

@@ -51,19 +51,30 @@ def format_context(chunks: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def _history_block(history: list[str] | None) -> str:
-    """最近几轮**问题**拼成的一段。
+def _history_block(history: list | None) -> str:
+    """最近几轮的问题拼成的一段，只用来消解指代。
 
-    只给问题、不给回答：上一轮的回答里可能有算错或臆测的数字，放进提示词会污染这一轮 ——
+    不给完整回答：上一轮的回答里可能有算错或臆测的数字，放进提示词会污染这一轮 ——
     检索侧的改写一直就是这么做的（app.py 只把 `t["q"]` 传下去）。
-    给问题的用途只有一个：让模型知道「那去年呢」里的「那」指的是什么。
+    后来加了上一轮回答的**结论摘要**（ui/memory.answer_gist，已去掉数字和引用编号）：
+    「那这个原因是什么」里的「这个」常常指上一轮的结论，只有问题时模型猜不出来。
+    条目可以是字符串（只有问题）或 {"q", "gist"}。
     """
-    questions = [q for q in (history or []) if q]
-    if not questions:
+    rows = []
+    for h in history or []:
+        if isinstance(h, dict):
+            if h.get("q"):
+                rows.append(f"用户：{h['q']}")
+            if h.get("gist"):
+                rows.append(f"助手（上一轮结论摘要，已去掉数字）：{h['gist']}")
+        elif h:
+            rows.append(f"用户：{h}")
+    if not rows:
         return ""
-    lines = "\n".join(f"用户：{q}" for q in questions)
-    return ("【对话历史】只用来理解当前问题里的指代（如“那”“它”“这个”“去年”），"
-            f"不要据此回答，也不要引用这里的任何内容。\n{lines}\n\n")
+    lines = "\n".join(rows)
+    return ("【对话历史】只用来理解当前问题里的指代（如“那”“它”“这个”“这个原因”“去年”），"
+            "不要据此回答，也不要引用这里的任何内容；数字和事实只能来自本轮的【年报片段】。"
+            f"\n{lines}\n\n")
 
 
 def build_messages(question: str, chunks: list[dict], company: str = "", year: str = "",

@@ -183,6 +183,8 @@ def build_data(
     card_title: str = "主要会计数据",
     card_note: str = "演示数据 · 非年报原文",
     reports: list[dict] | None = None,
+    persist: dict | None = None,
+    restore_wanted: bool = False,
 ) -> dict:
     """组装下发给组件的完整 data。"""
     company = doc.get("company") or ""
@@ -220,4 +222,9 @@ def build_data(
         "messages": messages,
         # 顶栏下拉：这家公司已导入的各年度、各期报告（report_menu 的输出）
         "reports": reports or [],
+        # 浏览器存档：persist 只在历史有变化时才带（{"key": 对话键, "entries": […]}），
+        # restoreWanted 为真时组件把 localStorage 里的存档送回来一次。
+        "persist": persist,
+        "restoreWanted": bool(restore_wanted),
+        "docId": doc.get("doc_id") or "",
     })
