@@ -179,6 +179,16 @@ class TestBuildData:
         assert "精达股份2025年报.pdf" in data["placeholder"]
         assert data["theme"] == "light"
 
+    def test_quarterly_doc_names_its_period(self):
+        """季报的顶栏和副标题要写明是哪一期，年报保持原样。"""
+        q3 = payload.build_data(doc={"company": "精达股份", "year": "2026", "period": "Q3"},
+                                messages=[])
+        assert q3["doc"]["year"] == "2026 三季报"
+        assert q3["heroEyebrow"] == "精达股份 2026 第三季度报告 · 已建索引"
+        fy = payload.build_data(doc={"company": "精达股份", "year": "2025"}, messages=[])
+        assert fy["doc"]["year"] == "2025"
+        assert fy["heroEyebrow"] == "精达股份 2025 年度报告 · 已建索引"
+
     def test_unknown_theme_falls_back_to_light(self):
         data = payload.build_data(doc={}, messages=[], theme="solarized")
         assert data["theme"] == "light"

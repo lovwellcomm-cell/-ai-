@@ -1,4 +1,6 @@
-"""结构化财务数据：从年报的「主要会计数据」表里确定性地抽出近三年关键数字。
+"""结构化财务数据：从定期报告的「主要会计数据」表里确定性地抽出关键数字。
+
+年报抽近三年；季报和半年报抽本期与上年同期（见文件后半部分）。
 
 为什么单独抽这张表：每份 A 股年报都有它，格式高度统一（本年、上年、增减、前年四列），
 而且公司**自己算好了增减比例** —— 我们复算一遍和它对得上，才算抽对了。
@@ -19,8 +21,10 @@ import json
 import re
 
 from . import config
+from .periods import FY, Q3, detect
 
-FIN_VERSION = 1
+# 2：加入季报/半年报（period 字段）。老缓存版本不符，第一次用到时自动重抽。
+FIN_VERSION = 2
 FIN_FILE = "financials.json"
 
 UNIT_SCALE = {"亿元": 1e8, "万元": 1e4, "千元": 1e3, "元": 1.0}
@@ -32,10 +36,13 @@ ITEMS: dict[str, tuple[str, ...]] = {
     "np_parent": ("归属于上市公司股东的净利润",),
     "np_deducted": ("归属于上市公司股东的扣除非经常性损益的净利润",),
     "ocf": ("经营活动产生的现金流量净额",),
-    "equity_parent": ("归属于上市公司股东的净资产",),
+    # 季报写「所有者权益」，年报和半年报写「净资产」
+    "equity_parent": ("归属于上市公司股东的净资产", "归属于上市公司股东的所有者权益"),
     "total_assets": ("总资产",),
 }
 LABELS = {k: v[0] for k, v in ITEMS.items()}
+FLOW_KEYS = ("revenue", "total_profit", "np_parent", "np_deducted", "ocf")
+BALANCE_KEYS = ("equity_parent", "total_assets")
 _ALIAS = {alias: key for key, aliases in ITEMS.items() for alias in aliases}
 
 _NUM_RE = re.compile(r"-?\d[\d,]*\.\d+%?")
@@ -176,6 +183,7 @@ def extract_from_lines(pages_lines: list[list[str]]) -> dict | None:
             continue
         return {
             "version": FIN_VERSION,
+            "period": FY,
             "unit": unit,
             "page": _page_of(window, LABELS["revenue"]),
             "years": [str(year), str(year - 1), str(year - 2)],
@@ -184,10 +192,238 @@ def extract_from_lines(pages_lines: list[list[str]]) -> dict | None:
     return None
 
 
-def extract(data: bytes) -> dict | None:
+# ---------------------------------------------------------------- 季报 / 半年报
+#
+# 和年报不同的地方（夹具是真实季报原文）：
+#   · 一季报、半年报：每行 3 个数 —— 本报告期、上年同期、增减。可以像年报一样复算核对。
+#     上年数据追溯调整过时「上年同期」拆成调整前 / 调整后两列，变成 4 个数，用调整后那列。
+#   · 三季报：每行 4 格 —— 单季、单季增减、年初至今、年初至今增减。**没有上年同期的金额**，
+#     没法直接复算；单季的经营现金流写「不适用」或「—」。
+#     核对办法：年初至今的金额在后面的利润表 / 现金流量表里会再出现一次，旁边就是上年同期，
+#     拿它复算增减，对得上才算数；扣非净利润不在报表里，用「归母净利润 − 非经常性损益合计」核对。
+#   · 资产类科目都是「本报告期末、上年度末、增减」3 个数。
+#   · 精达半年报的扣非科目被分页截断：「归属于上市公司股东的扣除非经常 319,… 290,… 10.13」，
+#     后半截「性损益的净利润」在下一页的页眉、页码之后才出现。
+
+_CELL_RE = re.compile(r"^[-−]?\d[\d,]*(?:\.\d+)?%?$")
+_BLANK_CELLS = ("不适用", "—", "——", "--", "－", "/", "-")
+_AUDIT_NO_RE = re.compile(r"未经审计|是否(?:已)?经过?审计\s*□\s*是")
+_AUDIT_YES_RE = re.compile(r"是否(?:已)?经过?审计\s*[√☑■]\s*是")
+
+
+def _is_cell(tok: str) -> bool:
+    return bool(_CELL_RE.match(tok)) or tok in _BLANK_CELLS
+
+
+def _cells(line: str) -> tuple[str, list[str]]:
+    """一行拆成 (科目文字, 数字格)。数字格可以是「不适用」「—」这种占位。
+
+    从第一个数字格起往后都必须是数字格，否则这一行不是数据行（比如变动原因说明）。
+    """
+    parts = line.split()
+    for i, tok in enumerate(parts):
+        if _is_cell(tok):
+            tail = parts[i:]
+            return ("".join(parts[:i]), tail) if all(_is_cell(t) for t in tail) else (line, [])
+    return line, []
+
+
+def _num(tok: str) -> float | None:
+    return _to_float(tok.replace("−", "-")) if _CELL_RE.match(tok) else None
+
+
+def _alias_prefix(text: str) -> bool:
+    """text 是某个科目名的前半截（还没写完）。"""
+    t = _norm(text)
+    return bool(t) and any(a.startswith(t) and a != t for a in _ALIAS)
+
+
+def parse_periodic_rows(lines: list[str]) -> dict[str, list[str]]:
+    """{科目键: 数字格}。科目最多折 4 行；科目后半截被分页挤到数字后面也能接上。"""
+    rows: dict[str, list[str]] = {}
+    buffer: list[str] = []
+    pending: tuple[str, list[str], int] | None = None    # (半截科目, 数字格, 已跳过行数)
+    for raw in lines:
+        ln = raw.strip()
+        if not ln:
+            continue
+        head, cells = _cells(ln)
+        if pending:
+            prefix, pcells, skipped = pending
+            if not cells:
+                cand = prefix + ln
+                key = _ALIAS.get(_norm(cand))
+                if key:
+                    rows.setdefault(key, pcells)
+                    pending = None
+                    continue
+                if _alias_prefix(cand):
+                    pending = (cand, pcells, skipped)
+                    continue
+            if (head and len(cells) >= 3) or skipped >= 4:
+                pending = None                 # 下一行数据都来了，半截科目作废，照常处理这一行
+            else:
+                pending = (prefix, pcells, skipped + 1)    # 页眉、页码：跳过
+                continue
+        if len(cells) >= 3:
+            key = None
+            for k in range(0, min(4, len(buffer)) + 1):
+                parts = buffer[len(buffer) - k:] if k else []
+                key = _ALIAS.get(_norm("".join(parts) + head))
+                if key:
+                    break
+            if key:
+                rows.setdefault(key, cells)
+            elif _alias_prefix(head):
+                pending = (head, cells, 0)
+            buffer = []
+            continue
+        if cells:
+            buffer = []
+            continue
+        buffer = (buffer + [ln])[-4:]
+    return rows
+
+
+def _check(cur: float, prior: float, change: float) -> bool:
+    if prior == 0:
+        return False
+    return abs((cur - prior) / abs(prior) * 100 - change) <= _TOLERANCE
+
+
+def _amounts(line: str) -> list[float]:
+    return [v for v in (_num(t) for t in line.split()) if v is not None]
+
+
+def _prior_from_statements(all_lines: list[str], ytd: float, change: float,
+                           scale: float) -> float | None:
+    """在报表里找「年初至今金额 上年同期金额」这一行，用它复算增减。返回上年同期（元）。
+
+    报表的单位可能和主要会计数据表不同（时代新材的表是万元、报表是元），两种都试；
+    万元四舍五入到分，换算成元会差几十元，所以按换算后的精度比对。
+    表里那一行自己也是「金额 增减」相邻，但拿增减当上年金额复算不可能对得上，不用特意跳过。
+    """
+    target = ytd * scale
+    for ln in all_lines:
+        vals = _amounts(ln)
+        for j in range(len(vals) - 1):
+            for s in {1.0, scale}:
+                if abs(vals[j] * s - target) <= 0.006 * scale:
+                    prior = vals[j + 1] * s
+                    if _check(target, prior, change):
+                        return prior
+    return None
+
+
+def _nonrecurring_total(all_lines: list[str]) -> list[float] | None:
+    """非经常性损益表的「合计」行：三季报是 [本期, 年初至今]，一季报只有 [本期]。"""
+    for ln in all_lines:
+        if _norm(ln).startswith("合计"):
+            vals = _amounts(ln)
+            if vals:
+                return vals
+    return None
+
+
+def audit_status(pages_lines: list[list[str]]) -> bool | None:
+    """季报封面写「第三季度财务报表是否经审计 □是 √否」；半年报写「本半年度报告未经审计」。
+
+    深交所半年报把这句放在第 30 页之后，读到的页里没有就返回 None（界面写「通常未经审计」）。
+    """
+    head = " ".join(ln for lines in pages_lines for ln in lines)
+    head = re.sub(r"\s+", " ", head)
+    if _AUDIT_NO_RE.search(head):
+        return False
+    if _AUDIT_YES_RE.search(head):
+        return True
+    return None
+
+
+def _periodic_item(key: str, cells: list[str], period: str, y0: str, y1: str,
+                   scale: float, all_lines: list[str]) -> dict | None:
+    nums = [_num(c) for c in cells]
+    if period == Q3 and key in FLOW_KEYS:
+        if len(cells) != 4 or nums[2] is None or nums[3] is None:
+            return None
+        ytd, change = nums[2], nums[3]
+        item = {"label": LABELS[key], "values": {y0: ytd * scale}, "change": change}
+        if key != "np_deducted":                 # 扣非等归母净利润核对完再用合计行核
+            prior = _prior_from_statements(all_lines, ytd, change, scale)
+            if prior is None:
+                return None
+            item["values"][y1] = prior
+        # 年初至今核对上了，说明这一行四格的列序是对的，第一格就是单季
+        if nums[0] is not None and nums[1] is not None:
+            item["quarter"] = {"value": nums[0] * scale, "change": nums[1]}
+        return item
+    if None in nums:
+        return None
+    if len(nums) == 4:
+        nums = [nums[0], nums[2], nums[3]]       # 上年同期拆成调整前/调整后：用调整后
+    if len(nums) != 3:
+        return None
+    cur, prior, change = nums
+    if not _check(cur, prior, change):
+        return None
+    item = {"label": LABELS[key], "values": {y0: cur * scale, y1: prior * scale},
+            "change": change}
+    if key in BALANCE_KEYS:
+        item["basis"] = "本报告期末 vs 上年度末"
+    return item
+
+
+def extract_periodic_from_lines(pages_lines: list[list[str]], period: str,
+                                year: int) -> dict | None:
+    """季报 / 半年报的主要会计数据。三季报存「年初至今」，单季放在 items[key]["quarter"]。"""
+    all_lines = [ln for lines in pages_lines for ln in lines]
+    y0, y1 = str(year), str(year - 1)
+    for window in _table_windows(pages_lines):
+        table = _cut_at_end([ln for _, ln in window])
+        window = window[:len(table)]
+        rows = parse_periodic_rows(table)
+        if "revenue" not in rows or "np_parent" not in rows:
+            continue
+        unit = detect_unit(table)
+        scale = UNIT_SCALE[unit]
+        items = {}
+        for key, cells in rows.items():
+            item = _periodic_item(key, cells, period, y0, y1, scale, all_lines)
+            if item:
+                items[key] = item
+        ded, npp = items.get("np_deducted"), items.get("np_parent")
+        if period == Q3 and ded:
+            total = _nonrecurring_total(all_lines)
+            ok = False
+            if npp and total and len(total) >= 2:
+                diff = npp["values"][y0] - ded["values"][y0]
+                ok = any(abs(diff - total[1] * s) <= 0.02 * scale for s in {1.0, scale})
+            if not ok:
+                items.pop("np_deducted")
+        if "revenue" not in items or "np_parent" not in items:
+            continue
+        return {
+            "version": FIN_VERSION,
+            "period": period,
+            "unit": unit,
+            "page": _page_of(window, LABELS["revenue"]),
+            "years": [y0, y1],
+            "audited": audit_status(pages_lines),
+            "items": items,
+        }
+    return None
+
+
+def extract(data: bytes, period: str = FY, year: str | int = "") -> dict | None:
     from .pdf_parser import raw_page_lines
 
-    return extract_from_lines(raw_page_lines(data, max_pages=30))
+    pages_lines = raw_page_lines(data, max_pages=30)
+    if period == FY:
+        return extract_from_lines(pages_lines)
+    if not str(year).isdigit():
+        year = detect("\n".join(pages_lines[0]) if pages_lines else "")[0]
+    if not str(year).isdigit():
+        return None
+    return extract_periodic_from_lines(pages_lines, period, int(year))
 
 
 def load_or_build(doc_id: str) -> dict | None:
@@ -208,7 +444,12 @@ def load_or_build(doc_id: str) -> dict | None:
     if not pdf.exists():
         return None
     try:
-        fin = extract(pdf.read_bytes())
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    try:
+        fin = extract(pdf.read_bytes(), period=meta.get("period") or FY,
+                      year=meta.get("year", ""))
     except Exception:
         fin = None
     try:

@@ -1,4 +1,4 @@
-"""巨潮资讯：下载年报 PDF，并按公司名/年份检索年报公告。
+"""巨潮资讯：下载定期报告 PDF，并按公司名/年份/期（年报、一季报、半年报、三季报）检索公告。
 
 两部分：
   · download_pdf：白名单、重定向校验、大小与 %PDF 校验；
@@ -18,6 +18,7 @@ from datetime import date
 
 from . import config
 from .company import normalize
+from .periods import FY, H1, Q1, Q3, SHORT, TITLE
 
 ALLOWED_HOSTS = ("www.cninfo.com.cn", "static.cninfo.com.cn")
 QUERY_PAGE_HOST = "www.cninfo.com.cn"
@@ -183,25 +184,36 @@ def pick_company(results: list[dict], keyword: str) -> dict | None:
     return results[0]
 
 
-def list_annual_reports(code: str, org_id: str, year: int) -> list[dict]:
-    """查某公司某报告年度的年报公告（披露日期在次年）。"""
+# 巨潮公告分类：年报、一季报、半年报、三季报
+CATEGORY = {FY: "category_ndbg_szsh", Q1: "category_yjdbg_szsh",
+            H1: "category_bndbg_szsh", Q3: "category_sjdbg_szsh"}
+
+
+def list_reports(code: str, org_id: str, year: int, period: str = FY) -> list[dict]:
+    """查某公司某年度某一期的定期报告公告。年报在次年披露，季报和半年报在当年。"""
     column = "sse" if str(code).startswith("6") else "szse"
+    disclosed = year + 1 if period == FY else year
     form = {
         "pageNum": 1, "pageSize": 30, "column": column, "tabName": "fulltext",
         "plate": "", "stock": f"{code},{org_id}", "searchkey": "", "secid": "",
-        "category": "category_ndbg_szsh", "trade": "",
-        "seDate": f"{year + 1}-01-01~{year + 1}-12-31",
+        "category": CATEGORY[period], "trade": "",
+        "seDate": f"{disclosed}-01-01~{disclosed}-12-31",
         "sortName": "", "sortType": "", "isHLtitle": "true",
     }
     data = _post_form(ANNOUNCEMENT_URL, form, config.REPORT_SEARCH_TIMEOUT) or {}
-    want = f"{year}年年度报告"
+    want = f"{year}年{TITLE[period]}"
     out = []
     for a in data.get("announcements") or []:
         title = str(a.get("announcementTitle") or "").strip()
         compact = re.sub(r"\s+", "", title)
         if want not in compact:
             continue
-        if any(x in compact for x in ("摘要", "英文", "已取消")):
+        # 「正文」是深交所旧格式里的季报简版，和「摘要」一样不完整
+        if any(x in compact for x in ("摘要", "英文", "已取消", "正文")):
+            continue
+        # 「2026年半年度报告」不能被当成「2026年年度报告」：上面的 want 已经区分开了，
+        # 但年报的 want「年度报告」也是「半年度报告」的子串，要单独排除。
+        if period == FY and f"{year}年半年度报告" in compact:
             continue
         url = "https://static.cninfo.com.cn/" + str(a.get("adjunctUrl") or "")
         if not is_allowed_url(url):
@@ -210,30 +222,42 @@ def list_annual_reports(code: str, org_id: str, year: int) -> list[dict]:
             size = int(a.get("adjunctSize") or 0)
         except (TypeError, ValueError):
             size = 0
-        out.append({"title": title, "url": url, "year": year, "size_kb": size,
-                    "date": str(a.get("announcementTime") or "")})
+        out.append({"title": title, "url": url, "year": year, "period": period,
+                    "size_kb": size, "date": str(a.get("announcementTime") or "")})
     return out
 
 
-def find_report(company: str, year: int | None = None) -> dict:
-    """公司名 + 年份 → 年报公告。年份为空时从最近三年往前找。"""
+def list_annual_reports(code: str, org_id: str, year: int) -> list[dict]:
+    """查某公司某报告年度的年报公告（披露日期在次年）。"""
+    return list_reports(code, org_id, year, FY)
+
+
+def find_report(company: str, year: int | None = None, period: str = FY) -> dict:
+    """公司名 + 年份 + 期 → 公告。年份为空时：年报从最近三年往前找，季报从今年往前找两年。"""
     picked = pick_company(search_company(company), company)
     if not picked:
         raise ReportNotFound(f"巨潮没有找到名为“{company}”的上市公司")
-    years = [int(year)] if year else [_current_year() - 1, _current_year() - 2,
-                                      _current_year() - 3]
+    cy = _current_year()
+    if year:
+        years = [int(year)]
+    elif period == FY:
+        years = [cy - 1, cy - 2, cy - 3]
+    else:
+        years = [cy, cy - 1]
     for y in years:
-        reports = list_annual_reports(picked["code"], picked["org_id"], y)
+        reports = list_reports(picked["code"], picked["org_id"], y, period)
         if reports:
             reports.sort(key=lambda r: r.get("date") or "", reverse=True)
             best = dict(reports[0])
             best.update({"company": picked["name"], "code": picked["code"]})
             return best
-    raise ReportNotFound(f"没有找到“{company}” {year or '最近三年'}的年报公告")
+    when = f"{year} 年" if year else ("最近三年" if period == FY else "最近两年")
+    raise ReportNotFound(f"没有找到“{company}” {when}的{SHORT[period]}公告")
 
 
-def ensure_report(company: str, year: int | None = None) -> tuple[bytes, str, dict]:
+def ensure_report(company: str, year: int | None = None,
+                  period: str = FY) -> tuple[bytes, str, dict]:
     """找公告 → 下载 PDF。返回 (bytes, 文件名, 公告信息)。"""
-    info = find_report(company, year)
+    info = find_report(company, year, period)
     data, filename = download_pdf(info["url"])
     return data, filename, info

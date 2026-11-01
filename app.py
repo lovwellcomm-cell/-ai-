@@ -37,6 +37,7 @@ from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensur
                          is_current, list_documents, load_index)
 from rag.limits import Quota, check_and_consume
 from rag.pdf_parser import extract_doc_info, parse_pdf, render_page_png
+from rag.periods import FY, SHORT, period_of, report_label
 from rag.retriever import Retriever
 from ui import payload
 from ui import turn as turn_core
@@ -211,7 +212,8 @@ if take_cache_bust(SOURCE_STAMP):
 
 
 def _patch_meta(doc_id: str, company: str = "", year: str = "",
-                source_url: str = "", source_site: str = "", name: str = "") -> None:
+                source_url: str = "", source_site: str = "", name: str = "",
+                period: str = "") -> None:
     """索引已存在时补齐元数据（自动导入知道公司/年份，但从 PDF 里可能抽不出来）。"""
     path = doc_dir(doc_id) / "meta.json"
     try:
@@ -221,7 +223,7 @@ def _patch_meta(doc_id: str, company: str = "", year: str = "",
     changed = False
     for key, val in (("company", company), ("year", str(year or "")),
                      ("source_url", source_url), ("source_site", source_site),
-                     ("name", name)):
+                     ("name", name), ("period", "" if period == FY else period)):
         if val and meta.get(key) != val:
             meta[key] = val
             changed = True
@@ -231,14 +233,15 @@ def _patch_meta(doc_id: str, company: str = "", year: str = "",
 
 def ingest(data: bytes, name: str, demo: bool = False, check_limits: bool = False,
            source_url: str = "", source_site: str = "",
-           company: str = "", year: str = ""):
+           company: str = "", year: str = "", period: str = ""):
     """解析并建立索引。返回 (doc_id, 错误信息)；失败时 doc_id 为 None。
 
-    company / year 是调用方已知的覆盖值（自动导入时来自巨潮公告），优先于从 PDF 里抽到的。
+    company / year / period 是调用方已知的覆盖值（自动导入时来自巨潮公告），
+    优先于从 PDF 封面里认出来的。
     """
     did = doc_id_of(data)
     if is_current(did):
-        _patch_meta(did, company, str(year or ""), source_url, source_site, name)
+        _patch_meta(did, company, str(year or ""), source_url, source_site, name, period)
         return did, ""
     with st.status(f"处理 {name}", expanded=True) as status:
         st.write("② 提取文本、页码与章节…")
@@ -253,17 +256,22 @@ def ingest(data: bytes, name: str, demo: bool = False, check_limits: bool = Fals
         info = extract_doc_info(pages)
         eff_company = company or info.company
         eff_year = str(year or info.year or "")
+        info.period = period or info.period
         chunks = chunk_pages(pages, config.CHUNK_SIZE, config.CHUNK_OVERLAP, info)
         st.write(f"{len(chunks)} 个片段。④ 向量化并建立索引（首次需下载模型）…")
         build_index(did, data, name, len(pages), chunks, company=eff_company, year=eff_year,
-                    demo=demo, source_url=source_url, source_site=source_site)
+                    demo=demo, source_url=source_url, source_site=source_site,
+                    period=info.period)
         status.update(label=f"{name} 已建立索引", state="complete", expanded=False)
     return did, ""
 
 
 def doc_label(d: dict) -> str:
-    """按钮显示名：“精达股份 2025”。"""
+    """按钮显示名：“精达股份 2025”；季报 / 半年报加上期：“精达股份 2026 三季报”。"""
     who = f"{d.get('company', '')} {d.get('year', '')}".strip()
+    period = period_of(d)
+    if who and period != FY:
+        who += f" {SHORT[period]}"
     return who or d["name"]
 
 
@@ -287,7 +295,7 @@ def current_theme() -> str:
 # 选择状态只有一个来源：st.session_state["doc_id"]。
 # 上传只在“新文件”时把选择切过去一次，之后用户可以自由切换到任意已上传的年报。
 with st.sidebar:
-    up = st.file_uploader("上传年报 PDF", type=["pdf"],
+    up = st.file_uploader("上传年报或季报 PDF", type=["pdf"],
                           disabled=config.PUBLIC_DEMO
                           and len(st.session_state.get("my_docs", ())) >= config.MAX_UPLOADS_PER_SESSION)
     if up is not None and st.session_state.get("last_upload_id") != up.file_id:
@@ -309,7 +317,7 @@ with st.sidebar:
     # 第 1 阶段：粘贴巨潮链接 → 服务器下载 → 复用同一条 ingest 链路。
     # 只接受白名单域名；下载失败只报错，不影响已导入的文档。
     if config.REPORT_FETCH_ENABLED:
-        with st.expander("手动添加年报（粘贴巨潮链接）"):
+        with st.expander("手动添加年报或季报（粘贴巨潮链接）"):
             st.caption("自动查找失败时，可以在这里粘贴巨潮 PDF 链接；只支持 cninfo 的地址。")
             report_url = st.text_input(
                 "巨潮 PDF 链接", key="report_url",
@@ -347,13 +355,14 @@ with st.sidebar:
                    source_url=d.get("source_url", ""),
                    source_site=d.get("source_site", ""),
                    company=d.get("company", ""),
-                   year=d.get("year", ""))
+                   year=d.get("year", ""),
+                   period=d.get("period", ""))
 
     docs = {d["doc_id"]: d for d in list_documents(visible_ids())}
     if docs:
         if st.session_state.get("doc_id") not in docs:
             st.session_state.doc_id = next(iter(docs))
-        st.markdown("**年报文档**")
+        st.markdown("**报告文档**")
         for did, d in docs.items():
             if st.button(doc_label(d), key=f"doc-{did}", use_container_width=True,
                          type="primary" if did == st.session_state.doc_id else "secondary"):
@@ -373,8 +382,8 @@ with st.sidebar:
                                  ).strip()
     elif not config.DEEPSEEK_API_KEY:
         st.warning("未检测到 DEEPSEEK_API_KEY，请在 .env 中配置。")
-    st.caption("提问优先检索上方选中的年报；问到别的公司时，助手会先去找它的年报。"
-               "同一家公司不同年度的年报共用一段对话，切换年份时对话接着往下走。")
+    st.caption("提问优先检索上方选中的报告；问到别的公司、别的年份或「三季度」「上半年」时，"
+               "助手会先去巨潮找对应的年报或季报。同一家公司的年报和季报共用一段对话。")
     st.caption("若侧边栏显示异常，请关闭浏览器的“翻译此页”后刷新。")
 
 if not docs:
@@ -492,10 +501,13 @@ def advance_turn() -> None:
                                  current_company=meta.get("company", ""))
         except Exception:
             tgt = {"company": "", "year": None, "multiple": False}
+        # 年报 / 一季报 / 半年报 / 三季报：用规则从问题里认，相对年份（「去年三季度」）一并换算
+        tgt = turn_core.with_period(tgt, target["q"])
         target["target"] = tgt
         plan = turn_core.plan_resolution(
             tgt, current_company=meta.get("company", ""),
             current_year=meta.get("year", ""),
+            current_period=period_of(meta),
             docs=list_documents(visible_ids()))
 
         if plan["action"] == "multiple":
@@ -522,19 +534,22 @@ def advance_turn() -> None:
             if config.PUBLIC_DEMO and len(st.session_state.get("my_docs", ())) \
                     >= config.MAX_UPLOADS_PER_SESSION:
                 refund(target)
-                fail(target, f"本会话最多导入 {config.MAX_UPLOADS_PER_SESSION} 份年报。"
+                fail(target, f"本会话最多导入 {config.MAX_UPLOADS_PER_SESSION} 份报告。"
                              "请切换到已有文档，或手动上传/粘贴链接。")
                 st.rerun()
             try:
-                data, fname, info = ensure_report(plan["company"], plan["year"])
+                data, fname, info = ensure_report(plan["company"], plan["year"],
+                                                  plan["period"])
                 auto_company = info.get("company") or plan["company"]
                 auto_year = str(info.get("year") or "")
-                pretty = f"{auto_company} {auto_year} 年报.pdf".strip()
+                label = f"{auto_company} {report_label(auto_year, plan['period'])}".strip()
+                pretty = f"{label}.pdf"
                 new_id, err = ingest(data, pretty or fname,
                                      check_limits=config.PUBLIC_DEMO,
                                      source_url=info["url"],
                                      source_site=source_site(info["url"]),
-                                     company=auto_company, year=auto_year)
+                                     company=auto_company, year=auto_year,
+                                     period=plan["period"])
                 if not new_id:
                     raise RuntimeError(err)
             except Exception as e:
@@ -546,8 +561,7 @@ def advance_turn() -> None:
                 visible.add(new_id)
             st.session_state.doc_id = new_id
             target["doc_id"] = new_id
-            label = f"{auto_company} {auto_year}".strip()
-            target["notice"] = f"已自动导入《{label} 年报》，基于该文档回答"
+            target["notice"] = f"已自动导入《{label}》，基于该文档回答"
             target["status"] = "retrieving"
             st.session_state.pop("page", None)
             st.session_state["turn"] = target
@@ -602,12 +616,12 @@ def advance_turn() -> None:
 
         def _gen(q, hits, *, client, company, year, history):
             return "".join(generate(q, hits, client=client, company=company,
-                                    year=year, history=history))
+                                    year=year, history=history, period=period_of(meta)))
 
         def _ana(q, hits, first, *, client, company, year, history):
             diag: dict = {}
             ext = analyze(q, hits, first, client=client, company=company, year=year,
-                          diag=diag, history=history)
+                          diag=diag, history=history, period=period_of(meta))
             return ext, diag
 
         def _web(q, first, *, client, company, year, history):
@@ -615,7 +629,7 @@ def advance_turn() -> None:
             text, sources, diag = answer_with_tools(
                 q, first, client=client,
                 api_key=getattr(client, "api_key", "") or config.DEEPSEEK_API_KEY,
-                company=company, year=year, diag=diag,
+                company=company, year=year, diag=diag, period=period_of(meta),
             )
             return text, sources, diag
 

@@ -251,7 +251,7 @@ def test_find_report_raises_when_company_is_unknown(monkeypatch):
 
 def test_ensure_report_downloads_the_selected_pdf(monkeypatch):
     monkeypatch.setattr(disclosure, "find_report",
-                        lambda company, year=None: {"url": PDF_URL, "year": 2025,
+                        lambda company, year=None, period="FY": {"url": PDF_URL, "year": 2025,
                                                     "company": company})
     monkeypatch.setattr(disclosure, "download_pdf", lambda url: (b"%PDF-1.7", "x.pdf"))
     data, name, info = disclosure.ensure_report("七匹狼", 2025)

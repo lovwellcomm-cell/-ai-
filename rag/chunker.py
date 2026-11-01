@@ -3,6 +3,7 @@ import re
 from dataclasses import asdict, dataclass
 
 from .pdf_parser import STATEMENT_RE, DocInfo, Page
+from .periods import TITLE
 
 SENT_SPLIT = re.compile(r"(?<=[。！？；])")
 
@@ -24,7 +25,7 @@ class Chunk:
 def context_prefix(info: DocInfo | None, section: str, subsection: str) -> str:
     parts = []
     if info and (info.company or info.year):
-        parts.append(f"{info.company}{info.year}年年度报告".strip())
+        parts.append(f"{info.company}{info.year}年{TITLE.get(info.period, TITLE['FY'])}".strip())
     parts.append(section)
     if subsection:
         parts.append(subsection)

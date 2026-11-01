@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 
 import pypdfium2 as pdfium
 
+from .periods import detect as detect_period
+
 # A 股年报常见标题：“第一节 重要提示”“第三章 管理层讨论与分析”
 HEADING_RE = re.compile(r"^\s*第[一二三四五六七八九十百零\d]+[节章]\s*\S.{0,30}$")
 PAGE_NUM_RE = re.compile(r"^\s*[-—\s]*(第\s*)?\d+\s*(页)?\s*([/／]\s*\d+\s*(页)?)?[-—\s]*$")
@@ -32,6 +34,7 @@ class Page:
 class DocInfo:
     company: str = ""  # 公司简称，如“精达股份”
     year: str = ""     # 报告年度，如“2025”
+    period: str = "FY"  # 年报 FY / 一季报 Q1 / 半年报 H1 / 三季报 Q3
 
 
 def open_pdf(path_or_bytes) -> pdfium.PdfDocument:
@@ -140,15 +143,13 @@ def _looks_like_line_item(title: str) -> bool:
 
 
 def extract_doc_info(pages: list[Page]) -> DocInfo:
-    """从前几页识别公司简称与报告年度。"""
+    """从前几页识别公司简称、报告年度和期（年报 / 季报 / 半年报）。"""
     head = "\n".join(p.text for p in pages[:3])
     info = DocInfo()
     m = re.search(r"(?:公司|证券|股票)简称[:：]\s*([^\s:：，,]{2,10})", head)
     if m:
         info.company = m.group(1)
-    m = re.search(r"(20\d{2})\s*年\s*年度报告", head)
-    if m:
-        info.year = m.group(1)
+    info.year, info.period = detect_period(head)
     return info
 
 

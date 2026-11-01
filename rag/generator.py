@@ -3,6 +3,7 @@ import re
 from typing import Iterator
 
 from . import config
+from .periods import FY, doc_desc
 
 SYSTEM_PROMPT = """你是一名严谨的上市公司年报研究助手。下面给出的片段都来自同一份年报{doc_desc}。
 规则：
@@ -66,8 +67,8 @@ def _history_block(history: list[str] | None) -> str:
 
 
 def build_messages(question: str, chunks: list[dict], company: str = "", year: str = "",
-                   history: list[str] | None = None) -> list[dict]:
-    desc = f"（{company} {year} 年年度报告）" if company or year else ""
+                   history: list[str] | None = None, period: str = FY) -> list[dict]:
+    desc = doc_desc(company, year, period)
     system = SYSTEM_PROMPT.format(doc_desc=desc)
     if config.ANSWER_CHAR_BUDGET > 0:
         system += ANSWER_BUDGET_RULE.format(budget=config.ANSWER_CHAR_BUDGET)
@@ -94,7 +95,7 @@ def get_client():
 
 def generate(question: str, chunks: list[dict], client=None,
              company: str = "", year: str = "", usage_out: dict | None = None,
-             history: list[str] | None = None) -> Iterator[str]:
+             history: list[str] | None = None, period: str = FY) -> Iterator[str]:
     """流式返回回答文本片段。
 
     usage_out 传字典时，会把本次调用的 token 用量填进去（需要 stream_options 才会回传）。
@@ -105,7 +106,7 @@ def generate(question: str, chunks: list[dict], client=None,
     client = client or get_client()
     stream = client.chat.completions.create(
         model=config.LLM_MODEL,
-        messages=build_messages(question, chunks, company, year, history),
+        messages=build_messages(question, chunks, company, year, history, period),
         temperature=0.1, stream=True, timeout=config.LLM_TIMEOUT,
         stream_options={"include_usage": True},
     )
@@ -148,7 +149,7 @@ ABSTAIN_MARK = "年报中未找到相关信息"
 # 「结论：年报片段中未找到精达股份 2025 年股价最高值」，于是联网兜底没有触发。
 # 所以再加一层容错：在**开头 160 字**（结论区）里出现「年报/片段 + 未找到」就算弃答。
 _ABSTAIN_RE = re.compile(
-    r"(?:年报|报告|片段)[^。！？\n]{0,12}"
+    r"(?:年报|季报|报告|片段)[^。！？\n]{0,12}"
     r"(?:未找到|没有找到|未检索到|没有相关数据|未包含)")
 
 
@@ -159,12 +160,12 @@ def is_abstention(answer: str) -> bool:
 
 def build_analyze_messages(question: str, chunks: list[dict], first_answer: str,
                            company: str = "", year: str = "",
-                           history: list[str] | None = None) -> list[dict]:
+                           history: list[str] | None = None, period: str = FY) -> list[dict]:
     """第二次调用的消息。复用 format_context，所以 [n] 仍指向**同一批** hits。
 
     历史同样只给问题：扩展段要解释的是这一轮的问题，而这一轮可能本身就是追问。
     """
-    desc = f"（{company} {year} 年年度报告）" if company or year else ""
+    desc = doc_desc(company, year, period)
     system = ANALYZE_SYSTEM_PROMPT.format(budget=config.ANALYZE_CHAR_BUDGET)
     user = (f"【年报片段】{desc}\n{format_context(chunks)}\n\n"
             f"{_history_block(history)}"
@@ -224,7 +225,8 @@ def clean_extension(first_answer: str, extension: str, n_chunks: int) -> tuple[s
 
 def analyze(question: str, chunks: list[dict], first_answer: str, client=None,
             company: str = "", year: str = "", usage_out: dict | None = None,
-            diag: dict | None = None, history: list[str] | None = None) -> str:
+            diag: dict | None = None, history: list[str] | None = None,
+            period: str = FY) -> str:
     """解释「为什么」。返回扩展段**正文**（不含小标题），没有可补充的返回空串。
 
     走流式，和 `generate` 保持一致：流式下 `timeout` 是「多久没收到数据」，而不是总时长。
@@ -238,7 +240,7 @@ def analyze(question: str, chunks: list[dict], first_answer: str, client=None,
     stream = client.chat.completions.create(
         model=config.LLM_MODEL,
         messages=build_analyze_messages(question, chunks, first_answer, company, year,
-                                        history),
+                                        history, period),
         temperature=0.1, stream=True, timeout=config.ANALYZE_TIMEOUT,
         max_tokens=config.ANALYZE_MAX_TOKENS,
         stream_options={"include_usage": True},

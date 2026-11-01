@@ -206,7 +206,7 @@ def test_load_or_build_writes_cache_and_rebuilds_on_version_change(tmp_path, mon
     (doc / "source.pdf").write_bytes(b"%PDF-fake")
     calls = []
 
-    def fake_extract(data):
+    def fake_extract(data, **kw):
         calls.append(data)
         return extract_from_lines([_lines(JINGDA)])
 
@@ -231,7 +231,7 @@ def test_load_or_build_caches_failure(tmp_path, monkeypatch):
     (tmp_path / "x").mkdir()
     (tmp_path / "x" / "source.pdf").write_bytes(b"%PDF-fake")
     calls = []
-    monkeypatch.setattr(financials, "extract", lambda data: calls.append(1) or None)
+    monkeypatch.setattr(financials, "extract", lambda data, **kw: calls.append(1) or None)
     assert financials.load_or_build("x") is None
     assert financials.load_or_build("x") is None
     assert len(calls) == 1

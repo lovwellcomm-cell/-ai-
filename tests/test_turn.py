@@ -311,13 +311,13 @@ def test_plan_switches_to_the_requested_year_when_local():
 
 def test_plan_imports_when_the_company_is_not_local():
     out = plan("贵州茅台", 2025)
-    assert out == {"action": "import", "company": "贵州茅台", "year": 2025}
+    assert out == {"action": "import", "company": "贵州茅台", "year": 2025, "period": "FY"}
 
 
 def test_plan_treats_a_bare_year_followup_as_the_current_company():
     """「那2024年呢？」没有公司名，但年份变了 —— 应该是当前公司的 2024 年报。"""
     out = plan("", 2024)
-    assert out == {"action": "import", "company": "精达股份", "year": 2024}
+    assert out == {"action": "import", "company": "精达股份", "year": 2024, "period": "FY"}
 
 
 def test_plan_switches_for_a_bare_year_followup_when_local():

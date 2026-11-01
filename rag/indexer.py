@@ -82,7 +82,7 @@ def default_embed(texts: list[str], batch_size: int = 16) -> np.ndarray:
 def build_index(doc_id: str, pdf_bytes: bytes, name: str, n_pages: int,
                 chunks: list[Chunk], embed: EmbedFn = default_embed,
                 company: str = "", year: str = "", demo: bool = False,
-                source_url: str = "", source_site: str = "") -> Path:
+                source_url: str = "", source_site: str = "", period: str = "FY") -> Path:
     d = doc_dir(doc_id)
     d.mkdir(parents=True, exist_ok=True)
     src = d / "source.pdf"
@@ -96,6 +96,9 @@ def build_index(doc_id: str, pdf_bytes: bytes, name: str, n_pages: int,
     meta = {"doc_id": doc_id, "name": name, "pages": n_pages, "chunks": len(chunks),
             "company": company, "year": year, "index_version": config.INDEX_VERSION,
             **({"demo": True} if demo else {})}
+    # 季报 / 半年报才写 period；没有这个键的老文档一律按年报理解（rag/periods.period_of）。
+    if period and period != "FY":
+        meta["period"] = period
     # 来源只在上传/导入时留痕；本地上传没有来源，就不写这两个键。
     if source_url:
         meta["source_url"] = source_url

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import re
 
+from rag.periods import FY, MONTHS, Q3, SHORT, SPAN
+
 # 指标卡随消息携带的字段。回合写进历史（ui/turn.py）和下发给组件（ui/payload.py）
 # 都按这份清单 —— 漏掉一处，卡片就会在回合结束时消失。
 CARD_KEYS = ("kpis", "charts", "cardTitle", "cardNote")
@@ -51,7 +53,7 @@ def _fmt(v: float) -> str:
 
 def _series(fin: dict, key: str) -> list[float] | None:
     item = fin["items"].get(key)
-    if not item:
+    if not item or any(y not in item["values"] for y in fin["years"]):
         return None
     return [item["values"][y] for y in reversed(fin["years"])]   # 旧 → 新
 
@@ -67,6 +69,17 @@ def _amount_kpi(fin: dict, key: str, label: str) -> dict | None:
     if change is not None:
         kpi["d"] = f"{abs(change):.2f}%"
         kpi["up"] = change >= 0
+    return kpi
+
+
+def _quarter_kpi(fin: dict, key: str, label: str) -> dict | None:
+    """三季报的单季数（7–9 月），增减用公司披露的单季同比。"""
+    q = (fin["items"].get(key) or {}).get("quarter")
+    if not q:
+        return None
+    div, unit = _scale_for([q["value"]])
+    kpi = {"k": label, "v": _fmt(q["value"] / div), "u": unit,
+           "d": f"{abs(q['change']):.2f}%", "up": q["change"] >= 0}
     return kpi
 
 
@@ -136,25 +149,43 @@ def _chart(fin: dict, key: str, title: str) -> dict | None:
     }
 
 
+def _note(fin: dict) -> str:
+    period = fin.get("period") or FY
+    if period == FY:
+        return f"程序抽取 · 年报第 {fin['page']} 页 · 已与披露增减核对"
+    check = "已与利润表、现金流量表核对" if period == Q3 else "已与披露增减核对"
+    audited = fin.get("audited")
+    audit = "未经审计" if audited is False else ("" if audited else "通常未经审计")
+    return " · ".join(x for x in (f"程序抽取 · {SHORT[period]}第 {fin['page']} 页", check, audit) if x)
+
+
 def build_card(fin: dict | None) -> dict | None:
-    """返回要合并到回合上的 {kpis, charts, cardTitle, cardNote}；数据不够时返回 None。"""
+    """返回要合并到回合上的 {kpis, charts, cardTitle, cardNote}；数据不够时返回 None。
+
+    年报：近三年。季报 / 半年报：本期与上年同期两根柱子；三季报的金额是「年初至今」（1–9 月），
+    另加两张单季（7–9 月）指标卡 —— 投资者看三季报最关心的往往是单季的拐点。
+    """
     if not fin or not fin.get("items"):
         return None
-    kpis = [k for k in (
+    period = fin.get("period") or FY
+    head = [
         _amount_kpi(fin, "revenue", "营业收入"),
         _amount_kpi(fin, "np_parent", "归母净利润"),
         _amount_kpi(fin, "np_deducted", "扣非净利润"),
         _amount_kpi(fin, "ocf", "经营现金流净额"),
-        _margin_kpi(fin),
-        _cash_kpi(fin),
-    ) if k]
+    ]
+    if period == Q3:
+        tail = [_quarter_kpi(fin, "revenue", "Q3 单季营收"),
+                _quarter_kpi(fin, "np_parent", "Q3 单季归母净利")]
+    else:
+        tail = [_margin_kpi(fin), _cash_kpi(fin)]
+    kpis = [k for k in head + tail if k]
     if len(kpis) < 2:
         return None
-    charts = [c for c in (_chart(fin, "revenue", "营业收入"),
-                          _chart(fin, "np_parent", "归母净利润")) if c]
-    return {
-        "kpis": kpis,
-        "charts": charts,
-        "cardTitle": f"主要会计数据 · {fin['years'][0]}",
-        "cardNote": f"程序抽取 · 年报第 {fin['page']} 页 · 已与披露增减核对",
-    }
+    span = "" if period == FY else f"（{MONTHS[period]}）"
+    charts = [c for c in (_chart(fin, "revenue", "营业收入" + span),
+                          _chart(fin, "np_parent", "归母净利润" + span)) if c]
+    title = f"主要会计数据 · {fin['years'][0]}"
+    if period != FY:
+        title += f" {SPAN[period]}"
+    return {"kpis": kpis, "charts": charts, "cardTitle": title, "cardNote": _note(fin)}

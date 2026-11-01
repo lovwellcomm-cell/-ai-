@@ -15,12 +15,13 @@ import json
 from typing import Any
 
 from rag.generator import cited_numbers
+from rag.periods import FY, SHORT, TITLE, period_of
 from ui.card import CARD_KEYS
 
 # 组件不做流式输出（Streamlit 的 rerun 模型做逐字流式会卡顿、闪烁），
 # 等待时间由这几档真实状态文案填补。
 STATUS_TEXT = {
-    "resolving": "正在查找年报…",
+    "resolving": "正在查找报告…",
     "retrieving": "检索相关片段…",
     "generating": "正在生成回答…",
     # 首轮回答已经显示出来了，这一步只是追加「为什么」的扩展分析
@@ -164,6 +165,9 @@ def build_data(
     pages = doc.get("pages") or 0
     chunks = doc.get("chunks") or 0
     who = f"{company} {year}".strip()
+    period = period_of(doc)
+    # 顶栏「精达股份 2026 三季报」；年报保持「精达股份 2025」
+    shown_year = f"{year} {SHORT[period]}" if year and period != FY else year
 
     return json_safe({
         "theme": "dark" if theme == "dark" else "light",
@@ -174,7 +178,7 @@ def build_data(
         "embedModel": embed_model,
         "cardTitle": card_title,
         "cardNote": card_note,
-        "heroEyebrow": f"{who} 年度报告 · 已建索引" if who else "年报已建索引",
+        "heroEyebrow": f"{who} {TITLE[period]} · 已建索引" if who else "报告已建索引",
         "heroFoot": (
             f"{pages} 页全文已切分为 {chunks} 个片段，章节、页码与报表名一并保留；"
             "提问优先检索当前选中的年报，问到别的公司时会先导入它的年报。"
@@ -182,7 +186,7 @@ def build_data(
         "placeholder": f"就《{name}》提问，例如：营业收入和归母净利润分别是多少？",
         "placeholderShort": "就当前年报提问，例如：营业收入是多少？",
         "doc": {
-            "company": company, "year": year, "name": name,
+            "company": company, "year": shown_year, "name": name,
             "pages": int(pages), "chunks": int(chunks),
             # 巨潮导入的文档在顶栏显示来源；本地上传没有这个字段
             "source": doc.get("source_site") or doc.get("source") or "",

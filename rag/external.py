@@ -23,6 +23,7 @@ import urllib.error
 import urllib.request
 
 from . import config
+from .periods import FY, TITLE
 from .generator import get_client, is_abstention
 
 SEARCH_URL = "https://api.deepseek.com/v1/tools/search"
@@ -315,8 +316,8 @@ def _assistant_turn(message) -> dict:
 
 
 def build_tool_messages(question: str, first_answer: str,
-                        company: str = "", year: str = "") -> list[dict]:
-    who = f"{company} {year} 年年度报告".strip()
+                        company: str = "", year: str = "", period: str = FY) -> list[dict]:
+    who = f"{company} {year} 年{TITLE.get(period, TITLE[FY])}".strip()
     head = f"【公司】{who}\n" if who else ""
     system = TOOL_SYSTEM_PROMPT.format(budget=config.WEB_CHAR_BUDGET)
     user = (f"{head}【问题】\n{question}\n\n"
@@ -369,7 +370,7 @@ def clean_external(first_answer: str, text: str, n_sources: int,
 
 def answer_with_tools(question: str, first_answer: str, *, client=None,
                       api_key: str = "", company: str = "", year: str = "",
-                      diag: dict | None = None) -> tuple[str, list[dict], dict]:
+                      diag: dict | None = None, period: str = FY) -> tuple[str, list[dict], dict]:
     """让模型决定调用哪些工具，返回 (补充段正文, 网页来源, 诊断信息)。
 
     失败一律降级成空串：首轮回答已经交付，外部补充不能让它作废。
@@ -384,7 +385,7 @@ def answer_with_tools(question: str, first_answer: str, *, client=None,
     sc = SearchClient(api_key)
     book = SourceBook()
     used = {"search": 0, "fetch": 0, "calc": 0}
-    messages = build_tool_messages(question, first_answer, company, year)
+    messages = build_tool_messages(question, first_answer, company, year, period)
     text = ""
     try:
         for round_no in range(config.WEB_TOOL_MAX_ROUNDS + 1):

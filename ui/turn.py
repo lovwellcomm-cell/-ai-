@@ -9,10 +9,14 @@ grep `advance_turn` 在 tests/ 里没有任何结果。
 """
 from __future__ import annotations
 
+from datetime import date
+
 from rag.company import normalize, same_company
 from rag.external import join_external, should_search
 from rag.fidelity import unverified_in_tables
 from rag.generator import join_answer, should_analyze
+from rag.periods import (FY, RANK, latest_quarter, latest_year, period_in, period_of,
+                         relative_year, wants_latest_quarter)
 from ui.card import CARD_KEYS
 
 
@@ -69,40 +73,78 @@ def history_entry(turn: dict, answer: str) -> dict:
     return entry
 
 
+def with_period(target: dict, question: str, today: date | None = None) -> dict:
+    """在模型识别出的 {company, year} 上补「期」：问的是年报、一季报、半年报还是三季报。
+
+    期用规则从问题里认，不交给模型：「前三季度」「上半年」「Q1」这些说法是封闭的，
+    规则比模型稳，也省一次调用。「去年三季度」里的相对年份顺带换算（模型不换算相对年份）；
+    「最新季报」没说哪一季 → 已过披露截止日的最近一期。
+    """
+    out = dict(target)
+    period = period_in(question)
+    year = out.get("year")
+    if year is None:
+        year = relative_year(question, today)
+    if period is None and wants_latest_quarter(question):
+        latest_y, period = latest_quarter(today)
+        year = year if year is not None else latest_y
+    out["year"] = year
+    out["period"] = period
+    return out
+
+
 def plan_resolution(target: dict, *, current_company: str = "", current_year: str = "",
-                    docs=()) -> dict:
+                    current_period: str = FY, docs=(), today: date | None = None) -> dict:
     """根据识别到的目标，决定这一轮用哪份文档。
 
     返回：
-      {"action": "current"}                    用当前选中的年报
-      {"action": "switch", "doc": meta}        本地已有这份年报，直接切换
-      {"action": "import", "company", "year"}  本地没有，需要去巨潮下载
-      {"action": "multiple"}                   一次问了多家，暂不支持
+      {"action": "current"}                              用当前选中的文档
+      {"action": "switch", "doc": meta}                  本地已有，直接切换
+      {"action": "import", "company", "year", "period"}  本地没有，需要去巨潮下载
+      {"action": "multiple"}                             一次问了多家，暂不支持
+
+    target["period"] 为 None 表示没提哪一期：年份没变就留在当前文档（在三季报上问
+    「营收怎么样」就答三季报），年份变了优先年报（「那 2024 年呢」→ 2024 年报）。
 
     纯函数：不读 session_state、不发请求，方便把“切错文档”这类错误挡在测试里。
     """
     company = (target.get("company") or "").strip()
     year = target.get("year")
+    period = target.get("period")
+    current_period = current_period or FY
     if target.get("multiple"):
         return {"action": "multiple"}
+    same_year = year is None or str(year) == str(current_year)
+    same_period = period is None or period == current_period
     if not company:
-        # 「那2024年呢？」这类追问没有公司名，但年份变了 —— 按当前公司理解。
-        if year is not None and current_company and str(year) != str(current_year):
+        # 「那2024年呢？」「一季度呢？」没有公司名，但年份或期变了 —— 按当前公司理解。
+        if current_company and not (same_year and same_period):
             company = current_company
         else:
             return {"action": "current"}
-    if same_company(company, current_company) and (
-            year is None or str(year) == str(current_year)):
+    here = same_company(company, current_company)
+    if here and same_year and same_period:
         return {"action": "current"}
+    if here and year is None and str(current_year).isdigit():
+        # 在 2026 三季报上问「一季度呢」：同一年的一季报，而不是最新的一季报。
+        year = int(current_year)
 
     candidates = [d for d in docs if same_company(d.get("company", ""), company)]
     if year is not None:
         candidates = [d for d in candidates if str(d.get("year", "")) == str(year)]
+    if period is not None:
+        candidates = [d for d in candidates if period_of(d) == period]
+        if year is None:
+            # 别的公司的「三季报」、没说年份：本地那份太旧就去巨潮拿最新的。
+            floor = latest_year(period, today)
+            candidates = [d for d in candidates
+                          if str(d.get("year", "")).isdigit() and int(d["year"]) >= floor]
     if candidates:
         best = max(candidates, key=lambda d: (str(d.get("year", "")),
+                                              RANK[period_of(d)],
                                               bool(d.get("demo"))))
         return {"action": "switch", "doc": best}
-    return {"action": "import", "company": company, "year": year}
+    return {"action": "import", "company": company, "year": year, "period": period or FY}
 
 
 def adopt_turn(turn: dict | None, doc_id: str):

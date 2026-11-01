@@ -1,0 +1,91 @@
+"""定期报告的「期」：问题里问的是哪一期，以及据此切换到哪份文档（rag/periods.py、ui/turn.py）。"""
+from datetime import date
+
+import pytest
+
+from rag import periods
+from ui.turn import plan_resolution, with_period
+
+
+TODAY = date(2026, 11, 2)
+QDOCS = [
+    {"doc_id": "fy25", "company": "精达股份", "year": "2025"},
+    {"doc_id": "q3", "company": "精达股份", "year": "2026", "period": "Q3"},
+    {"doc_id": "q1", "company": "精达股份", "year": "2026", "period": "Q1"},
+    {"doc_id": "mt24q3", "company": "贵州茅台", "year": "2024", "period": "Q3"},
+]
+
+
+def qplan(question, company="", year=None, cur_year="2026", cur_period="Q3"):
+    tgt = with_period({"company": company, "year": year, "multiple": False}, question, TODAY)
+    return plan_resolution(tgt, current_company="精达股份", current_year=cur_year,
+                           current_period=cur_period, docs=QDOCS, today=TODAY)
+
+
+@pytest.mark.parametrize("q, want", [
+    ("2026年前三季度营收", "Q3"), ("三季报利润怎么样", "Q3"), ("Q3 毛利率", "Q3"),
+    ("1-9月现金流", "Q3"), ("上半年业绩", "H1"), ("中报怎么说", "H1"),
+    ("二季度营收", "H1"), ("一季度净利润", "Q1"), ("第一季度怎么样", "Q1"),
+    ("2025年报营收", "FY"), ("四季度收入", "FY"), ("全年业绩", "FY"),
+    ("这份年报里营收多少", None), ("营收怎么样", None), ("去年同期呢", None),
+])
+def test_period_in(q, want):
+    assert periods.period_in(q) == want
+
+
+def test_relative_year_only_next_to_a_period():
+    assert periods.relative_year("去年三季度营收", TODAY) == 2025
+    assert periods.relative_year("今年一季报", TODAY) == 2026
+    assert periods.relative_year("和去年同期相比", TODAY) is None
+
+
+def test_latest_quarter_respects_disclosure_deadlines():
+    assert periods.latest_quarter(date(2026, 11, 2)) == (2026, "Q3")
+    assert periods.latest_quarter(date(2026, 10, 20)) == (2026, "H1")
+    assert periods.latest_quarter(date(2026, 3, 1)) == (2025, "Q3")
+    assert periods.latest_year("FY", date(2026, 3, 1)) == 2024
+    assert periods.latest_year("FY", date(2026, 5, 1)) == 2025
+
+
+def test_detect_period_from_cover():
+    assert periods.detect("铜陵精达 2026 年第三季度报告") == ("2026", "Q3")
+    assert periods.detect("2026年半年度报告全文") == ("2026", "H1")
+    assert periods.detect("2025 年年度报告") == ("2025", "FY")
+
+
+def test_question_without_period_stays_on_the_quarterly_doc():
+    assert qplan("营收怎么样")["action"] == "current"
+    assert qplan("这份年报里营收多少")["action"] == "current"
+
+
+def test_other_quarter_of_the_same_year():
+    """在 2026 三季报上问「一季度呢」→ 2026 一季报，而不是别的年份。"""
+    out = qplan("那一季度呢")
+    assert out["action"] == "switch" and out["doc"]["doc_id"] == "q1"
+
+
+def test_half_year_of_same_year_is_imported():
+    assert qplan("上半年怎么样") == {"action": "import", "company": "精达股份",
+                                    "year": 2026, "period": "H1"}
+
+
+def test_bare_year_followup_prefers_the_annual_report():
+    """在三季报上问「那2025年呢」：2025 年本地有年报，就用年报。"""
+    out = qplan("那2025年呢", year=2025)
+    assert out["action"] == "switch" and out["doc"]["doc_id"] == "fy25"
+
+
+def test_annual_doc_asks_for_quarter():
+    out = qplan("三季度业绩", cur_year="2025", cur_period="FY")
+    assert out == {"action": "import", "company": "精达股份", "year": 2025, "period": "Q3"}
+
+
+def test_other_company_stale_local_quarter_is_not_reused():
+    """本地只有茅台 2024 三季报，问「茅台三季报」应去拿已披露的最新一期，而不是用旧的。"""
+    out = qplan("茅台三季报", company="茅台")
+    assert out == {"action": "import", "company": "茅台", "year": None, "period": "Q3"}
+
+
+def test_latest_quarter_question():
+    tgt = with_period({"company": "", "year": None, "multiple": False}, "最新季报怎么样", TODAY)
+    assert tgt["period"] == "Q3" and tgt["year"] == 2026
