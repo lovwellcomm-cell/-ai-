@@ -11,11 +11,17 @@
     <button class="iconbtn menu-only" id="menuBtn" type="button" aria-label="打开文档栏">
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
     </button>
-    <div class="ctx">
-      <i class="ctx-dot"></i>
-      <span class="ctx-co" id="ctxCo"></span>
-      <span class="ctx-src" id="ctxSrc" hidden></span>
-      <span class="ctx-meta mono" id="ctxMeta"></span>
+    <!-- 当前报告：点开是这家公司已导入的各年度 / 各期报告（内容由 chat.js 构建） -->
+    <div class="ctx-wrap">
+      <button class="ctx" id="ctxBtn" type="button" aria-haspopup="menu" aria-expanded="false"
+              aria-controls="ctxPop" title="切换年份 / 报告期">
+        <i class="ctx-dot"></i>
+        <span class="ctx-co" id="ctxCo"></span>
+        <span class="ctx-src" id="ctxSrc" hidden></span>
+        <span class="ctx-meta mono" id="ctxMeta"></span>
+        <i class="ctx-caret" aria-hidden="true"></i>
+      </button>
+      <div class="ctx-pop" id="ctxPop" role="menu" hidden></div>
     </div>
     <div class="spacer"></div>
     <button class="iconbtn new-chat" id="newChatBtn" type="button" aria-label="新对话"

@@ -100,6 +100,61 @@ export default function (component) {
   ctxSrc.textContent = doc.source || "";
   ctxSrc.hidden = !doc.source;
   q("#ctxMeta").textContent = doc.pages ? doc.pages + " 页 · " + doc.chunks + " 片段" : "";
+
+  /* 顶栏下拉：这家公司已导入的报告，按年份分组。侧边栏只列公司，年份和报告期在这里切。
+     切换只换「依据哪份报告」，对话不断 —— 同一家公司共用一段对话。 */
+  const ctxBtn = q("#ctxBtn");
+  const ctxPop = q("#ctxPop");
+  const reports = Array.isArray(d.reports) ? d.reports : [];
+  const nReports = reports.reduce((n, g) => n + ((g.items || []).length), 0);
+  const setPop = (open) => {
+    ctxPop.hidden = !open;
+    ctxBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    ctxBtn.classList.toggle("open", open);
+  };
+  ctxBtn.classList.toggle("has-menu", nReports > 0);
+  ctxBtn.disabled = nReports === 0;
+  clear(ctxPop);
+  if (nReports) {
+    const head = mk("div", "pop-head");
+    head.appendChild(mk("span", "pop-title", doc.company || "当前公司"));
+    head.appendChild(mk("span", "pop-sub", "已导入 " + nReports + " 份报告"));
+    ctxPop.appendChild(head);
+    reports.forEach((g) => {
+      const row = mk("div", "pop-row");
+      row.appendChild(mk("span", "pop-year", String(g.year || "")));
+      const chips = mk("div", "pop-chips");
+      (g.items || []).forEach((it) => {
+        const b = mk("button", "pop-chip" + (it.current ? " on" : ""), it.label);
+        b.type = "button";
+        b.setAttribute("role", "menuitemradio");
+        b.setAttribute("aria-checked", it.current ? "true" : "false");
+        // 生成中不让切：回合挂在当前文档上，中途换文档会把进行中的回答丢掉
+        b.disabled = !!d.busy && !it.current;
+        b.onclick = () => {
+          setPop(false);
+          if (!it.current) setTriggerValue("pick_doc", { id: it.id, at: Date.now() });
+        };
+        chips.appendChild(b);
+      });
+      row.appendChild(chips);
+      ctxPop.appendChild(row);
+    });
+    ctxPop.appendChild(mk("div", "pop-foot", "要别的年份或季度，直接在对话里问，例如「去年三季度怎么样」"));
+  } else {
+    setPop(false);
+  }
+  ctxBtn.onclick = (e) => { e.stopPropagation(); setPop(ctxPop.hidden); };
+  // 点下拉以外的地方、按 Esc 收起。监听只挂一次（组件每次渲染都会重跑这个函数）。
+  if (!root._ctxPopBound) {
+    root._ctxPopBound = true;
+    root.addEventListener("click", (e) => {
+      if (!ctxPop.hidden && !e.target.closest(".ctx-wrap")) setPop(false);
+    });
+    root.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !ctxPop.hidden) { setPop(false); ctxBtn.focus(); }
+    });
+  }
   q("#docChipText").textContent = doc.name || "";
   // 窄屏放不下长占位符，换成短句，免得被截断
   const setPlaceholder = () => {

@@ -197,3 +197,50 @@ class TestBuildData:
         import json
         data = payload.build_data(doc={}, messages=[payload.ai_message({"q": "q", "a": "a"})])
         json.dumps(data)  # 不应抛异常
+
+
+# ---------------------------------------------------------------- 顶栏下拉 / 侧边栏按公司
+
+from ui.turn import company_groups, pick_for_company  # noqa: E402
+
+MENU_DOCS = [
+    {"doc_id": "jd25", "company": "精达股份", "year": "2025"},
+    {"doc_id": "jd26q3", "company": "精达股份", "year": "2026", "period": "Q3"},
+    {"doc_id": "jd26q1", "company": "精达股份", "year": "2026", "period": "Q1"},
+    {"doc_id": "qpl25", "company": "七匹狼", "year": "2025"},
+    {"doc_id": "up", "company": "", "name": "某报告.pdf"},
+]
+
+
+def test_report_menu_groups_by_year_for_the_current_company():
+    menu = payload.report_menu(MENU_DOCS, {"doc_id": "jd26q3", "company": "精达股份",
+                                           "year": "2026", "period": "Q3"})
+    assert menu == [
+        {"year": "2026", "items": [{"id": "jd26q1", "label": "一季报", "current": False},
+                                   {"id": "jd26q3", "label": "三季报", "current": True}]},
+        {"year": "2025", "items": [{"id": "jd25", "label": "年报", "current": False}]},
+    ]
+
+
+def test_report_menu_for_a_doc_without_company_lists_only_itself():
+    menu = payload.report_menu(MENU_DOCS, MENU_DOCS[-1])
+    assert [g["items"][0]["id"] for g in menu] == ["up"]
+
+
+def test_company_groups_one_row_per_company():
+    groups = company_groups(MENU_DOCS)
+    assert [g["label"] for g in groups] == ["精达股份", "七匹狼", "某报告.pdf"]
+    assert len(groups[0]["docs"]) == 3
+
+
+def test_pick_for_company_prefers_last_viewed_then_newest():
+    jd = company_groups(MENU_DOCS)[0]["docs"]
+    assert pick_for_company(jd, "jd25")["doc_id"] == "jd25"
+    assert pick_for_company(jd)["doc_id"] == "jd26q3"           # 2026 年里三季报最新
+    assert pick_for_company(jd, "gone")["doc_id"] == "jd26q3"
+
+
+def test_build_data_carries_the_menu():
+    data = payload.build_data(doc={"company": "精达股份", "year": "2025"}, messages=[],
+                              reports=[{"year": "2025", "items": []}])
+    assert data["reports"] == [{"year": "2025", "items": []}]

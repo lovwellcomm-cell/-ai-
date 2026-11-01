@@ -34,6 +34,29 @@ def conversation_key(doc: dict) -> str:
     return f"co:{name}" if name else f"doc:{doc.get('doc_id', '')}"
 
 
+def company_groups(docs) -> list[dict]:
+    """侧边栏每家公司一行：[{"key", "label", "docs"}]，按每家公司第一次出现的顺序。
+
+    分组键和对话分段用同一个（conversation_key），所以「点公司」和「这段对话」一一对应。
+    抽不出公司名的上传文档各自成一行，显示文件名。
+    """
+    groups: dict[str, dict] = {}
+    for d in docs:
+        key = conversation_key(d)
+        g = groups.setdefault(key, {"key": key, "label": d.get("company") or d.get("name", ""),
+                                    "docs": []})
+        g["docs"].append(d)
+    return list(groups.values())
+
+
+def pick_for_company(group_docs: list[dict], last_id: str | None = None) -> dict:
+    """点公司时切到哪份：上次在这家公司看的那份；没有就最新一期（年份大，同年年报优先）。"""
+    for d in group_docs:
+        if d.get("doc_id") == last_id:
+            return d
+    return max(group_docs, key=lambda d: (str(d.get("year", "")), RANK[period_of(d)]))
+
+
 def history_entry(turn: dict, answer: str) -> dict:
     """一轮完成时写进 history 的形状。
 

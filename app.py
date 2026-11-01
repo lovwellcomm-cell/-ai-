@@ -363,11 +363,17 @@ with st.sidebar:
     if docs:
         if st.session_state.get("doc_id") not in docs:
             st.session_state.doc_id = next(iter(docs))
-        st.markdown("**报告文档**")
-        for did, d in docs.items():
-            if st.button(doc_label(d), key=f"doc-{did}", use_container_width=True,
-                         type="primary" if did == st.session_state.doc_id else "secondary"):
-                st.session_state.doc_id = did
+        # 每家公司一行；年份和报告期在对话框顶栏的下拉里切换。
+        # 点公司回到上次在这家公司看的那份报告（last_doc 按对话键记）。
+        last_doc = st.session_state.setdefault("last_doc", {})
+        cur_key = turn_core.conversation_key(docs[st.session_state.doc_id])
+        last_doc[cur_key] = st.session_state.doc_id
+        st.markdown("**公司**")
+        for g in turn_core.company_groups(docs.values()):
+            if st.button(g["label"], key=f"co-{g['key']}", use_container_width=True,
+                         type="primary" if g["key"] == cur_key else "secondary"):
+                target_doc = turn_core.pick_for_company(g["docs"], last_doc.get(g["key"]))
+                st.session_state.doc_id = target_doc["doc_id"]
                 st.session_state.pop("page", None)
                 st.rerun()
         cur = docs.get(st.session_state.get("doc_id"))
@@ -446,6 +452,7 @@ result = chat_surface(
         hint=quota_hint(),
         model=config.LLM_MODEL,
         embed_model=config.EMBED_MODEL,
+        reports=payload.report_menu(docs.values(), meta),
     ),
     key="chat",
 )
@@ -705,6 +712,14 @@ if result.ask and not busy:
             # 行业动态走另一条路：联网检索成文，不做年报回答 + 扩展
             **({"kind": "industry"} if wants_industry(text) else {}),
         }
+        st.rerun()
+
+# 顶栏下拉里选了同一家公司的另一份报告：只换依据的文档，对话不断（同一个对话键）。
+if getattr(result, "pick_doc", None) and isinstance(result.pick_doc, dict) and not busy:
+    picked = str(result.pick_doc.get("id") or "")
+    if picked in docs and picked != doc_id:
+        st.session_state.doc_id = picked
+        st.session_state.pop("page", None)
         st.rerun()
 
 if result.open_page and isinstance(result.open_page, dict):

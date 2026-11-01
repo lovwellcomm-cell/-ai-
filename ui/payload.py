@@ -15,8 +15,9 @@ import json
 from typing import Any
 
 from rag.generator import cited_numbers
-from rag.periods import FY, SHORT, TITLE, period_of
+from rag.periods import FY, RANK, SHORT, TITLE, period_of
 from ui.card import CARD_KEYS
+from ui.turn import conversation_key
 
 # 组件不做流式输出（Streamlit 的 rerun 模型做逐字流式会卡顿、闪烁），
 # 等待时间由这几档真实状态文案填补。
@@ -139,6 +140,28 @@ def build_messages(history: list[dict], turn: dict | None = None, page: dict | N
     return messages
 
 
+def report_menu(docs, current: dict) -> list[dict]:
+    """顶栏下拉：当前公司已导入的报告，按年份分组（新 → 旧），同一年按一季报 → 年报排。
+
+    [{"year": "2026", "items": [{"id", "label": "三季报", "current": True}, …]}, …]
+    「同一公司」用和对话分段一样的键（ui/turn.conversation_key），保证下拉里列的
+    正好是这段对话能切过去的那些报告。
+    """
+    key = conversation_key(current)
+    mine = [d for d in docs if conversation_key(d) == key]
+    groups: dict[str, list[dict]] = {}
+    for d in sorted(mine, key=lambda d: (str(d.get("year", "")), RANK[period_of(d)]),
+                    reverse=True):
+        groups.setdefault(str(d.get("year") or "—"), []).append(d)
+    return [
+        {"year": year,
+         "items": [{"id": d["doc_id"], "label": SHORT[period_of(d)],
+                    "current": d["doc_id"] == current.get("doc_id")}
+                   for d in sorted(items, key=lambda d: RANK[period_of(d)])]}
+        for year, items in groups.items()
+    ]
+
+
 def json_safe(payload: dict) -> dict:
     """组件桥走 JSON。一旦 payload 里有 set / Path / numpy 标量 / datetime 之类，
     Streamlit 的兜底是把整个 data 静默变成一段 Python repr 字符串 ——
@@ -159,6 +182,7 @@ def build_data(
     embed_model: str = "",
     card_title: str = "主要会计数据",
     card_note: str = "演示数据 · 非年报原文",
+    reports: list[dict] | None = None,
 ) -> dict:
     """组装下发给组件的完整 data。"""
     company = doc.get("company") or ""
@@ -194,4 +218,6 @@ def build_data(
             "source": doc.get("source_site") or doc.get("source") or "",
         },
         "messages": messages,
+        # 顶栏下拉：这家公司已导入的各年度、各期报告（report_menu 的输出）
+        "reports": reports or [],
     })
