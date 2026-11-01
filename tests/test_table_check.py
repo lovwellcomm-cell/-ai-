@@ -67,6 +67,25 @@ def test_unit_in_header_applies_to_bare_numbers():
     assert check["unverified"] == ["9.99", "增加7.00"]
 
 
+def test_unit_in_row_name_applies_to_bare_numbers():
+    """线上实测：模型把单位写进行名「营业收入（亿元）」，单元格只写 246.74。
+
+    修之前 246.74 被当成 246.74 元，标成了「未核对」—— 一个对的数字被误报。
+    """
+    ans = ("| 项目 | 2025年 | 2024年 | 来源 |\n|---|---|---|---|\n"
+           "| 营业收入（亿元） | 246.74 | 223.23 | [1] |\n"
+           "| 归母净利润（亿元） | 5.99 | 8.88 | [1] |\n")
+    assert unverified_in_tables(ans, HITS)["unverified"] == ["8.88"]
+
+
+def test_header_unit_wins_over_row_unit():
+    """「同比（%）」列下的数字是百分比，哪怕行名写着亿元。"""
+    ans = ("| 项目 | 2025年（亿元） | 同比（%） |\n|---|---|---|\n"
+           "| 营业收入（亿元） | 246.74 | 10.53 |\n")
+    check = unverified_in_tables(ans, HITS)
+    assert check == {"numbers": 2, "unverified": []}
+
+
 def test_header_unit_is_not_forced_onto_mixed_cells():
     """单元格已经自带单位或混着别的文字时，不套表头单位。"""
     cells = table_cells("| 项目 | 金额（亿元） |\n|---|---|\n| 营业收入 | 约 246.74 亿元 |\n| 年份 | 2025年 |")

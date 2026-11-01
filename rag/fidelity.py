@@ -262,7 +262,7 @@ def table_cells(answer: str) -> list[tuple[str, str]]:
       里面的数字是名字的一部分，不是财务数据。
     · 表头写了单位（「金额（亿元）」）而单元格只有裸数字（「23.88」）时，核对用的文本
       补上单位（「23.88亿元」）。不补的话 23.88 会被当成 23.88 元去找出处，只能靠推导
-      规则碰运气。
+      规则碰运气。单位写在行名里（「营业收入（亿元）」）同理；两处都写时以表头为准。
     """
     out: list[tuple[str, str]] = []
     block: list[str] = []
@@ -278,10 +278,14 @@ def table_cells(answer: str) -> list[tuple[str, str]]:
         for line in rows:
             if _SEPARATOR_RE.match(line):
                 continue
-            for j, cell in enumerate(_split_row(line)):
+            cols = _split_row(line)
+            # 行名里的单位：「营业收入（亿元） | 246.74 | 223.23」—— 线上实测模型也会这么写
+            row_unit = (m.group(1) if cols and (m := _HEAD_UNIT_RE.search(cols[0])) else "")
+            for j, cell in enumerate(cols):
                 if j == 0:
                     continue
-                unit = units[j] if j < len(units) else ""
+                # 表头单位优先：「同比（%）」列下的数字是百分比，哪怕行名写着亿元
+                unit = (units[j] if j < len(units) else "") or row_unit
                 check = cell
                 bare = _BARE_CELL_RE.match(_CITE_RE.sub("", cell).strip())
                 if unit and bare:
