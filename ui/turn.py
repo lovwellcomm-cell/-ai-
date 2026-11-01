@@ -9,10 +9,24 @@ grep `advance_turn` 在 tests/ 里没有任何结果。
 """
 from __future__ import annotations
 
-from rag.company import same_company
+from rag.company import normalize, same_company
 from rag.external import join_external, should_search
 from rag.generator import join_answer, should_analyze
 from ui.card import CARD_KEYS
+
+
+def conversation_key(doc: dict) -> str:
+    """一段对话属于谁：同一家公司的不同年度年报共用一段对话。
+
+    「七匹狼 2024」和「七匹狼 2025」→ 同一个键，问完 2025 再问「那 2024 年呢」时
+    对话接着往下走，而不是跳到另一段空白对话。公司名去掉「股份」「集团」等后缀再比，
+    抽不出公司名的上传文档退回按文档 id 单独成段。
+
+    这里刻意用**精确**的规范化名而不是 `same_company` 的模糊匹配：模糊匹配的结果
+    依赖当时有哪些文档，新导入一份年报就可能让键变掉，整段对话凭空消失。
+    """
+    name = normalize(doc.get("company", ""))
+    return f"co:{name}" if name else f"doc:{doc.get('doc_id', '')}"
 
 
 def history_entry(turn: dict, answer: str) -> dict:
@@ -36,6 +50,9 @@ def history_entry(turn: dict, answer: str) -> dict:
         entry["analyze_error"] = turn["analyze_error"]
     if turn.get("web_error"):
         entry["web_error"] = turn["web_error"]
+    # 依据的是哪份年报：同一公司多个年度共用一段对话后，翻原页、标注年份都要靠它。
+    if turn.get("doc_id"):
+        entry["doc_id"] = turn["doc_id"]
     # 自动导入的提示要跟着回答保留下来；没有就不写键，保持旧条目形状不变。
     if turn.get("notice"):
         entry["notice"] = turn["notice"]

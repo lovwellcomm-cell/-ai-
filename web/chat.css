@@ -220,6 +220,8 @@
   font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .08em;
   padding: 2px 6px; border-radius: 5px; border: 1px solid var(--line); color: var(--ink-3);
 }
+/* 跨年度对话里，标出这条回答依据的年报：用强调色，和普通标签区分开 */
+.tag.doc-tag { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); letter-spacing: .02em; }
 .prose { display: flex; flex-direction: column; gap: 12px; font-size: 14.5px; line-height: 1.78; }
 .prose p { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .prose strong { font-weight: 600; }

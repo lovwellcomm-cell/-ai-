@@ -12,7 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rag.generator import ABSTAIN_MARK, EXTENSION_HEADING  # noqa: E402
-from ui.turn import adopt_turn, history_entry, plan_resolution, step  # noqa: E402
+from ui.turn import (adopt_turn, conversation_key, history_entry,  # noqa: E402
+                     plan_resolution, step)
 
 TURN = {"q": "毛利率为什么变", "status": "generating", "doc_id": "d1",
         "hits": [{"text": "x"}], "queries": ["q1"], "counted": False}
@@ -200,7 +201,8 @@ def test_step_does_not_mutate_the_input_turn():
 
 def test_history_entry_shape():
     e = history_entry(dict(TURN, analyze="ok"), "回答")
-    assert set(e) == {"q", "a", "hits", "queries", "analyze", "web", "web_sources"}
+    assert set(e) == {"q", "a", "hits", "queries", "analyze", "web", "web_sources", "doc_id"}
+    assert e["doc_id"] == "d1"
     assert e["a"] == "回答" and e["analyze"] == "ok"
     assert e["web"] == "" and e["web_sources"] == []
 
@@ -217,6 +219,27 @@ def test_history_entry_defaults_analyze_when_absent():
 def test_history_entry_keeps_the_notice():
     e = history_entry(dict(TURN, notice="已自动导入《七匹狼 2025 年报》"), "回答")
     assert e["notice"] == "已自动导入《七匹狼 2025 年报》"
+
+
+def test_history_entry_without_doc_id_keeps_old_shape():
+    turn = {k: v for k, v in TURN.items() if k != "doc_id"}
+    assert "doc_id" not in history_entry(turn, "回答")
+
+
+def test_same_company_different_years_share_a_conversation():
+    """七匹狼 2024 / 2025 同一段对话；「七匹狼股份」这种带后缀的写法也算同一家。"""
+    a = conversation_key({"doc_id": "x1", "company": "七匹狼", "year": "2024"})
+    b = conversation_key({"doc_id": "x2", "company": "七匹狼", "year": "2025"})
+    c = conversation_key({"doc_id": "x3", "company": "七匹狼股份", "year": "2023"})
+    assert a == b == c
+
+
+def test_different_companies_and_unknown_company_stay_separate():
+    assert conversation_key({"doc_id": "a", "company": "精达股份"}) != \
+        conversation_key({"doc_id": "b", "company": "时代新材"})
+    # 抽不出公司名的上传文档各自一段，不能全部挤进同一个「空公司」对话
+    assert conversation_key({"doc_id": "u1", "company": ""}) != \
+        conversation_key({"doc_id": "u2", "company": ""})
 
 
 def test_history_entry_keeps_the_card():

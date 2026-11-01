@@ -21,8 +21,19 @@ _WANTS_RE = re.compile(
 _OTHER_RE = re.compile(r"客户|供应商|研发|员工|人员|股东|分红|董事|高管|诉讼|担保|募集|专利|产能|门店")
 
 
-def wants_card(question: str) -> bool:
-    q = question or ""
+# 「那2024年呢？」「去年呢」这类短追问本身不带话题，话题跟着上一问走。
+_FOLLOWUP_RE = re.compile(r"^(那|那么)?.{0,8}(呢|如何|怎样|怎么样)[？?]?$")
+
+
+def wants_card(question: str, previous: list[str] | tuple[str, ...] = ()) -> bool:
+    """这一问要不要出指标卡。previous 是同一段对话里此前的问题（旧 → 新）。"""
+    q = (question or "").strip()
+    # 只换了年份/口径的短追问：话题跟着前文走（前面问客户，「那2023年怎么样」也是问客户）。
+    # 连续追问（「那2024年呢」→「那2023年呢」）要一直往回找到最近一个有话题的问题。
+    # 换到另一年的年报时，卡片就是那一年的。
+    if previous and _FOLLOWUP_RE.match(q):
+        *earlier, last = previous
+        return wants_card(last, earlier)
     if _OTHER_RE.search(q) and not re.search(r"营收|收入|利润|现金流|财务|业绩", q):
         return False
     return bool(_WANTS_RE.search(q))

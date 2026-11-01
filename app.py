@@ -374,7 +374,7 @@ with st.sidebar:
     elif not config.DEEPSEEK_API_KEY:
         st.warning("未检测到 DEEPSEEK_API_KEY，请在 .env 中配置。")
     st.caption("提问优先检索上方选中的年报；问到别的公司时，助手会先去找它的年报。"
-               "切换年报不会丢失各自的对话。")
+               "同一家公司不同年度的年报共用一段对话，切换年份时对话接着往下走。")
     st.caption("若侧边栏显示异常，请关闭浏览器的“翻译此页”后刷新。")
 
 if not docs:
@@ -385,14 +385,18 @@ doc_id = st.session_state.doc_id
 meta, retriever = get_retriever(doc_id, config.INDEX_VERSION, SOURCE_STAMP)
 meta = dict(meta)
 meta["doc_id"] = doc_id
-history = st.session_state.setdefault("histories", {}).setdefault(doc_id, [])
+# 对话按公司存放：同一家公司不同年度的年报共用一段对话（见 turn_core.conversation_key），
+# 问完 2025 再问「那 2024 年呢」时对话接着往下走。每条历史自己记着依据的是哪份年报。
+conv_key = turn_core.conversation_key(meta)
+history = st.session_state.setdefault("histories", {}).setdefault(conv_key, [])
 
 # 进行中的回合。切换年报就丢弃，避免状态串到另一份文档上 ——
-# 但如果扩展分析阶段的首轮回答已经产出，用户已经看到了，先把那半段落进原文档的历史。
+# 但如果扩展分析阶段的首轮回答已经产出，用户已经看到了，先把那半段落进原文档所在的对话。
 turn, orphan = turn_core.adopt_turn(st.session_state.get("turn"), doc_id)
 if orphan is not None:
     old_id, entry = orphan
-    st.session_state["histories"].setdefault(old_id, []).append(entry)
+    old_key = turn_core.conversation_key(docs.get(old_id) or {"doc_id": old_id})
+    st.session_state["histories"].setdefault(old_key, []).append(entry)
 if turn is None:
     st.session_state.pop("turn", None)
 
@@ -420,7 +424,8 @@ def quota_hint() -> str:
 # 错误态不算「忙」，否则失败后用户会被卡住无法重新提问
 busy = bool(turn) and turn.get("status") != "error"
 page = st.session_state.get("page")
-messages = payload.build_messages(history, turn, page=page)
+messages = payload.build_messages(history, turn, page=page,
+                                  doc_labels={did: doc_label(d) for did, d in docs.items()})
 result = chat_surface(
     payload.build_data(
         doc=meta,
@@ -579,7 +584,7 @@ def advance_turn() -> None:
         target["queries"] = queries
         # 问到营收、利润、现金流这类方向时，附上程序抽取的指标卡。
         # 抽取失败只记在回合上 —— 卡片是锦上添花，不能拖垮回答本身。
-        if wants_card(target["q"]):
+        if wants_card(target["q"], previous=recent):
             try:
                 card = build_card(get_financials(doc_id, SOURCE_STAMP))
             except Exception as e:
@@ -633,13 +638,14 @@ def advance_turn() -> None:
 
 
 # ---------- 来自组件的事件 ----------
-# 新对话：清掉当前文档的对话，保留文档和索引；生成中的一轮如果还没产出回答，退还额度。
+# 新对话：清掉当前这家公司的对话（各年度共用一段），保留文档和索引；
+# 生成中的一轮如果还没产出回答，退还额度。
 if getattr(result, "new_chat", None):
     pending = st.session_state.get("turn")
     if pending and pending.get("counted") and not pending.get("a"):
         refund(pending)
     st.session_state.pop("turn", None)
-    st.session_state["histories"][doc_id] = []
+    st.session_state["histories"][conv_key] = []
     st.session_state.pop("page", None)
     st.session_state["chat_warn"] = ""
     st.rerun()
@@ -672,11 +678,15 @@ if result.ask and not busy:
 
 if result.open_page and isinstance(result.open_page, dict):
     n = int(result.open_page.get("n") or 1)
-    hits = history[-1].get("hits") if history else None
-    if hits and 1 <= n <= len(hits):
+    last = history[-1] if history else {}
+    hits = last.get("hits")
+    # 原页要从**这条回答依据的那份年报**里渲染：同一段对话可能跨年度，
+    # 用户问完 2025 再在侧边栏切到 2024，最后一条回答的引用仍然是 2025 年报的页码。
+    source_doc = last.get("doc_id") or doc_id
+    if hits and 1 <= n <= len(hits) and source_doc in docs:
         try:
             st.session_state["page"] = {
-                "n": n, "png": page_data_uri(doc_id, int(hits[n - 1]["page_start"]), SOURCE_STAMP),
+                "n": n, "png": page_data_uri(source_doc, int(hits[n - 1]["page_start"]), SOURCE_STAMP),
             }
         except Exception:
             st.session_state["page"] = None

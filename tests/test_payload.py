@@ -116,6 +116,32 @@ class TestBuildMessages:
         history = [{"q": "问", "a": "答", "hits": [_hit(1)], "queries": []}]
         assert "page" not in payload.build_messages(history, None)[-1]
 
+    LABELS = {"y25": "七匹狼 2025", "y24": "七匹狼 2024"}
+
+    def test_cross_year_conversation_labels_each_answer_with_its_report(self):
+        """同一公司跨年度的一段对话：每条回答都标出依据的年报，包括进行中的那一轮。"""
+        history = [{"q": "利润率怎么变", "a": "答", "hits": [], "queries": [], "doc_id": "y25"}]
+        turn = {"q": "那2024年呢", "status": "generating", "doc_id": "y24"}
+        ai = [m for m in payload.build_messages(history, turn, doc_labels=self.LABELS)
+              if m["role"] == "ai"]
+        assert [m["docLabel"] for m in ai] == ["七匹狼 2025", "七匹狼 2024"]
+
+    def test_single_report_conversation_has_no_labels(self):
+        """只问过一份年报时不挂标签，免得每条回答都重复一遍当前年报名。"""
+        history = [{"q": "问1", "a": "答", "hits": [], "queries": [], "doc_id": "y25"},
+                   {"q": "问2", "a": "答", "hits": [], "queries": [], "doc_id": "y25"}]
+        msgs = payload.build_messages(history, None, doc_labels=self.LABELS)
+        assert all("docLabel" not in m for m in msgs)
+
+    def test_old_entries_without_doc_id_are_left_unlabelled(self):
+        history = [{"q": "旧", "a": "答", "hits": [], "queries": []},
+                   {"q": "新", "a": "答", "hits": [], "queries": [], "doc_id": "y25"},
+                   {"q": "新2", "a": "答", "hits": [], "queries": [], "doc_id": "y24"}]
+        ai = [m for m in payload.build_messages(history, None, doc_labels=self.LABELS)
+              if m["role"] == "ai"]
+        assert "docLabel" not in ai[0]
+        assert ai[1]["docLabel"] == "七匹狼 2025" and ai[2]["docLabel"] == "七匹狼 2024"
+
 
 class TestJsonSafe:
     def test_nested_payload_survives_round_trip(self):

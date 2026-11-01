@@ -106,6 +106,29 @@ def test_wants_card_for_financial_questions(q):
     assert wants_card(q)
 
 
+@pytest.mark.parametrize("q", ["那2024年呢？", "去年呢", "那么2023年怎么样"])
+def test_short_followup_inherits_the_previous_topic(q):
+    """「那2024年呢」本身不带话题：上一问在问利润，这一问也该出（那一年的）卡。"""
+    assert wants_card(q, previous=["七匹狼利润率变化如何？"])
+    assert not wants_card(q, previous=["前五大客户集中度如何？"])
+
+
+def test_chained_followups_keep_the_original_topic():
+    """「利润率怎么变」→「那2024年呢」→「那2023年呢」：第三问仍然在问利润。"""
+    assert wants_card("那2023年呢？", previous=["七匹狼利润率变化如何？", "那2024年呢？"])
+    assert not wants_card("那2023年呢？", previous=["前五大客户集中度如何？", "那2024年呢？"])
+
+
+@pytest.mark.parametrize("q", ["那2024年呢？", "去年呢"])
+def test_bare_followup_without_context_gets_no_card(q):
+    assert not wants_card(q)
+
+
+def test_long_question_does_not_inherit():
+    """只有短追问才继承话题；完整的新问题按自己的内容判断。"""
+    assert not wants_card("公司今年在海外开了哪些新门店，进展如何？", previous=["营业收入是多少？"])
+
+
 @pytest.mark.parametrize("q", [
     "前五大客户与供应商集中度如何？",
     "研发投入的金额与资本化比例？",

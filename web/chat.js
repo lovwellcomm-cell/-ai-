@@ -288,6 +288,8 @@ export default function (component) {
     meta.appendChild(mk("span", "sep"));
     meta.appendChild(mk("span", "mono", d.model || ""));
     if (m.demo) meta.appendChild(mk("span", "tag", "演示回答"));
+    // 同一公司多个年度共用一段对话时，标出这条回答依据的是哪份年报（只在跨年报时下发）
+    if (m.docLabel) meta.appendChild(mk("span", "tag doc-tag", m.docLabel));
     body.appendChild(meta);
     if (m.notice) body.appendChild(mk("div", "notice", m.notice));
     wrap.appendChild(body);

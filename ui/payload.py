@@ -99,22 +99,37 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
     return msg
 
 
-def build_messages(history: list[dict], turn: dict | None = None, page: dict | None = None) -> list[dict]:
+def build_messages(history: list[dict], turn: dict | None = None, page: dict | None = None,
+                   doc_labels: dict[str, str] | None = None) -> list[dict]:
     """已完成的历史轮次 + 进行中的一轮（如果有）。
 
     page 是「查看原页」渲染出来的那一页，只属于最后一条助手消息 ——
     抽屉里展示的也永远是最后一条的引用。
+
+    doc_labels（文档 id → 「七匹狼 2024」）：同一公司的多个年度共用一段对话，
+    **只有当这段对话真的跨了不止一份年报时**，才给每条回答标上依据的年报。
+    只问过一份年报时不标，免得每条回答都挂一个重复的标签。
     """
+    rounds = list(history) + ([turn] if turn and turn.get("q") else [])
+    used = {r.get("doc_id") for r in rounds if r.get("doc_id")}
+    labels = doc_labels if (doc_labels and len(used) > 1) else {}
+
+    def _labelled(msg: dict, source: dict) -> dict:
+        label = labels.get(source.get("doc_id", ""))
+        if label:
+            msg["docLabel"] = label
+        return msg
+
     messages: list[dict] = []
     for past in history:
         messages.append({"role": "user", "text": past.get("q", "")})
-        messages.append(ai_message(past))
+        messages.append(_labelled(ai_message(past), past))
     if turn and turn.get("q"):
         messages.append({"role": "user", "text": turn["q"]})
-        messages.append(ai_message(
+        messages.append(_labelled(ai_message(
             turn, status=turn.get("status", "retrieving"),
             error=turn.get("error", ""), page=page,
-        ))
+        ), turn))
     elif page and messages and messages[-1]["role"] == "ai":
         messages[-1]["page"] = page
     return messages
