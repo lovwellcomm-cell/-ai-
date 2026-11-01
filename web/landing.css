@@ -21,6 +21,9 @@
   --halo-b: rgba(214,70,56,.34);
   --shot-line: rgba(12,13,15,.14);
   --shadow: 0 30px 80px -30px rgba(40,30,8,.45);
+  --grid: rgba(138,102,8,.10);
+  --grain: .05;
+  --clear: rgba(246,245,242,.88);
   --font-ui: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI',
              'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei',
              'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif;
@@ -46,6 +49,9 @@
   --halo-b: rgba(220,74,60,.6);
   --shot-line: rgba(255,255,255,.14);
   --shadow: 0 40px 100px -30px rgba(0,0,0,.9);
+  --grid: rgba(224,178,78,.11);
+  --grain: .09;
+  --clear: rgba(7,8,9,.82);
   color-scheme: dark;
 }
 
@@ -66,6 +72,54 @@
   pointer-events: none;
   -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
           mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+}
+
+/* 坐标纸网格：铺在走势线后面，四周淡出，缓慢向左平移，像图表在滚动。纯 CSS，不占动画帧。
+   （试过透视地板：投影后只剩一条细带，还被截图挡住，看不出来。） */
+.lp-floor {
+  position: absolute; left: 0; right: 0; top: 330px; height: 560px;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 56px 56px;
+  -webkit-mask-image: radial-gradient(ellipse 62% 52% at 50% 48%, #000 0%, rgba(0,0,0,.55) 45%, transparent 75%);
+          mask-image: radial-gradient(ellipse 62% 52% at 50% 48%, #000 0%, rgba(0,0,0,.55) 45%, transparent 75%);
+  animation: lp-floor 18s linear infinite;
+  pointer-events: none;
+}
+@keyframes lp-floor { to { background-position: -56px 0, -56px 0; } }
+
+/* 数据标签：挂在走势线的光点上（位置由 landing.js 每帧写进 transform），
+   内容是程序复算过的真实数字。translate 属性把卡片抬到光点正上方，和 transform 叠加。 */
+.lp-tags { position: absolute; left: 0; top: 0; width: 100%; height: 980px; pointer-events: none; }
+.lp-dt {
+  position: absolute; left: 0; top: 0;
+  translate: -50% calc(-100% - 18px);
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 8px 12px 9px; border-radius: 11px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  border: 1px solid var(--accent-line);
+  backdrop-filter: blur(8px);
+  white-space: nowrap;
+  opacity: 0; transition: opacity .45s var(--ease);
+  will-change: transform, opacity;
+}
+.lp-dt.on { opacity: 1; }
+.lp-dt::after {
+  content: ""; position: absolute; left: 50%; top: 100%; width: 1px; height: 16px;
+  background: linear-gradient(var(--accent-line), transparent);
+}
+.lp-dt-src { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-3); letter-spacing: .02em; }
+.lp-dt-row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.lp-dt-k { font-weight: 600; color: var(--ink); }
+.lp-dt-v { color: var(--ink); font-variant-numeric: tabular-nums; }
+.lp-dt-c { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+
+/* 细噪点：让深色大面积底色有质感，也打散光晕的色带 */
+.lp-grain {
+  position: absolute; inset: 0; pointer-events: none;
+  opacity: var(--grain); mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
 }
 
 /* ---------- 导航 ---------- */
@@ -110,6 +164,13 @@
   display: flex; flex-direction: column; align-items: center; gap: 22px;
   padding: 96px max(24px, env(safe-area-inset-right, 0px)) 0 max(24px, env(safe-area-inset-left, 0px));
 }
+.lp-hero { position: relative; }
+.lp-hero::before {
+  content: ""; position: absolute; z-index: -1; pointer-events: none;
+  left: 50%; top: 40px; width: min(1100px, 130%); height: calc(100% + 40px);
+  translate: -50% 0;
+  background: radial-gradient(ellipse 50% 46% at 50% 45%, var(--clear) 0%, var(--clear) 35%, transparent 75%);
+}
 .lp-eyebrow {
   display: inline-flex; align-items: center; gap: 9px;
   padding: 6px 14px; border-radius: 999px;
@@ -152,6 +213,8 @@
   animation: lp-breathe 9s ease-in-out infinite alternate;
 }
 /* 两团光晕从截图左上、右上溢出来：金色在左，A 股的红色在右 */
+.lp-halo-a { translate: calc(var(--px, 0) * 30px) calc(var(--py, 0) * 20px); }
+.lp-halo-b { translate: calc(var(--px, 0) * -22px) calc(var(--py, 0) * -14px); }
 .lp-halo-a { left: -12%; background: radial-gradient(closest-side, var(--halo-a), transparent 75%); }
 .lp-halo-b { right: -12%; background: radial-gradient(closest-side, var(--halo-b), transparent 75%); animation-delay: -4.5s; }
 @keyframes lp-breathe { from { opacity: .75; transform: scale(.96); } to { opacity: 1; transform: scale(1.04); } }
@@ -240,6 +303,8 @@
 @media (max-width: 760px) {
   .lp-nav { padding-top: 14px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
   .lp .lp-link { display: none; }
+  .lp-tags { display: none; }
+  .lp-floor { top: 380px; height: 520px; background-size: 40px 40px; }
   .lp-hero { padding-top: 64px; gap: 18px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
   .lp-sub { font-size: 15px; }
   .lp-cta { flex-direction: column; align-items: stretch; width: 100%; max-width: 340px; }
@@ -256,5 +321,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lp-hero > *, .lp-shot, .lp-halo { animation: none; }
+  .lp-hero > *, .lp-shot, .lp-halo, .lp-floor { animation: none; }
 }
