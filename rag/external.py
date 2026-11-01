@@ -21,6 +21,7 @@ import operator
 import re
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 from . import config
 from .periods import FY, TITLE
@@ -219,9 +220,30 @@ def should_search(answer: str) -> bool:
     return is_abstention(answer)
 
 
+def local_date(raw) -> str | None:
+    """Search 接口的日期是 UTC（「2026-10-29T16:00:00+00:00」实为北京时间 10-30），
+    换成北京时间的「2026-10-30」。解析不了就原样截前 10 位。"""
+    if not raw:
+        return None
+    s = str(raw).strip()
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return s[:10] or None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone(timedelta(hours=8)))
+    return dt.strftime("%Y-%m-%d")
+
+
+# 每轮对话里各工具最多调用几次。行业动态要查原材料、格局、同行三件事，次数给得多一些。
+DEFAULT_LIMITS = {"search": 2, "fetch": 1, "calc": 3}
+
+
 def _execute_tool(call, client: SearchClient, book: SourceBook,
-                  used: dict, diag: dict) -> str:
+                  used: dict, diag: dict, limits: dict | None = None) -> str:
     """执行一次工具调用，把结果序列化成模型能读的 JSON。"""
+    limits = limits or DEFAULT_LIMITS
+
     def dump(obj):
         return json.dumps(obj, ensure_ascii=False)
 
@@ -233,7 +255,7 @@ def _execute_tool(call, client: SearchClient, book: SourceBook,
         return dump({"error": "工具参数不是合法 JSON"})
 
     if name == "search_web":
-        if used["search"] >= 2:
+        if used["search"] >= limits["search"]:
             return dump({"error": "本轮搜索次数已达上限，请直接回答或改写已有结果"})
         query = str(args.get("query") or "").strip()[:128]
         if not query:
@@ -247,7 +269,7 @@ def _execute_tool(call, client: SearchClient, book: SourceBook,
         out = []
         for r in results[:config.WEB_SEARCH_MAX_RESULTS]:
             item = book.add(r.get("title") or "", r.get("url") or "",
-                            r.get("site_name"), r.get("date"))
+                            r.get("site_name"), local_date(r.get("date")))
             if not item:
                 continue
             out.append({
@@ -263,7 +285,7 @@ def _execute_tool(call, client: SearchClient, book: SourceBook,
         })
 
     if name == "fetch_page":
-        if used["fetch"] >= 1:
+        if used["fetch"] >= limits["fetch"]:
             return dump({"error": "本轮抓取次数已达上限"})
         url = str(args.get("url") or "").strip()
         if not re.match(r"^https?://", url, re.I):
@@ -284,7 +306,7 @@ def _execute_tool(call, client: SearchClient, book: SourceBook,
         })
 
     if name == "calculate":
-        if used["calc"] >= 3:
+        if used["calc"] >= limits["calc"]:
             return dump({"error": "本轮计算次数已达上限"})
         expr = str(args.get("expression") or "").strip()
         try:
@@ -368,6 +390,63 @@ def clean_external(first_answer: str, text: str, n_sources: int,
     return t, "ok"
 
 
+def run_tool_loop(client, messages: list[dict], sc: SearchClient, book: SourceBook,
+                  used: dict, diag: dict, *, rounds: int | None = None,
+                  max_tokens: int | None = None, limits: dict | None = None) -> str | None:
+    """让模型多轮调用工具，返回最终正文；推理把 token 用光、正文为空时返回 None。
+
+    异常往外抛，由调用方决定怎么降级。messages 会被追加工具往返记录。
+    """
+    rounds = config.WEB_TOOL_MAX_ROUNDS if rounds is None else rounds
+    max_tokens = max_tokens or config.WEB_TOOL_MAX_TOKENS
+    for round_no in range(rounds + 1):
+        resp = client.chat.completions.create(
+            model=config.LLM_MODEL,
+            messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+            temperature=0.1,
+            max_tokens=max_tokens,
+            timeout=config.WEB_TOOL_TIMEOUT,
+        )
+        msg = resp.choices[0].message
+        finish = getattr(resp.choices[0], "finish_reason", None)
+        calls = getattr(msg, "tool_calls", None) or []
+        if not calls:
+            text = msg.content or ""
+            diag["web_rounds"] = round_no
+            diag["web_finish"] = finish
+            # 推理模型的 max_tokens 把推理和正文一起算。截断会表现成「正文为空」，
+            # 和当年查询改写静默失效是同一个形态，不能当成「没有可补充的内容」。
+            if finish == "length" and not text.strip():
+                diag["web"] = "truncated"
+                return None
+            return text
+        messages.append(_assistant_turn(msg))
+        for call in calls:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": _execute_tool(call, sc, book, used, diag, limits),
+            })
+    # 用完轮次还在要工具：收一次不带工具的最终答案
+    resp = client.chat.completions.create(
+        model=config.LLM_MODEL,
+        messages=messages,
+        temperature=0.1,
+        max_tokens=max_tokens,
+        timeout=config.WEB_TOOL_TIMEOUT,
+    )
+    text = resp.choices[0].message.content or ""
+    finish = getattr(resp.choices[0], "finish_reason", None)
+    diag["web_finish"] = finish
+    diag["web_rounds"] = rounds + 1
+    if finish == "length" and not text.strip():
+        diag["web"] = "truncated"
+        return None
+    return text
+
+
 def answer_with_tools(question: str, first_answer: str, *, client=None,
                       api_key: str = "", company: str = "", year: str = "",
                       diag: dict | None = None, period: str = FY) -> tuple[str, list[dict], dict]:
@@ -386,56 +465,12 @@ def answer_with_tools(question: str, first_answer: str, *, client=None,
     book = SourceBook()
     used = {"search": 0, "fetch": 0, "calc": 0}
     messages = build_tool_messages(question, first_answer, company, year, period)
-    text = ""
     try:
-        for round_no in range(config.WEB_TOOL_MAX_ROUNDS + 1):
-            resp = client.chat.completions.create(
-                model=config.LLM_MODEL,
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                temperature=0.1,
-                max_tokens=config.WEB_TOOL_MAX_TOKENS,
-                timeout=config.WEB_TOOL_TIMEOUT,
-            )
-            msg = resp.choices[0].message
-            finish = getattr(resp.choices[0], "finish_reason", None)
-            calls = getattr(msg, "tool_calls", None) or []
-            if not calls:
-                text = msg.content or ""
-                diag["web_rounds"] = round_no
-                diag["web_finish"] = finish
-                # 推理模型的 max_tokens 把推理和正文一起算。截断会表现成「正文为空」，
-                # 和当年查询改写静默失效是同一个形态，不能当成「没有可补充的内容」。
-                if finish == "length" and not text.strip():
-                    diag["web"] = "truncated"
-                    return "", book.items, diag
-                break
-            messages.append(_assistant_turn(msg))
-            for call in calls:
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "content": _execute_tool(call, sc, book, used, diag),
-                })
-        else:
-            # 用完轮次还在要工具：收一次不带工具的最终答案
-            resp = client.chat.completions.create(
-                model=config.LLM_MODEL,
-                messages=messages,
-                temperature=0.1,
-                max_tokens=config.WEB_TOOL_MAX_TOKENS,
-                timeout=config.WEB_TOOL_TIMEOUT,
-            )
-            text = resp.choices[0].message.content or ""
-            finish = getattr(resp.choices[0], "finish_reason", None)
-            diag["web_finish"] = finish
-            diag["web_rounds"] = config.WEB_TOOL_MAX_ROUNDS + 1
-            if finish == "length" and not text.strip():
-                diag["web"] = "truncated"
-                return "", book.items, diag
+        text = run_tool_loop(client, messages, sc, book, used, diag)
     except Exception as e:
         diag["web_error"] = f"{type(e).__name__}: {e}"[:200]
+        return "", book.items, diag
+    if text is None:
         return "", book.items, diag
 
     cleaned, status = clean_external(first_answer, text, len(book.items),

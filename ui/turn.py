@@ -55,6 +55,9 @@ def history_entry(turn: dict, answer: str) -> dict:
         entry["analyze_error"] = turn["analyze_error"]
     if turn.get("web_error"):
         entry["web_error"] = turn["web_error"]
+    # 行业动态回合：界面据此不再显示「行业动态」按钮、不出指标卡。
+    if turn.get("kind"):
+        entry["kind"] = turn["kind"]
     # 依据的是哪份年报：同一公司多个年度共用一段对话后，翻原页、标注年份都要靠它。
     if turn.get("doc_id"):
         entry["doc_id"] = turn["doc_id"]
@@ -166,8 +169,8 @@ def adopt_turn(turn: dict | None, doc_id: str):
     return None, ((turn.get("doc_id"), entry) if entry else None)
 
 
-def step(turn: dict, *, gen, ana, web=None, client=None, company: str = "", year: str = "",
-         recent: list[str] | None = None):
+def step(turn: dict, *, gen, ana, web=None, ind=None, client=None, company: str = "",
+         year: str = "", recent: list[str] | None = None):
     """推进「生成 → 扩展 / 外部查询 → 完成」这一段。
 
     参数：
@@ -175,6 +178,8 @@ def step(turn: dict, *, gen, ana, web=None, client=None, company: str = "", year
       ana(question, hits, first_answer, client=, company=, year=, history=) -> (str, dict)
       web(question, first_answer, client=, company=, year=, history=)
           -> (str, list[dict], dict)   # 补充段正文、网页来源、诊断
+      ind(question, hits, client=, company=, year=, history=)
+          -> (str, list[dict], dict)   # 行业动态：完整正文、网页来源、诊断
 
     返回 `(new_turn, entry, error)`：
 
@@ -190,6 +195,16 @@ def step(turn: dict, *, gen, ana, web=None, client=None, company: str = "", year
     就是"就地改了但忘了写回 session_state" —— 用不可变风格把这类错挡在函数外面。
     """
     status = turn.get("status")
+
+    # 行业动态是另一种回合：不走「年报回答 → 扩展」，一次联网检索直接成文。
+    if status == "generating" and turn.get("kind") == "industry" and ind is not None:
+        try:
+            text, sources, diag = ind(turn["q"], turn["hits"], client=client,
+                                      company=company, year=year, history=recent)
+        except Exception as e:
+            return turn, None, f"行业动态检索失败：{e}"
+        new = dict(turn, a=text, web=diag.get("web", ""), web_sources=sources)
+        return dict(new, status="done"), history_entry(new, text), None
 
     if status == "generating":
         try:

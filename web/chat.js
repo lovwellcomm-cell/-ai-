@@ -23,8 +23,13 @@ const ICONS = {
   moon: '<path d="M20 13.5A8 8 0 0 1 10.5 4a8 8 0 1 0 9.5 9.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
   shield: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 5 6v6c0 4.4 3 8.2 7 9 4-.8 7-4.6 7-9V6l-7-3Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
   copy: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 9h10v10H9zM5 15V5h10" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+  pulse: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6H21" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   doc: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
 };
+
+// 正在渲染的那条消息的网页来源（[网n] → 链接）。放在模块顶层，理由同 TABLE_LINE：
+// 组件函数体里的 let 会在渲染路径先用到时撞上暂时性死区。
+let WEB_LIST = [];
 
 const HERO_SUGS = [
   { key: "rev",    tag: "财务摘要",   text: "营业收入和归母净利润分别是多少？" },
@@ -304,6 +309,7 @@ export default function (component) {
     // 但「扩展分析」阶段首轮回答已经产出，先把正文画出来再挂指示 ——
     // 用户不必等第二次模型调用跑完才看到东西。
     if (m.status === "resolving" || m.status === "retrieving" || m.status === "generating" || m.status === "analyzing" || m.status === "searching") {
+      WEB_LIST = m.webSources || [];
       if (m.text) appendProse(body, m.text, (m.sources || []).length);
       const th = mk("div", "thinking");
       th.appendChild(mk("i", "spin"));
@@ -319,24 +325,39 @@ export default function (component) {
       return wrap;
     }
 
+    WEB_LIST = m.webSources || [];
     appendProse(body, m.text, (m.sources || []).length, m.tableCheck);
 
     if (m.kpis && m.kpis.length) body.appendChild(buildCard(m));
     if (m.queries && m.queries.length) body.appendChild(buildTrace(m));
     if (m.sources && m.sources.length) body.appendChild(buildSources(m, idx));
     if (m.webSources && m.webSources.length) body.appendChild(buildWebSources(m, idx));
-    body.appendChild(buildActions(m));
+    body.appendChild(buildActions(m, idx));
     return wrap;
   }
 
   /* 把 **粗体** 和 [n] 引用渲染成节点。全程 textContent，不碰 innerHTML。 */
   function renderRich(container, text, nSources) {
-    const re = /\*\*([^*]+)\*\*|\[([\d,，、\s]+)\]/g;
+    const re = /\*\*([^*]+)\*\*|\[([\d,，、\s]+)\]|\[网\s*(\d+)\]/g;
     let last = 0, m;
     while ((m = re.exec(text)) !== null) {
       if (m.index > last) container.appendChild(document.createTextNode(text.slice(last, m.index)));
       if (m[1] != null) {
         container.appendChild(mk("strong", null, m[1]));
+      } else if (m[3] != null) {
+        // 网页来源：可点的小标签，新窗口打开；编号对不上或地址不是 http(s) 就原样显示文字
+        const src = WEB_LIST[Number(m[3]) - 1];
+        const url = src ? String(src.url || "") : "";
+        if (/^https?:\/\//i.test(url)) {
+          const a = mk("a", "cite web-cite", "网" + m[3]);
+          a.href = url;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.title = [src.title, src.site, src.date].filter(Boolean).join(" · ");
+          container.appendChild(a);
+        } else {
+          container.appendChild(document.createTextNode(m[0]));
+        }
       } else {
         // 与 rag/generator.py:cited_numbers 同规则：只认 1..片段数，
         // 免得正文里的 [2024] 之类被误当成引用
@@ -677,7 +698,7 @@ export default function (component) {
     return block;
   }
 
-  function buildActions(m) {
+  function buildActions(m, idx) {
     const acts = mk("div", "acts");
     const copy = mk("button", "act");
     copy.type = "button";
@@ -694,6 +715,22 @@ export default function (component) {
       } else fallbackCopy(plain, done);
     };
     acts.appendChild(copy);
+    // 「行业动态」：只挂在最后一条回答上（往前翻的旧回答点了也是问同一件事），
+    // 行业动态回合本身不再挂。点了就是发一条自然语言问题，聊天记录里读得懂。
+    const company = (d.doc && d.doc.company) || "";
+    const isLast = idx === (d.messages || []).length - 1;
+    if (company && isLast && m.kind !== "industry" && !d.busy) {
+      const ind = mk("button", "act act-ind");
+      ind.type = "button";
+      ind.innerHTML = ICONS.pulse;
+      ind.appendChild(mk("span", null, "行业动态"));
+      ind.title = "联网查原材料价格、行业格局、同行进展（单独成段，未经报告核验）";
+      ind.onclick = () => {
+        ind.disabled = true;
+        setTriggerValue("ask", { text: company + "所处行业的最新动态：原材料价格、竞争格局、同行进展" });
+      };
+      acts.appendChild(ind);
+    }
     return acts;
   }
 

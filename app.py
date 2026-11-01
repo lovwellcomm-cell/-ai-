@@ -33,6 +33,7 @@ except Exception as _import_error:          # 部署环境里的 import 失败�
 from rag.external import answer_with_tools
 from rag.financials import load_or_build as load_financials
 from rag.generator import analyze, generate, get_client, make_client
+from rag.industry import RETRIEVAL_QUERY as INDUSTRY_QUERY, industry_brief, wants_industry
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
                          is_current, list_documents, load_index)
 from rag.limits import Quota, check_and_consume
@@ -581,10 +582,16 @@ def advance_turn() -> None:
         target["recent"] = recent
         diag: dict = {}
         try:
-            hits, queries = retriever.search_with_queries(
-                target["q"], client=client, use_llm=config.LLM_REWRITE,
-                history=recent or None, diag=diag,
-            )
+            if target.get("kind") == "industry":
+                # 行业动态：从报告里找「所处行业、主要产品、原材料、竞争对手」，
+                # 给联网检索定方向。问题本身是「最新动态」，拿它去检索年报找不到这些。
+                hits, queries = retriever.search_with_queries(
+                    INDUSTRY_QUERY, client=client, use_llm=False, diag=diag)
+            else:
+                hits, queries = retriever.search_with_queries(
+                    target["q"], client=client, use_llm=config.LLM_REWRITE,
+                    history=recent or None, diag=diag,
+                )
         except Exception as e:
             refund(target)
             fail(target, f"检索失败：{e}")
@@ -598,7 +605,7 @@ def advance_turn() -> None:
         target["queries"] = queries
         # 问到营收、利润、现金流这类方向时，附上程序抽取的指标卡。
         # 抽取失败只记在回合上 —— 卡片是锦上添花，不能拖垮回答本身。
-        if wants_card(target["q"], previous=recent):
+        if target.get("kind") != "industry" and wants_card(target["q"], previous=recent):
             try:
                 card = build_card(get_financials(doc_id, SOURCE_STAMP))
             except Exception as e:
@@ -633,8 +640,16 @@ def advance_turn() -> None:
             )
             return text, sources, diag
 
+        def _ind(q, hits, *, client, company, year, history):
+            diag: dict = {}
+            return industry_brief(
+                q, hits, client=client,
+                api_key=getattr(client, "api_key", "") or config.DEEPSEEK_API_KEY,
+                company=company, year=year, period=period_of(meta), diag=diag,
+            )
+
         new_turn, entry, error = turn_core.step(
-            target, gen=_gen, ana=_ana, web=_web, client=pick_client(),
+            target, gen=_gen, ana=_ana, web=_web, ind=_ind, client=pick_client(),
             company=meta.get("company", ""), year=meta.get("year", ""),
             recent=target.get("recent"),
         )
@@ -687,6 +702,8 @@ if result.ask and not busy:
             "doc_id": doc_id, "q": text,
             "status": "resolving" if config.AUTO_IMPORT_ENABLED else "retrieving",
             "counted": count_it,
+            # 行业动态走另一条路：联网检索成文，不做年报回答 + 扩展
+            **({"kind": "industry"} if wants_industry(text) else {}),
         }
         st.rerun()
 
