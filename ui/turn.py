@@ -12,6 +12,7 @@ from __future__ import annotations
 from rag.company import same_company
 from rag.external import join_external, should_search
 from rag.generator import join_answer, should_analyze
+from ui.card import CARD_KEYS
 
 
 def history_entry(turn: dict, answer: str) -> dict:
@@ -38,6 +39,10 @@ def history_entry(turn: dict, answer: str) -> dict:
     # 自动导入的提示要跟着回答保留下来；没有就不写键，保持旧条目形状不变。
     if turn.get("notice"):
         entry["notice"] = turn["notice"]
+    # 指标卡同理：只在回合上挂了卡时才写，否则回合一结束卡片就消失。
+    for key in CARD_KEYS:
+        if turn.get(key):
+            entry[key] = turn[key]
     return entry
 
 

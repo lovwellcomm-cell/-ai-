@@ -371,8 +371,10 @@ export default function (component) {
   function buildCard(m) {
     const card = mk("div", "card");
     const head = mk("div", "card-head");
-    head.appendChild(mk("span", "card-title", d.cardTitle || "主要会计数据"));
-    head.appendChild(mk("span", "tag", d.cardNote || "示例数据"));
+    // 优先用消息自己的标题/说明：程序抽取的真实数据带着「年报第 n 页」，
+    // 全局默认值写的是「演示数据」，绝不能挂到真实数字上。
+    head.appendChild(mk("span", "card-title", m.cardTitle || d.cardTitle || "主要会计数据"));
+    head.appendChild(mk("span", "tag", m.cardNote || d.cardNote || "示例数据"));
     card.appendChild(head);
 
     const body = mk("div", "card-body");
@@ -446,29 +448,45 @@ export default function (component) {
            "L" + (x + w) + "," + (y + h) + "Z";
   }
 
+  /* 向下的柱子（负值）：圆角在底部 */
+  function barPathDown(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h);
+    return "M" + x + "," + y + "L" + (x + w) + "," + y + "L" + (x + w) + "," + (y + h - r) +
+           "Q" + (x + w) + "," + (y + h) + " " + (x + w - r) + "," + (y + h) +
+           "L" + (x + r) + "," + (y + h) + "Q" + x + "," + (y + h) + " " + x + "," + (y + h - r) + "Z";
+  }
+
   function chartNode(c) {
     const box = mk("div", "chart");
     const title = mk("div", "chart-t");
     const t1 = mk("span", null, c.title);
-    t1.appendChild(mk("span", "mono", "　" + c.range + " · " + c.unit));
+    t1.appendChild(mk("span", "mono", "　" + (c.range || "") + " · " + (c.unit || "")));
     title.appendChild(t1);
     box.appendChild(title);
 
     const W = 260, top = 18, base = 92, plot = base - top;
     const x0 = 16, x1 = 250, n = c.values.length, band = (x1 - x0) / n, bw = 26;
     const vals = c.values.map(Number);
-    const max = Math.max(...vals, 1);
-    let svg = '<svg viewBox="0 0 ' + W + ' 118" role="img" aria-label="' + esc(c.title) + ' 近四年走势">';
+    // 以零为基线：有负值时（例如某年经营现金流为负）零线上移，负值向下画并用 --neg。
+    // 以前负值会被画成 3px 的正柱子，看起来像「很小的正数」。
+    const hi = Math.max(0, ...vals), lo = Math.min(0, ...vals);
+    const span = (hi - lo) || 1;
+    const zero = top + hi / span * plot;
+    const barH = (v) => Math.max(3, Math.abs(v) / span * plot);
+    const barTop = (v) => (v >= 0 ? zero - barH(v) : zero);
+    let svg = '<svg viewBox="0 0 ' + W + ' 118" role="img" aria-label="' + esc(c.title + " " + (c.range || "")) + '">';
     svg += '<line x1="' + x0 + '" y1="' + top + '" x2="' + x1 + '" y2="' + top + '" stroke="var(--line)" stroke-width="1" stroke-dasharray="2 3"/>';
-    svg += '<line x1="' + x0 + '" y1="' + base + '" x2="' + x1 + '" y2="' + base + '" stroke="var(--line)" stroke-width="1"/>';
+    svg += '<line x1="' + x0 + '" y1="' + zero + '" x2="' + x1 + '" y2="' + zero + '" stroke="var(--line)" stroke-width="1"/>';
     vals.forEach((v, i) => {
       const bx = x0 + i * band + (band - bw) / 2;
-      const h = Math.max(3, v / max * plot);
-      const by = base - h;
-      svg += '<path d="' + barPath(bx, by, bw, h, 4) + '" fill="var(--mark)" opacity="' + (i === n - 1 ? 1 : .55) + '"/>';
+      const h = barH(v), by = barTop(v);
+      const path = v >= 0 ? barPath(bx, by, bw, h, 4) : barPathDown(bx, by, bw, h, 4);
+      svg += '<path d="' + path + '" fill="' + (v >= 0 ? "var(--mark)" : "var(--neg)") + '" opacity="' + (i === n - 1 ? 1 : .55) + '"/>';
       svg += '<text x="' + (bx + bw / 2) + '" y="' + (base + 15) + '" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-3)">' + esc(c.labels[i]) + '</text>';
       if (i === n - 1) {
-        svg += '<text x="' + (bx + bw / 2) + '" y="' + (by - 7) + '" text-anchor="middle" font-family="var(--font-mono)" font-size="10.5" font-weight="500" fill="var(--ink)">' + v.toFixed(1) + '</text>';
+        // 负值的数字也标在零线上方，避免和底部年份重叠
+        const ly = v >= 0 ? by - 7 : zero - 7;
+        svg += '<text x="' + (bx + bw / 2) + '" y="' + ly + '" text-anchor="middle" font-family="var(--font-mono)" font-size="10.5" font-weight="500" fill="var(--ink)">' + v.toFixed(2) + '</text>';
       }
       svg += '<rect class="hit" data-i="' + i + '" x="' + (x0 + i * band) + '" y="' + top + '" width="' + band + '" height="' + plot + '" fill="transparent" style="cursor:crosshair"/>';
     });
@@ -484,15 +502,14 @@ export default function (component) {
         const i = Number(hit.dataset.i);
         const t = mk("span");
         t.appendChild(document.createTextNode(c.labels[i] + " "));
-        t.appendChild(mk("b", null, vals[i].toFixed(1) + " " + c.unit));
+        t.appendChild(mk("b", null, vals[i].toFixed(2) + " " + (c.unit || "")));
         t.appendChild(document.createElement("br"));
         t.appendChild(document.createTextNode("同比 " + ((c.yoy && c.yoy[i]) || "—")));
         clear(tip);
         tip.appendChild(t);
         const cx = x0 + i * band + band / 2;
-        const hh = Math.max(3, vals[i] / max * plot);
         tip.style.left = (cx / W * 100) + "%";
-        tip.style.top = ((base - hh - 10) / 118 * 100) + "%";
+        tip.style.top = ((Math.min(barTop(vals[i]), zero) - 10) / 118 * 100) + "%";
         tip.classList.add("show");
       };
       hit.onmouseleave = () => tip.classList.remove("show");

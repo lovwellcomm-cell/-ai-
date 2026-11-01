@@ -31,6 +31,7 @@ except Exception as _import_error:          # 部署环境里的 import 失败�
              f"（源码戳 {SOURCE_STAMP}，重载于 {os.environ.get('ARB_RELOAD_AT', '未重载')}）")
     raise
 from rag.external import answer_with_tools
+from rag.financials import load_or_build as load_financials
 from rag.generator import analyze, generate, get_client, make_client
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
                          is_current, list_documents, load_index)
@@ -39,6 +40,7 @@ from rag.pdf_parser import extract_doc_info, parse_pdf, render_page_png
 from rag.retriever import Retriever
 from ui import payload
 from ui import turn as turn_core
+from ui.card import build_card, wants_card
 from ui.chat_component import chat_surface
 
 st.set_page_config(page_title="年报 AI 研究助手", page_icon="📊", layout="wide")
@@ -190,7 +192,14 @@ def page_data_uri(doc_id: str, page_no: int, stamp: str) -> str:
         render_page(doc_id, page_no, stamp)).decode("ascii")
 
 
-# 刚卸载过旧模块的那一次运行，把旧代码构造的缓存对象清掉（只清这三个，
+@st.cache_data(show_spinner=False)
+def get_financials(doc_id: str, stamp: str) -> dict | None:
+    """「主要会计数据」的结构化抽取结果（见 rag/financials.py）。
+    第一次用到时从 source.pdf 抽取并写成 financials.json，老文档不需要重建索引。"""
+    return load_financials(doc_id)
+
+
+# 刚卸载过旧模块的那一次运行，把旧代码构造的缓存对象清掉（只清这几个，
 # 绝不调用 st.cache_resource.clear() —— 那会连 get_quota 一起清、额度归零）。
 from rag.freshness import take_cache_bust  # noqa: E402  （重载后这里拿到的是新版本）
 
@@ -198,6 +207,7 @@ if take_cache_bust(SOURCE_STAMP):
     get_retriever.clear()
     render_page.clear()
     page_data_uri.clear()
+    get_financials.clear()
 
 
 def _patch_meta(doc_id: str, company: str = "", year: str = "",
@@ -567,6 +577,16 @@ def advance_turn() -> None:
             target["rewrite_error"] = diag.get("rewrite_error", "")
         target["hits"] = hits
         target["queries"] = queries
+        # 问到营收、利润、现金流这类方向时，附上程序抽取的指标卡。
+        # 抽取失败只记在回合上 —— 卡片是锦上添花，不能拖垮回答本身。
+        if wants_card(target["q"]):
+            try:
+                card = build_card(get_financials(doc_id, SOURCE_STAMP))
+            except Exception as e:
+                card = None
+                target["card_error"] = f"{type(e).__name__}: {e}"
+            if card:
+                target.update(card)
         target["status"] = "generating"
         st.session_state["turn"] = target
         st.rerun()

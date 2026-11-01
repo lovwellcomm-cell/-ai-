@@ -81,10 +81,15 @@ class TestAiMessage:
         assert msg["text"] == ""
 
     def test_structured_card_fields_pass_through_only_when_present(self):
-        """后端目前不产出 kpis/charts/table，组件收到才渲染。"""
-        assert "kpis" not in payload.ai_message({"q": "q", "a": "a"})
-        msg = payload.ai_message({"q": "q", "a": "a", "kpis": [{"k": "营业收入", "v": "1.0"}]})
+        """指标卡只在回合上挂了才下发，组件收到才渲染。"""
+        msg = payload.ai_message({"q": "q", "a": "a"})
+        for key in ("kpis", "charts", "cardTitle", "cardNote"):
+            assert key not in msg
+        msg = payload.ai_message({"q": "q", "a": "a", "kpis": [{"k": "营业收入", "v": "1.0"}],
+                                  "cardNote": "程序抽取 · 年报第 7 页"})
         assert msg["kpis"][0]["k"] == "营业收入"
+        # 卡片说明跟着消息走：全局默认值写着「演示数据」，不能挂到真实数字上
+        assert msg["cardNote"] == "程序抽取 · 年报第 7 页"
 
 
 class TestBuildMessages:

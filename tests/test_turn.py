@@ -219,6 +219,26 @@ def test_history_entry_keeps_the_notice():
     assert e["notice"] == "已自动导入《七匹狼 2025 年报》"
 
 
+def test_history_entry_keeps_the_card():
+    """指标卡挂在回合上；写历史时漏掉，回合一结束卡片就消失。"""
+    card = {"kpis": [{"k": "营业收入", "v": "246.74", "u": "亿元"}],
+            "charts": [{"title": "营业收入", "labels": ["2025"], "values": [246.74]}],
+            "cardTitle": "主要会计数据 · 2025", "cardNote": "程序抽取 · 年报第 7 页 · 已与披露增减核对"}
+    e = history_entry(dict(TURN, **card), "回答")
+    for key, value in card.items():
+        assert e[key] == value
+
+
+def test_card_survives_through_generation_and_analysis_to_history():
+    """生成 → 扩展分析 → 完成，两次状态转换之后卡片仍在。"""
+    card = {"kpis": [{"k": "营业收入", "v": "1"}], "cardNote": "程序抽取"}
+    mid, entry, err = step(dict(TURN, **card), **KW, gen=gen(), ana=ana())
+    assert err is None and entry is None and mid["status"] == "analyzing"
+    _, entry, err = step(mid, **KW, gen=gen(), ana=ana())
+    assert err is None and entry is not None
+    assert entry["kpis"] == card["kpis"] and entry["cardNote"] == "程序抽取"
+
+
 # ---------------------------------------------------------------- 目标文档
 
 DOCS = [

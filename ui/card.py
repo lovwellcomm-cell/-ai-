@@ -1,0 +1,149 @@
+"""结构化财务数据 → 组件的指标卡（kpis / charts / cardNote）。纯函数，不碰 Streamlit。
+
+比率在这里用 Python 算：归母净利率、净现比。模型不参与，所以不会有「自算不一致」。
+增减优先用公司披露的比例（rag/financials.py 已经用它做过复算校验）。
+"""
+from __future__ import annotations
+
+import re
+
+# 指标卡随消息携带的字段。回合写进历史（ui/turn.py）和下发给组件（ui/payload.py）
+# 都按这份清单 —— 漏掉一处，卡片就会在回合结束时消失。
+CARD_KEYS = ("kpis", "charts", "cardTitle", "cardNote")
+
+# 只有问到这些方向时才出卡。问前五大客户、研发资本化这类问题，一排利润指标就是答非所问。
+_WANTS_RE = re.compile(
+    r"营收|收入|利润|净利|盈利|赚|业绩|财务|经营(情况|状况|成果)|现金流|资产|负债|"
+    r"增长|下滑|下降|趋势|同比|毛利|利润率|ROE|净资产收益率|摘要|概况|基本面|怎么样",
+    re.IGNORECASE,
+)
+# 明确在问别的维度时，即使出现「如何」「变化」也不出卡。
+_OTHER_RE = re.compile(r"客户|供应商|研发|员工|人员|股东|分红|董事|高管|诉讼|担保|募集|专利|产能|门店")
+
+
+def wants_card(question: str) -> bool:
+    q = question or ""
+    if _OTHER_RE.search(q) and not re.search(r"营收|收入|利润|现金流|财务|业绩", q):
+        return False
+    return bool(_WANTS_RE.search(q))
+
+
+def _scale_for(values: list[float]) -> tuple[float, str]:
+    """统一用亿元；整组最大绝对值不到 1 亿时改用万元，免得全是 0.0x。"""
+    peak = max((abs(v) for v in values), default=0)
+    return (1e8, "亿元") if peak >= 1e8 else (1e4, "万元")
+
+
+def _fmt(v: float) -> str:
+    return f"{v:,.2f}"
+
+
+def _series(fin: dict, key: str) -> list[float] | None:
+    item = fin["items"].get(key)
+    if not item:
+        return None
+    return [item["values"][y] for y in reversed(fin["years"])]   # 旧 → 新
+
+
+def _amount_kpi(fin: dict, key: str, label: str) -> dict | None:
+    item = fin["items"].get(key)
+    if not item:
+        return None
+    cur = item["values"][fin["years"][0]]
+    div, unit = _scale_for([cur])
+    kpi = {"k": label, "v": _fmt(cur / div), "u": unit}
+    change = item.get("change")
+    if change is not None:
+        kpi["d"] = f"{abs(change):.2f}%"
+        kpi["up"] = change >= 0
+    return kpi
+
+
+def _ratio(fin: dict, num: str, den: str, year: str) -> float | None:
+    a, b = fin["items"].get(num), fin["items"].get(den)
+    if not a or not b:
+        return None
+    d = b["values"].get(year)
+    n = a["values"].get(year)
+    if n is None or not d:
+        return None
+    return n / d
+
+
+def _margin_kpi(fin: dict) -> dict | None:
+    """归母净利率 = 归母净利润 ÷ 营业收入；变化用百分点。"""
+    y0, y1 = fin["years"][0], fin["years"][1]
+    cur = _ratio(fin, "np_parent", "revenue", y0)
+    if cur is None:
+        return None
+    kpi = {"k": "归母净利率", "v": f"{cur * 100:.2f}", "u": "%"}
+    prev = _ratio(fin, "np_parent", "revenue", y1)
+    if prev is not None:
+        diff = (cur - prev) * 100
+        kpi["d"] = f"{abs(diff):.2f}pct"
+        kpi["up"] = diff >= 0
+    return kpi
+
+
+def _cash_kpi(fin: dict) -> dict | None:
+    """净现比 = 经营现金流净额 ÷ 归母净利润，衡量利润有多少收成了现金。
+    净利润 ≤ 0 时这个比值没有意义（负负得正会显得很好看），不出。"""
+    y0, y1 = fin["years"][0], fin["years"][1]
+    np_item = fin["items"].get("np_parent")
+    if not np_item or np_item["values"].get(y0, 0) <= 0:
+        return None
+    cur = _ratio(fin, "ocf", "np_parent", y0)
+    if cur is None:
+        return None
+    kpi = {"k": "净现比", "v": f"{cur:.2f}", "u": "倍"}
+    # 上年比值 ≤ 0（上年经营现金流为负，比如精达 2024）时，和它比的「变化」没有意义 ——
+    # 会显示成「▲ 5.18」这种看不懂的数，干脆不出。
+    if np_item["values"].get(y1, 0) > 0:
+        prev = _ratio(fin, "ocf", "np_parent", y1)
+        if prev is not None and prev > 0:
+            kpi["d"] = f"{abs(cur - prev):.2f}倍"
+            kpi["up"] = cur >= prev
+    return kpi
+
+
+def _chart(fin: dict, key: str, title: str) -> dict | None:
+    vals = _series(fin, key)
+    if not vals:
+        return None
+    div, unit = _scale_for(vals)
+    labels = list(reversed(fin["years"]))
+    yoy = ["—"]
+    for prev, cur in zip(vals, vals[1:]):
+        yoy.append("—" if not prev else f"{(cur - prev) / abs(prev) * 100:+.2f}%")
+    return {
+        "title": title,
+        "range": f"{labels[0]}–{labels[-1]}",
+        "unit": unit,
+        "labels": labels,
+        "values": [round(v / div, 2) for v in vals],
+        "yoy": yoy,
+    }
+
+
+def build_card(fin: dict | None) -> dict | None:
+    """返回要合并到回合上的 {kpis, charts, cardTitle, cardNote}；数据不够时返回 None。"""
+    if not fin or not fin.get("items"):
+        return None
+    kpis = [k for k in (
+        _amount_kpi(fin, "revenue", "营业收入"),
+        _amount_kpi(fin, "np_parent", "归母净利润"),
+        _amount_kpi(fin, "np_deducted", "扣非净利润"),
+        _amount_kpi(fin, "ocf", "经营现金流净额"),
+        _margin_kpi(fin),
+        _cash_kpi(fin),
+    ) if k]
+    if len(kpis) < 2:
+        return None
+    charts = [c for c in (_chart(fin, "revenue", "营业收入"),
+                          _chart(fin, "np_parent", "归母净利润")) if c]
+    return {
+        "kpis": kpis,
+        "charts": charts,
+        "cardTitle": f"主要会计数据 · {fin['years'][0]}",
+        "cardNote": f"程序抽取 · 年报第 {fin['page']} 页 · 已与披露增减核对",
+    }

@@ -53,6 +53,28 @@ def render_page_png(path_or_bytes, page_no: int, scale: float = 1.5) -> bytes:
         doc.close()
 
 
+def _page_lines(doc: pdfium.PdfDocument, i: int) -> list[str]:
+    """第 i 页（0 起）按 PDFium 的视觉行切开的原始文本。表格同一行的单元格以空格相连。"""
+    tp = doc[i].get_textpage()
+    try:
+        return re.split(r"\r\n|\r|\n", tp.get_text_bounded())
+    finally:
+        tp.close()
+
+
+def raw_page_lines(path_or_bytes, max_pages: int = 30) -> list[list[str]]:
+    """前 max_pages 页的原始文本行，**不做**页眉页脚过滤。
+
+    结构化抽取要用：`单位：元 币种：人民币` 这种行在有的年报里出现在一半以上的页面上，
+    会被 `_repeated_lines` 当成页眉删掉（贵州茅台就是这样），而它恰恰决定了金额的量纲。
+    """
+    doc = open_pdf(path_or_bytes)
+    try:
+        return [_page_lines(doc, i) for i in range(min(max_pages, len(doc)))]
+    finally:
+        doc.close()
+
+
 def _repeated_lines(pages_lines: list[list[str]]) -> set[str]:
     """出现在超过一半页面上的行视为页眉页脚。"""
     if len(pages_lines) < 4:
@@ -133,11 +155,7 @@ def extract_doc_info(pages: list[Page]) -> DocInfo:
 def parse_pdf(path_or_bytes) -> list[Page]:
     doc = open_pdf(path_or_bytes)
     try:
-        raw = []
-        for i in range(len(doc)):
-            tp = doc[i].get_textpage()
-            raw.append(re.split(r"\r\n|\r|\n", tp.get_text_bounded()))
-            tp.close()
+        raw = [_page_lines(doc, i) for i in range(len(doc))]
         toc_map = _toc_sections(doc)
     finally:
         doc.close()
