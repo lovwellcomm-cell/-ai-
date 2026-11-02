@@ -27,6 +27,10 @@ const ICONS = {
   doc: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
 };
 
+// 复核标签的说明：复核员实际做的三件事（rag/reviewer.py 的 PROMPT），三种状态共用
+const REVIEW_DOES = "回答生成后，由另一个模型对照检索到的原文片段复核：要点有没有答到、数字和说法能否在原文找到、"
+  + "有没有原文里明明有却说「未找到」。";
+
 // 体检卡：灯色排序（红灯在最前）和读法。组件函数体里的 const 会撞暂时性死区，所以放这里
 const HC_ORDER = { red: 0, yellow: 1, green: 2, none: 3 };
 const HC_NAME = { red: "红灯", yellow: "黄灯", green: "绿灯", none: "未判断" };
@@ -510,18 +514,32 @@ export default function (component) {
       meta.appendChild(mk("span", "sep"));
       meta.appendChild(mk("span", "mono took", "用时 " + fmtSecs(m.secs)));
     }
-    // 复核（agent2）：进行中标「复核中」；通过标「已复核 ✓」，悬停看核对了哪些要点；
-    // 没通过标「复核未通过」，问题列在回答下方。复核没跑成（error）不标 —— 不假装复核过。
+    // 复核（agent2）：进行中标「复核中」；通过标「已复核 ✓」；没通过标「复核未通过」（问题也列在回答下方）。
+    // 三种都在悬停 / 点按时弹出说明：这个标签什么意思、核对了什么、结果如何。复核没跑成（error）不标 —— 不假装复核过。
+    const rv = m.review || {};
+    const pts = (rv.points || []).map((p) => ({ text: (p.ok ? "✓ " : "✗ ") + p.point, cls: p.ok ? "ok" : "bad" }));
+    const redo = rv.rounds ? [{ text: "复核后已重答过 1 次" }] : [];
     if (m.status === "reviewing" || m.retrying) {
-      meta.appendChild(mk("span", "tag review-tag pending", "复核中"));
-    } else if (m.review && m.review.verdict === "pass") {
-      const t = mk("span", "tag review-tag ok", "已复核 ✓");
-      const pts = (m.review.points || []).map((p) => (p.ok ? "✓ " : "✗ ") + p.point);
-      t.title = "已核对：要点是否答到、数字和说法能否在原文找到" + (pts.length ? "\n" + pts.join("\n") : "")
-        + (m.review.rounds ? "\n（复核后重答过 1 次）" : "");
-      meta.appendChild(t);
-    } else if (m.review && m.review.verdict === "fail") {
-      meta.appendChild(mk("span", "tag review-tag bad", "复核未通过"));
+      meta.appendChild(reviewTag("pending", "复核中", "正在复核这条回答", [
+        { text: REVIEW_DOES },
+        { text: "回答先显示出来供你阅读，几秒后这里会变成「已复核 ✓」或「复核未通过」。" },
+      ]));
+    } else if (rv.verdict === "pass") {
+      meta.appendChild(reviewTag("ok", "已复核 ✓", "已复核：没有发现问题", [
+        { text: REVIEW_DOES },
+        ...(pts.length ? [{ text: "逐项结果：", cls: "h" }, ...pts] : []),
+        ...redo,
+      ]));
+    } else if (rv.verdict === "fail") {
+      const missed = pts.filter((p) => p.cls === "bad");
+      meta.appendChild(reviewTag("bad", "复核未通过", "复核未通过：有内容没能核实", [
+        { text: REVIEW_DOES },
+        ...(rv.note ? [{ text: "发现：" + rv.note, cls: "bad" }] : []),
+        ...(rv.unsupported || []).map((u) => ({ text: "原文找不到依据：" + u, cls: "bad" })),
+        ...missed.map((p) => ({ text: "没答到：" + p.text.slice(2), cls: "bad" })),
+        ...redo,
+        { text: "回答仍然可以参考，但标出的地方请点引用 [n] 对照原文。" },
+      ]));
     }
     body.appendChild(meta);
     if (m.notice) body.appendChild(mk("div", "notice", m.notice));
@@ -756,6 +774,18 @@ export default function (component) {
     if (m.table && m.table.rows && m.table.rows.length) body.appendChild(buildTable(m.table));
     card.appendChild(body);
     return card;
+  }
+
+  /* 复核标签 + 悬停说明。可以聚焦（tabindex），手机上点一下也能弹出；全程 textContent。 */
+  function reviewTag(cls, label, head, lines) {
+    const t = mk("span", "tag review-tag " + cls, label);
+    t.tabIndex = 0;
+    const pop = mk("span", "review-pop");
+    pop.setAttribute("role", "tooltip");
+    pop.appendChild(mk("b", null, head));
+    lines.forEach((l) => pop.appendChild(mk("span", "review-pop-l" + (l.cls ? " " + l.cls : ""), l.text)));
+    t.appendChild(pop);
+    return t;
   }
 
   /* ---------------- 体检卡 ----------------

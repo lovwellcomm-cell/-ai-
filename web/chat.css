@@ -266,10 +266,31 @@
 /* 跨年度对话里，标出这条回答依据的年报：用强调色，和普通标签区分开 */
 .tag.doc-tag { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); letter-spacing: .02em; }
 /* 复核标签：进行中呼吸闪烁；通过用绿；没通过用红 */
-.tag.review-tag { letter-spacing: .02em; cursor: default; }
+.tag.review-tag { letter-spacing: .02em; cursor: help; position: relative; outline: none; }
 .tag.review-tag.pending { color: var(--accent); border-color: var(--accent-line); animation: review-breathe 1.6s ease-in-out infinite; }
-.tag.review-tag.ok { color: var(--pos); border-color: color-mix(in srgb, var(--pos) 40%, transparent); cursor: help; }
+.tag.review-tag.ok { color: var(--pos); border-color: color-mix(in srgb, var(--pos) 40%, transparent); }
 .tag.review-tag.bad { color: var(--neg); border-color: color-mix(in srgb, var(--neg) 40%, transparent); }
+/* 悬停 / 聚焦时弹出的说明：贴在标签下方，宽度随内容、最多 340px */
+.review-pop {
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 8;
+  width: max-content; max-width: min(340px, 72vw);
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 11px 13px; border-radius: var(--r-md);
+  background: var(--surface); border: 1px solid var(--line-2); box-shadow: var(--shadow);
+  font-family: var(--font-ui); font-size: 12px; line-height: 1.6; letter-spacing: 0;
+  color: var(--ink-2); white-space: normal; text-align: left; cursor: default;
+  opacity: 0; visibility: hidden; transform: translateY(-3px); pointer-events: none;
+  transition: opacity .12s ease, transform .12s ease, visibility 0s linear .12s;
+}
+.review-tag:hover .review-pop, .review-tag:focus .review-pop {
+  opacity: 1; visibility: visible; transform: none; pointer-events: auto; transition-delay: 0s;
+}
+.review-pop b { color: var(--ink); font-size: 12.5px; font-weight: 600; }
+.review-pop-l.h { margin-top: 4px; color: var(--ink-3); font-size: 11.5px; }
+.review-pop-l.ok { color: var(--pos); }
+.review-pop-l.bad { color: var(--neg); }
+/* 「复核中」的呼吸动画改的是整个标签的透明度，说明框是它的子元素会跟着闪：看说明时停住 */
+.review-tag.pending:hover, .review-tag.pending:focus { animation: none; opacity: 1; }
 @keyframes review-breathe { 50% { opacity: .45; } }
 .review-fail { border: 1px solid color-mix(in srgb, var(--neg) 35%, transparent); border-radius: var(--r-md);
   background: color-mix(in srgb, var(--neg) 6%, transparent); padding: 9px 12px; display: flex; flex-direction: column; gap: 4px; }
