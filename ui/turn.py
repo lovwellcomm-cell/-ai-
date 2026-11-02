@@ -126,11 +126,15 @@ def history_entry(turn: dict, answer: str) -> dict:
     if not turn.get("kind"):
         found = fact_notes.merge(
             turn.get("fin_notes") or [],
+            turn.get("step_notes") or [],              # 第二期：这一轮先读的别的报告
             fact_notes.from_answer(answer, turn.get("hits") or [],
                                    (check or {}).get("unverified") or [],
                                    turn.get("doc_id", ""), turn.get("src_label", "")))
         if found:
             entry["notes"] = found
+    # 分步记录：界面检索轨迹里那一行「分步：① 2025 年报（记下 7 个数）→ ② …」
+    if turn.get("steps_log"):
+        entry["steps"] = list(turn["steps_log"])
     return entry
 
 
@@ -259,6 +263,10 @@ def plan_for(understanding: dict, *, current_company: str = "", current_year: st
     tgt = understanding.get("target") or {}
     plan = plan_resolution(tgt, **kw)
     annual_first = intent == "trend" or (intent in ("health", "drivers") and not tgt.get("period"))
+    # 跨报告（事实笔记第二期）：年报已经排在「先读」里，主报告就按规划器说的来（多半是最新季报）。
+    # 不然「近三年和最新季报比」会被改回年报，和先读的年报撞成同一份，季报一个数都没读到（评测踩过）
+    if any(x.get("period") == FY for x in understanding.get("also_read") or []):
+        annual_first = False
     if annual_first and plan["action"] in ("current", "switch"):
         landed = period_of(plan["doc"]) if plan["action"] == "switch" else current_period
         if landed != FY:

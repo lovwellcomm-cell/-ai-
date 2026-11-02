@@ -49,6 +49,17 @@ CASES = [
     dict(n=13, cur="jd25", q="经营活动现金流为什么大幅增加？", doc="jd25", nums=["24.75"]),
     dict(n=14, cur="jd25", q="今天天气怎么样", behave="refuse"),
     dict(n=15, cur="jd25", q="对比一下", behave="clarify"),
+    # 跨报告（事实笔记第二期）：cross=True 要求回答引用了先读那份报告的笔记片段；doc 可以是几份里任一份
+    dict(n=16, cur="jd25", q="对比一下精达 2025 年报和 2026 三季报的营收和归母净利润",
+         doc=["jd26q3", "jd25"], nums=["246.74", "234.31"], cross=True),
+    dict(n=17, cur="jd25", q="精达近三年发展态势和最新季报比怎么样",
+         doc=["jd26q3", "jd25"], nums=["246.74", "234.31"], cross=True),
+    dict(n=18, cur="jd26q3", q="今年前三季度和去年全年比，营收增长快了吗",
+         doc=["jd26q3", "jd25"], nums=["234.31", "246.74"], cross=True),
+    dict(n=19, cur="qpl25", q="七匹狼 2025 年报和 2026 半年报的经营现金流对比",
+         doc=["qpl26h1", "qpl25"], nums=[], cross=True),
+    dict(n=20, cur="jd26q1", q="一季度和三季度的营收分别是多少",
+         doc=["jd26q1", "jd26q3"], nums=["234.31"], cross=True),
 ]
 
 
@@ -88,6 +99,10 @@ def run(case: dict, engine: str) -> dict:
     from rag.indexer import list_documents, load_index
     from rag.periods import period_of
     from rag.retriever import Retriever
+    from rag import notes
+    from rag.fidelity import unverified_in_tables
+    from rag.financials import load_or_build as load_fin
+    from rag.periods import report_label
     from ui.turn import plan_for, plan_resolution, step, with_period
 
     client = Counting(get_client())
@@ -126,8 +141,32 @@ def run(case: dict, engine: str) -> dict:
                                      restated=(u or {}).get("restated", ""))
 
     hits, qs = retrieve()
-    state = {"turn": {"q": q, "hits": hits, "queries": qs, "status": "generating", "started": t0}}
     company, year, period = meta.get("company", ""), meta.get("year", ""), period_of(meta)
+    # 第二期：先读别的报告记笔记（只用本地已有的报告，和 app.py 的 run_prestep 同一个 notes.read_step）
+    step_notes, steps = [], []
+    for x in (u or {}).get("also_read") or []:
+        p2 = plan_resolution({"company": company, "year": x["year"], "period": x["period"]},
+                             current_company=company, current_year=year, current_period=period, docs=docs)
+        if p2["action"] != "switch":
+            steps.append((x["year"], x["period"], p2["action"]))
+            continue
+        sdoc = p2["doc"]["doc_id"]
+        src = f"{company} {report_label(x['year'], x['period'])}"
+        _, c2, e2 = load_index(sdoc)
+        r2 = Retriever(c2, e2, company=company, year=str(x["year"]))
+        got_notes = notes.read_step(
+            sdoc, src, notes.prestep_question(company, report_label(x["year"], x["period"]), x["need"]),
+            x["need"], fin=load_fin(sdoc),
+            search=lambda qq, r2=r2: r2.search_with_queries(qq, client=client, use_llm=False)[0],
+            gen=lambda qq, hh, x=x: "".join(generate(qq, hh, client=client, company=company,
+                                                     year=str(x["year"]), period=x["period"],
+                                                     focus=notes.PRESTEP_FOCUS, style="pro")),
+            check=unverified_in_tables)
+        step_notes += got_notes
+        steps.append((x["year"], x["period"], len(got_notes)))
+    n_retrieved = len(hits)
+    hits = hits + notes.as_hits([], meta["doc_id"], extra=step_notes)
+    state = {"turn": {"q": q, "hits": hits, "queries": qs, "status": "generating", "started": t0}}
 
     def gen(qq, hh, *, client, company, year, history):
         t = state["turn"]
@@ -156,15 +195,20 @@ def run(case: dict, engine: str) -> dict:
             break
         if new["status"] == "retrieving":
             hits, qs = retrieve(new.pop("retry_queries", None))
+            n_retrieved = len(hits)
+            hits = hits + notes.as_hits([], meta["doc_id"], extra=step_notes)
             new = dict(new, hits=hits, queries=qs, status="generating")
         elif new["status"] == "resolving":
             # 复核要求重新理解：评测里不换报告（换了也是本地切换），只重做规划和检索
             u, _ = resolve(new.get("replan_hint", ""))
             hits, qs = retrieve()
+            n_retrieved = len(hits)
+            hits = hits + notes.as_hits([], meta["doc_id"], extra=step_notes)
             new = dict(new, hits=hits, queries=qs, status="generating")
         state["turn"] = new
     out.update(action=plan["action"], doc=meta["doc_id"], answer=(entry or {}).get("a", ""),
                hits=state["turn"].get("hits") or [], review=(entry or {}).get("review"),
+               steps=steps, n_retrieved=n_retrieved,
                secs=round(time.time() - t0, 1), calls=client.calls)
     return out
 
@@ -174,14 +218,23 @@ def judge(case: dict, got: dict) -> dict:
 
     if case.get("behave"):
         want = {"refuse": "out_of_scope", "clarify": "clarify"}[case["behave"]]
-        return {"ok": got.get("action") == want, "doc": None, "nums": None, "abstain": None, "orphan": None}
+        return {"ok": got.get("action") == want, "doc": None, "nums": None, "abstain": None, "orphan": None,
+                "cross": None}
     ans = got.get("answer") or ""
-    doc_ok = got.get("doc") == D[case["doc"]]
+    want_docs = case["doc"] if isinstance(case["doc"], list) else [case["doc"]]
+    doc_ok = got.get("doc") in [D[x] for x in want_docs]
     nums_ok = all(x in ans for x in case["nums"])
     abstain = ans.strip().startswith("年报中未找到") and bool(case["nums"])
     orphan = check(ans, got.get("hits") or []).get("无出处", 0) if ans else None
-    return {"ok": doc_ok and nums_ok and not abstain and not got.get("error"),
-            "doc": doc_ok, "nums": nums_ok, "abstain": abstain, "orphan": orphan,
+    # 跨报告：回答引用了笔记片段（编号排在检索片段之后的那几个）
+    from rag.generator import cited_numbers
+    hits = got.get("hits") or []
+    cross = None
+    if case.get("cross"):
+        k = got.get("n_retrieved", len(hits))
+        cross = any(n > k and hits[n - 1].get("note") for n in cited_numbers(ans, len(hits)))
+    return {"ok": doc_ok and nums_ok and not abstain and not got.get("error") and cross is not False,
+            "doc": doc_ok, "nums": nums_ok, "abstain": abstain, "orphan": orphan, "cross": cross,
             **readability(ans)}
 
 
@@ -243,6 +296,7 @@ def main() -> None:
         ("用对报告", lambda e: f"{len(col(e, lambda r: r[3]['doc']))} / {len(col(e, lambda r: r[3]['doc'] is not None))}"),
         ("关键数字都在", lambda e: f"{len(col(e, lambda r: r[3]['nums']))} / {len(col(e, lambda r: r[3]['nums'] is not None))}"),
         ("误答未找到", lambda e: str(len(col(e, lambda r: r[3]['abstain'])))),
+        ("跨报告引用了笔记", lambda e: f"{len(col(e, lambda r: r[3].get('cross')))} / {len(col(e, lambda r: r[3].get('cross') is not None))}"),
         ("无出处数字（合计）", lambda e: str(sum(r[3]['orphan'] or 0 for r in col(e, lambda r: True)))),
         ("耗时中位数（秒）", lambda e: str(med([r[2].get('secs', 0) for r in col(e, lambda r: True)]))),
         ("耗时最长（秒）", lambda e: str(max([r[2].get('secs', 0) for r in col(e, lambda r: True)] or [0]))),
@@ -276,6 +330,10 @@ def main() -> None:
                 bits.append("缺数字")
             if j["abstain"]:
                 bits.append("误答未找到")
+            if j.get("cross") is False:
+                bits.append("没引用笔记")
+            if g.get("steps"):
+                bits.append("先读" + "、".join(f"{y}{p}:{n}" for y, p, n in g["steps"]))
             if c.get("behave"):
                 bits.append(str(g.get("action")))
             rv = g.get("review") or {}

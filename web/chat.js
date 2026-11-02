@@ -1511,6 +1511,18 @@ export default function (component) {
       u.appendChild(mk("b", null, m.understood));
       tb.appendChild(u);
     }
+    // 分步读报告（第二期）：① 2025 年报（记下 7 个数）→ ② 2026 三季报（本轮回答）
+    if (m.steps && m.steps.length) {
+      const why = { ok: "", have: "前几轮已记下", same: "即本轮报告", quota: "导入已达上限，未读",
+                    timeout: "超时未读", error: "读取失败", skipped: "未读", main: "本轮回答" };
+      const line = mk("div", "trace-line");
+      line.appendChild(document.createTextNode("分步 "));
+      line.appendChild(mk("b", null, m.steps.map((x, i) => {
+        const note = x.status === "ok" ? "记下 " + x.n + " 个数" : (why[x.status] || "");
+        return "①②③④"[i] + " " + x.src + (note ? "（" + note + "）" : "");
+      }).join(" → ")));
+      tb.appendChild(line);
+    }
     (m.queries || []).forEach((qq) => {
       const line = mk("div", "trace-line");
       line.appendChild(document.createTextNode("检索词 "));

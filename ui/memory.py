@@ -29,7 +29,8 @@ _WEB_STR = {"title": 200, "url": 600, "site": 80, "date": 20}
 # 卡片、表格核对这些是程序算好的展示数据：结构复杂，原样带回，只限制总体大小
 _OPAQUE = CARD_KEYS + ("tableCheck", "review")
 _OPAQUE_MAX = 6000
-MAX_NOTES = 12            # 每轮最多几条事实笔记（rag/notes.MAX_PER_TURN）
+MAX_NOTES = 20            # 每轮最多几条事实笔记（rag/notes.MAX_PER_TURN）
+_STEP_STATUS = ("ok", "have", "same", "skipped", "timeout", "quota", "error", "main")
 NOTE_TEXT_LIMIT = 300
 # 「几件大事」每个因素带原文引用、最新动态、估算，5 个因素实测约 7–9 千字：超了会在刷新后悄悄消失
 _OPAQUE_MAX_BY_KEY = {"drivers": 16000}
@@ -117,6 +118,15 @@ def clean_entry(e, known_docs: set[str]) -> dict | None:
     notes = [n for n in (_clean_note(x, known_docs) for x in raw_notes[:MAX_NOTES]) if n]
     if notes:
         out["notes"] = notes
+    # 分步记录（第二期）：先读了哪几份报告、各记下几个数。只给界面那一行摘要用
+    steps = []
+    for x in (e.get("steps") if isinstance(e.get("steps"), list) else [])[:3]:
+        n = x.get("n") if isinstance(x, dict) else None
+        if (isinstance(x, dict) and x.get("status") in _STEP_STATUS and isinstance(n, int)
+                and not isinstance(n, bool) and 0 <= n <= 50 and _trim(x.get("src"), 40)):
+            steps.append({"src": _trim(x["src"], 40), "n": x["n"], "status": x["status"]})
+    if steps:
+        out["steps"] = steps
     did = e.get("doc_id")
     if isinstance(did, str) and _DOC_ID_RE.match(did) and did in known_docs:
         out["doc_id"] = did
@@ -132,7 +142,7 @@ def pack(history: list[dict]) -> list[dict]:
     out = []
     for e in history[-MAX_TURNS:]:
         item = {k: e[k] for k in ("q", "a", "notice", "kind", "doc_id", "queries", "web_sources",
-                                  "options", "understood", "style", "notes")
+                                  "options", "understood", "style", "notes", "steps")
                 if e.get(k)}
         if isinstance(e.get("secs"), int):
             item["secs"] = e["secs"]

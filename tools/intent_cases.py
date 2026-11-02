@@ -12,6 +12,8 @@
   clarify 反问 / out_of_scope 超出年报范围。
 - `card`：要不要出指标卡；None = 两可，不计分。
 - `anchors`：检索词的下限。每组至少一个词出现在检索词里；None = 不计分（不检索的题）。
+- `also`：跨报告（第二期）要先读的别的报告，可接受的集合列表，每个集合是 (年份, 期) 的列表；
+  `[[]]` = 不该拆步骤；不写 = 不计分。主报告选哪份有两种合理做法时，两种对应的集合都写上。
 
 有的题本身就有两种合理理解（「七匹狼利润率变化」用年报还是最新的半年报），
 就把两种都写进可接受的列表 —— 这里考的是「别理解错」，不是「猜中出题人的偏好」。
@@ -146,6 +148,40 @@ CASES = [
          plan=["current", "clarify"], intent=[C], card=None, anchors=None),
     dict(id="vague-2", cat="模糊", q="那个数据是多少",
          plan=["current", "clarify"], intent=[C], card=None, anchors=None),
+
+    # ---------------------------------------------------------------- 跨报告：先读另一份再回答（第二期）
+    dict(id="cross-1", cat="跨报告", q="对比一下精达 2025 年报和 2026 三季报的营收和利润",
+         plan=["current", ("switch", "jd26q3")], intent=[R, T], card=None, anchors=None,
+         also=[[(2025, "FY")], [(2026, "Q3")]]),
+    dict(id="cross-2", cat="跨报告", q="精达近三年发展态势和最新季报比怎么样",
+         plan=["current", ("switch", "jd26q3")], intent=[R, T], card=None, anchors=None,
+         also=[[(2025, "FY")], [(2026, "Q3")]]),
+    dict(id="cross-3", cat="跨报告", q="今年前三季度和去年全年比，营收增长快了吗", cur="jd26q3",
+         plan=["current", ("switch", "jd25")], intent=[R, T], card=None, anchors=None,
+         also=[[(2025, "FY")], [(2026, "Q3")]]),
+    dict(id="cross-4", cat="跨报告", q="结合 2025 年报看看今年前三季度的毛利率变化", cur="jd26q3",
+         plan=["current"], intent=[R, T], card=None, anchors=None, also=[[(2025, "FY")]]),
+    dict(id="cross-5", cat="跨报告", q="七匹狼 2025 年报和 2026 半年报的现金流对比", cur="qpl25",
+         plan=["current", ("switch", "qpl26h1")], intent=[R, T], card=None, anchors=None,
+         also=[[(2026, "H1")], [(2025, "FY")]]),
+    dict(id="cross-6", cat="跨报告", q="一季度和三季度的营收分别是多少", cur="jd26q1",
+         plan=["current", ("switch", "jd26q3")], intent=[R], card=None, anchors=None,
+         also=[[(2026, "Q3")], [(2026, "Q1")]]),
+    dict(id="cross-7", cat="跨报告", q="结合最新季报对比一下", history=["精达股份近三年发展态势如何？"],
+         plan=["current", ("switch", "jd26q3")], intent=[R, T], card=None, anchors=None,
+         also=[[(2025, "FY")], [(2026, "Q3")]]),
+    dict(id="cross-8", cat="跨报告", q="茅台 2025 年报和 2024 年报里的分红政策有什么不同", cur="mt25",
+         plan=["current", ("switch", "mt24")], intent=[R], card=None, anchors=None,
+         also=[[(2024, "FY")], [(2025, "FY")]]),
+    # 一份报告就能答：不该拆
+    dict(id="cross-no-1", cat="跨报告", q="2025 年营收比 2024 年增长多少",
+         plan=["current"], intent=[R], card=True, anchors=None, also=[[]]),
+    dict(id="cross-no-2", cat="跨报告", q="前三季度营收同比增长多少", cur="jd26q3",
+         plan=["current"], intent=[R], card=True, anchors=None, also=[[]]),
+    dict(id="cross-no-3", cat="跨报告", q="近三年营收趋势",
+         plan=["current"], intent=[T], card=True, anchors=None, also=[[]]),
+    dict(id="cross-no-4", cat="跨报告", q="毛利率和去年比怎么样",
+         plan=["current"], intent=[R, T], card=None, anchors=None, also=[[]]),
 
     # ---------------------------------------------------------------- 口语 / 缩写
     dict(id="colloq-1", cat="口语", q="ROE多少",

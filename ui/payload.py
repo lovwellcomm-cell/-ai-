@@ -27,6 +27,8 @@ from ui.turn import conversation_key
 STATUS_TEXT = {
     "resolving": "正在理解问题…",
     "retrieving": "检索相关片段…",
+    # 分步读别的报告；具体是哪一步由回合上的 step_text 覆盖
+    "prestep": "正在先读另一份报告…",
     "history": "正在调取往年年报，把趋势拉长到近 6 年…",
     "reviewing": "正在复核回答…",
     "generating": "正在生成回答…",
@@ -92,6 +94,9 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
             msg["statusText"] = "正在联网检索行业动态…（约半分钟）"
         if turn.get("kind") == "health" and status == "retrieving":
             msg["statusText"] = "正在逐项翻查报告做体检…"
+        # 分步读别的报告（第二期）：app.py 每一步写好 step_text（「第 1 步：读 2025 年报…」）
+        if status == "prestep" and turn.get("step_text"):
+            msg["statusText"] = turn["step_text"]
         if turn.get("kind") == "drivers" and status == "retrieving":
             msg["statusText"] = "正在从年报里找最能左右业绩的几件事…（第一次约半分钟）"
         # 复核没通过、正在回退：说清楚发现了什么、在做什么（旧回答还显示着）
@@ -107,6 +112,11 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
         msg["error"] = error
     if page:
         msg["page"] = page
+    # 分步记录：完成的条目里叫 steps，进行中的回合里叫 steps_log
+    steps = turn.get("steps") or turn.get("steps_log")
+    if steps:
+        msg["steps"] = [{"src": x.get("src", ""), "n": int(x.get("n") or 0), "status": x.get("status", "")}
+                        for x in steps]
     # 自动导入 / 自动切换文档的提示，跟着这一轮回答保留。
     if turn.get("notice"):
         msg["notice"] = turn["notice"]

@@ -22,7 +22,7 @@ from .financials import BALANCE_KEYS
 from .periods import FY, SPAN
 
 NOTE_TURNS = 3            # 最近几轮的笔记带进下一轮（用户 2026-11-03 定）
-MAX_PER_TURN = 12         # 每轮最多记几条（一条 = 表格一行 / 一个科目）
+MAX_PER_TURN = 20         # 每轮最多记几条（一条 = 表格一行 / 一个科目）；分步读两三份报告时要够放
 MAX_NOTE_HITS = 4         # 带进下一轮的额外片段最多几个（每个 = 一份报告的一页）
 NOTE_SECTION = "前几轮已核对的数据"
 TEXT_LIMIT = 300
@@ -57,6 +57,11 @@ def from_financials(fin: dict | None, doc_id: str, src: str) -> list[dict]:
             continue
         if item.get("change") is not None:
             cells.append(f"本期比上年同期增减 {item['change']:+.2f}%")
+        # 三季报的第三季度单季数（rag/financials 放在 quarter 里）：问「一季度和三季度」时要的就是它
+        q = item.get("quarter") or {}
+        if period != FY and isinstance(q.get("value"), (int, float)) and years:
+            cells.append(f"{years[0]} 年第三季度单季 {_amount(q['value'])}"
+                         + (f"（同比 {q['change']:+.2f}%）" if isinstance(q.get("change"), (int, float)) else ""))
         out.append({"doc": doc_id, "src": src, "p": int(fin["page"]),
                     "t": f"{item.get('label', key)}：{'；'.join(cells)}"[:TEXT_LIMIT]})
     return out
@@ -164,14 +169,17 @@ def merge(*groups: list[dict]) -> list[dict]:
     return out[:MAX_PER_TURN]
 
 
-def as_hits(history: list[dict], current_doc: str, turns: int = NOTE_TURNS) -> list[dict]:
+def as_hits(history: list[dict], current_doc: str, turns: int = NOTE_TURNS,
+            extra: list[dict] | None = None) -> list[dict]:
     """最近几轮里来自**别的报告**的笔记 → 额外片段（同一报告同一页合成一个）。
 
     当前报告自己的数字不带：检索本来就在这份报告里找，再带一遍只是重复。
+    extra 是这一轮前置步骤刚记下的笔记（第二期：先读别的报告），排在最前面。
     越新的轮次越靠前：片段有上限时先留最近的。
     """
     pages: dict[tuple[str, int], dict] = {}
-    for e in reversed(history[-turns:] if turns > 0 else []):
+    recent = list(reversed(history[-turns:] if turns > 0 else []))
+    for e in ([{"notes": extra}] if extra else []) + recent:
         for n in e.get("notes") or []:
             if n.get("doc") == current_doc:
                 continue
@@ -200,3 +208,40 @@ def sources_line(entry: dict) -> str:
         if name not in items:
             items.append(name)
     return "；".join(f"{src}（{'、'.join(items[:6])}）" for src, items in by_src.items())
+
+
+# ---------------------------------------------------------------- 第二期：前置步骤
+
+# 主要会计数据表覆盖得到的科目：前置步骤要的数据都在这里面时，只用程序抽的数，不调模型
+_FIN_NEED_RE = re.compile(r"营收|营业收入|收入|净利|利润|扣非|现金流|总资产|净资产|业绩|财务|经营情况|发展")
+
+
+def covered_by_financials(need: list[str]) -> bool:
+    """前置步骤要的数据是否都能从主要会计数据里拿到。没写要什么（need 为空）也按财务数据处理。"""
+    return all(_FIN_NEED_RE.search(n) for n in need or [])
+
+
+def prestep_question(company: str, label: str, need: list[str]) -> str:
+    items = "、".join(need) if need else "主要财务数据"
+    return f"{company}{label}中，{items}分别是多少？"
+
+
+# 前置步骤的生成只为记笔记：一张表，数字带 [编号]，不写分析（越短越快，表格才能逐格核对）
+PRESTEP_FOCUS = ("【这一步只为给后面的对比准备数据】只输出一张 Markdown 表格（项目、数值、来源 [编号]），"
+                 "不要写结论、分析和要点；片段里找不到的项目整行不写。\n\n")
+
+
+def read_step(sdoc: str, src: str, question: str, need: list[str], *, fin, search, gen,
+              check) -> list[dict]:
+    """一个前置步骤的核心：读一份报告、记笔记。app.py 和端到端评测共用。
+
+    fin 是这份报告的主要会计数据；需要的数据超出它时，search(question) 检索、gen(question, hits) 只出表格，
+    check(answer, hits) 逐格核对（rag/fidelity.unverified_in_tables），核对过的格子记成笔记。
+    """
+    got = from_financials(fin, sdoc, src)
+    if not covered_by_financials(need):
+        hits = search(question)
+        answer = gen(question, hits)
+        bad = (check(answer, hits) or {}).get("unverified") or []
+        got = merge(got, from_answer(answer, hits, bad, sdoc, src))
+    return got

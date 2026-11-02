@@ -158,6 +158,9 @@ SESSION_LIMIT = int(get("SESSION_LIMIT", "5"))   # 每个会话免费提问次�
 DAILY_LIMIT = int(get("DAILY_LIMIT", "100"))     # 全站每天免费提问次数
 MAX_PAGES = int(get("MAX_PAGES", "400"))         # 上传年报的页数上限
 MAX_UPLOADS_PER_SESSION = int(get("MAX_UPLOADS_PER_SESSION", "2"))
+# 分步读别的报告（rag/notes.py 第二期）：从提问起过了这么多秒就不再开始新的前置步骤，
+# 剩下的时间留给主报告的检索、生成、复核 —— 整轮控制在约 120 秒内。
+PRESTEP_BUDGET = int(get("PRESTEP_BUDGET", "50"))
 # 多年趋势：每个会话最多从巨潮下载几份往年年报（只抽表、不建索引；命中缓存不计数）。
 HISTORY_FETCHES_PER_SESSION = int(get("HISTORY_FETCHES_PER_SESSION", "3"))
 # 往年年报只读前 30 页抽表，等不了太久：超时就退回三年卡。

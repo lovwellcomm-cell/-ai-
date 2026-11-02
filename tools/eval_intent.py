@@ -117,6 +117,7 @@ def run_planner(case: dict, client) -> dict:
             "subquestions": u.get("subquestions"), "clarify": u.get("clarify"),
             "reply": u.get("reply"),
             "target": {k: (u.get("target") or {}).get(k) for k in ("company", "year", "period", "multiple")},
+            "also": sorted((x["year"], x["period"]) for x in u.get("also_read") or []),
             "secs": round(time.time() - t0, 1), "calls": calls}
 
 
@@ -139,7 +140,13 @@ def score(case: dict, got: dict) -> dict:
         missing = [g for g in anchors if not any(w in text for w in g)]
         res["anchors"] = not missing
         res["missing"] = ["/".join(g) for g in missing]
-    res["ok"] = all(v is not False for k, v in res.items() if k in ("plan", "intent", "card", "anchors"))
+    if case.get("also") is None:
+        res["also"] = None
+    else:
+        got_also = {tuple(x) for x in got.get("also") or []}
+        res["also"] = any(got_also == {tuple(x) for x in a} for a in case["also"])
+    res["ok"] = all(v is not False for k, v in res.items()
+                    if k in ("plan", "intent", "card", "anchors", "also"))
     return res
 
 
@@ -150,7 +157,7 @@ def _fmt(v) -> str:
 
 
 def report(engine: str, rows: list[dict]) -> str:
-    fields = ("plan", "intent", "card", "anchors")
+    fields = ("plan", "intent", "card", "anchors", "also")
     lines = [f"# 理解问题评测 · {engine} · {datetime.now():%Y-%m-%d %H:%M}", ""]
     n_ok = sum(r["score"]["ok"] for r in rows)
     lines.append(f"**整题全对 {n_ok} / {len(rows)}**")
@@ -183,6 +190,8 @@ def report(engine: str, rows: list[dict]) -> str:
             lines.append(f"- 意图：得到 `{g['intent']}`，期望 {' 或 '.join(c['intent'])}")
         if s["card"] is False:
             lines.append(f"- 指标卡：得到 {'出' if g['card'] else '不出'}，期望 {'出' if c['card'] else '不出'}")
+        if s.get("also") is False:
+            lines.append(f"- 先读：得到 `{g.get('also')}`，期望 {' 或 '.join(f'`{a}`' for a in c['also'])}")
         if s["anchors"] is False:
             lines.append(f"- 检索词缺：{'、'.join(s['missing'])}　实际 {g['queries']}")
         if g.get("error"):

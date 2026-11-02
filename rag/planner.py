@@ -33,6 +33,47 @@ _FIN_RE = re.compile(r"营收|收入|利润|净利|盈利|毛利|ROE|净资产�
 
 INTENTS = ("report", "trend", "industry", "clarify", "out_of_scope")
 
+# 跨报告（第二期 also_read）的代码兜底：问题里真的涉及两份报告才允许模型拆步骤，免得单报告问题被拆成多步、白多一两次读取。
+# 「两个不同年份」「年报类说法 + 季报类说法」「结合 / 对比」三种之一。
+_FY_WORD_RE = re.compile(r"年报|全年|年度|近[一二两三四五六七八九十几\d]+年|历年|这几年|过去几年")
+_Q_WORD_RE = re.compile(r"季报|季度|半年|中报|[QＱ][1-4]|一季|三季", re.IGNORECASE)
+_CMP_RE = re.compile(r"结合|对比|比较|相比|比一比|比起")
+MAX_ALSO_READ = 2
+
+
+# 不同的报告期说法：出现两种以上（「一季度和三季度」「年报和半年报」）就涉及两份报告
+_PERIOD_KINDS = (_FY_WORD_RE, re.compile(r"一季|[QＱ]1", re.IGNORECASE),
+                 re.compile(r"半年|中报|[QＱ]2", re.IGNORECASE), re.compile(r"三季|[QＱ]3", re.IGNORECASE))
+
+
+def multi_report(question: str) -> bool:
+    q = question or ""
+    years = set(re.findall(r"(?<!\d)20\d\d(?!\d)", q))
+    kinds = sum(bool(r.search(q)) for r in _PERIOD_KINDS)
+    return (len(years) >= 2 or kinds >= 2 or bool(_FY_WORD_RE.search(q) and _Q_WORD_RE.search(q))
+            or bool(_CMP_RE.search(q)))
+
+
+def _also_read(v, question: str, intent: str, today: date) -> list[dict]:
+    """模型给的 also_read → 校验过的「先读哪几份报告」。年份必须是具体的 4 位年份、不晚于今年。"""
+    if intent not in ("report", "trend") or not isinstance(v, list) or not multi_report(question):
+        return []
+    out = []
+    for x in v[:MAX_ALSO_READ]:
+        if not isinstance(x, dict):
+            continue
+        try:
+            year = int(x.get("year"))
+        except (TypeError, ValueError):
+            continue
+        if not 1990 <= year <= today.year:
+            continue
+        period = x.get("period") if x.get("period") in PERIODS else "FY"
+        item = {"year": year, "period": period, "need": _str_list(x.get("need"), 4, 30)}
+        if item not in out:
+            out.append(item)
+    return out
+
 PROMPT = """你是上市公司定期报告（年报、季报）问答助手的「问题理解」模块。不要回答问题，只把它理解清楚，输出 JSON。
 
 【输出字段】
@@ -60,6 +101,15 @@ PROMPT = """你是上市公司定期报告（年报、季报）问答助手的�
   否则填 {{"question": "", "options": []}}。
 - reply：intent 为 out_of_scope 时，用一句话礼貌说明这里只能回答定期报告里的内容，可以举一个能问的例子；否则填空字符串。
 
+- also_read：问题要把**另一份报告**的数据一起拿来对比时（"对比 2025 年报和最新三季报""近三年和今年前三季度比怎么样"
+  "结合最新季报对比一下"），列出主报告以外要先读的报告，最多 2 份：[{{"year": 2025, "period": "FY", "need": ["营业收入", "归母净利润"]}}]。
+  主报告（上面的 year/period）放最新、最核心的那份；year 必须写成 4 位年份（"去年""最新""今年"按【今天】换算）；
+  period 四选一；need 是要从那份报告里取的数据（1–4 个简短名词）。对话历史「已核对的数据」里已经有的报告不要列；
+  当前报告就是要对比的另一份时也要列上它。只涉及一份报告时填 []。
+  年报里本来就有本年、上年（主要会计数据还有前年）的数，季报里有本期和上年同期的数 ——
+  一份报告就能答的（"2025 年营收比 2024 年增长多少""前三季度同比增长多少"）不要列。
+  also_read 不为空时，上面主报告的 year 也写成具体 4 位年份（按【今天】换算），period 写明。
+
 对话历史里的「已核对的数据」是前几轮从某份报告里核对过的数字，回答环节能直接引用。
 问题要拿新报告和这些数据对比时（"结合最新季报对比一下"），year/period 填**还没有数据**的那份报告，
 intent 按问题本身填（不要因为要多份报告就填 trend 或 clarify）；restated 里写清楚两份报告各是哪份。
@@ -68,7 +118,7 @@ intent 按问题本身填（不要因为要多份报告就填 trend 或 clarify�
 
 只输出 JSON：
 {{"restated": "", "intent": "report", "company": "", "multiple": false, "year": null, "period": null,
-"card": false, "subquestions": [], "queries": [], "clarify": {{"question": "", "options": []}}, "reply": ""}}"""
+"card": false, "subquestions": [], "queries": [], "also_read": [], "clarify": {{"question": "", "options": []}}, "reply": ""}}"""
 
 
 def _context(question: str, history: list, current: dict, docs: list[dict], today: date,
@@ -139,8 +189,18 @@ def normalize(data: dict, question: str, history: list, today: date) -> dict | N
     # 就别让下面的规则从问题里抽出第一个年份和「前三季度」，去导入一份用不上的「2025 三季报」（实测踩过）
     facts = any(isinstance(h, dict) and h.get("facts") for h in history or [])
     multi_year = len(set(re.findall(r"(?<!\d)20\d\d(?!\d)", question))) >= 2
+    also = _also_read(data.get("also_read"), question, intent, today)
+    try:
+        main_year = int(data.get("year")) if data.get("year") is not None else None
+    except (TypeError, ValueError):
+        main_year = None
     if facts and multi_year and data.get("year") is None and data.get("period") is None:
         target = {"company": company, "year": None, "period": None,
+                  "multiple": bool(data.get("multiple"))}
+    elif also and main_year is not None and 1990 <= main_year <= today.year:
+        # 第二期：问题里有两份报告时，规则会把第一个年份和另一份的「三季报」拼成一份不存在的报告
+        # （「对比 2025 年报和 2026 三季报」→ 2025 三季报，实测踩过）。主报告听模型的（提示词要求它写成具体年份）
+        target = {"company": company, "year": main_year, "period": period or "FY",
                   "multiple": bool(data.get("multiple"))}
     else:
         # 规则优先：问题里说清了报告期、「最新」、「去年三季度」时用规则的结果
@@ -183,6 +243,7 @@ def normalize(data: dict, question: str, history: list, today: date) -> dict | N
         "clarify": {"question": ask or "想确认一下你想问的是：", "options": options}
         if intent == "clarify" else None,
         "reply": str(data.get("reply") or "").strip()[:200] if intent == "out_of_scope" else "",
+        "also_read": also if intent in ("report", "trend") else [],
     }
 
 
@@ -261,6 +322,8 @@ def describe(plan: dict | None) -> str:
     parts = [names.get(plan.get("intent"), "")]
     if who:
         parts.append(who)
+    if plan.get("also_read"):
+        parts.append("先读 " + "、".join(report_label(x["year"], x["period"]) for x in plan["also_read"]))
     if plan.get("restated"):
         parts.append(plan["restated"])
     return " · ".join(p for p in parts if p)

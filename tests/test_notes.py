@@ -198,3 +198,106 @@ def test_merge_drops_rows_whose_amounts_are_already_noted_on_that_page():
     texts = [n["t"] for n in got]
     assert sum(t.startswith("营业收入") for t in texts) == 1        # 表格那行和卡片重复
     assert any(t.startswith("主营业务毛利率") for t in texts)       # 只有比率的行照留
+
+
+# ---------------------------------------------------------------- 第二期：分步读别的报告
+
+def test_multi_report_guard():
+    from rag.planner import multi_report
+    assert multi_report("对比 2025 年报和 2026 三季报")
+    assert multi_report("近三年和今年前三季度比怎么样")
+    assert multi_report("结合最新季报对比一下")
+    assert not multi_report("营业收入是多少")
+    assert not multi_report("前三季度营收同比增长多少")
+
+
+def test_also_read_is_validated_and_guarded():
+    from datetime import date
+    from rag.planner import normalize
+    today = date(2026, 11, 3)
+    data = {"intent": "report", "company": "", "year": None, "period": None,
+            "also_read": [{"year": 2025, "period": "FY", "need": ["营业收入"]},
+                          {"year": "去年", "period": "FY"},              # 不是具体年份
+                          {"year": 2030, "period": "Q3"},                # 晚于今年
+                          {"year": 2025, "period": "FY", "need": ["营业收入"]}]}
+    got = normalize(data, "结合 2025 年报对比一下", [], today)["also_read"]
+    assert got == [{"year": 2025, "period": "FY", "need": ["营业收入"]}]
+    # 问题本身不涉及两份报告：模型列了也不算
+    assert normalize(data, "营业收入是多少", [], today)["also_read"] == []
+    # 体检、行业动态、反问不分步
+    assert normalize(dict(data, intent="industry"), "结合 2025 年报对比一下", [], today)["also_read"] == []
+
+
+def test_step_notes_come_first_in_note_hits():
+    step = [{"doc": DOC_Q3, "src": "精达股份 2026 三季报", "p": 3, "t": "营业收入：2026 年前三季度 234.31 亿元"}]
+    hist = [{"q": "x", "notes": [{"doc": DOC_FY, "src": "精达股份 2025 年报", "p": 7, "t": "营业收入：2025 年 246.74 亿元"}]}]
+    got = notes.as_hits(hist, "c" * 16, extra=step)
+    assert [h["doc_id"] for h in got] == [DOC_Q3, DOC_FY]
+
+
+def test_covered_by_financials():
+    assert notes.covered_by_financials(["营业收入", "归母净利润", "经营现金流"])
+    assert notes.covered_by_financials([])
+    assert not notes.covered_by_financials(["营业收入", "毛利率"])
+
+
+def test_steps_are_recorded_archived_and_sent_to_the_ui():
+    from ui.payload import ai_message
+    log = [{"src": "精达股份 2025 年报", "n": 7, "status": "ok"},
+           {"src": "精达股份 2026 三季报", "n": 0, "status": "main"}]
+    entry = history_entry({"q": "对比", "hits": [HIT_P7], "queries": [], "doc_id": DOC_Q3,
+                           "src_label": "精达股份 2026 三季报", "steps_log": log,
+                           "step_notes": notes.from_financials(FIN, DOC_FY, "精达股份 2025 年报")}, "好。")
+    assert entry["steps"] == log and entry["notes"][0]["doc"] == DOC_FY
+    back = memory.clean_entry(memory.pack([entry])[0], {DOC_FY, DOC_Q3})
+    assert back["steps"] == log
+    bad = memory.clean_entry(dict(memory.pack([entry])[0], steps=[{"src": "x", "n": True, "status": "ok"},
+                                                                   {"src": "x", "n": 1, "status": "?"}]),
+                             {DOC_FY, DOC_Q3})
+    assert "steps" not in bad
+    assert ai_message(entry)["steps"][0]["n"] == 7
+    assert ai_message({"q": "x", "status": "prestep", "step_text": "第 1 步：先读 2025 年报…"})["statusText"] \
+        == "第 1 步：先读 2025 年报…"
+
+
+def test_two_reports_in_question_keep_the_models_main_report():
+    """「对比 2025 年报和 2026 三季报」：规则会拼出 2025 三季报，有 also_read 时主报告听模型的。"""
+    from datetime import date
+    from rag.planner import multi_report, normalize
+    data = {"intent": "report", "company": "精达", "year": 2026, "period": "Q3",
+            "also_read": [{"year": 2025, "period": "FY", "need": ["营业收入"]}]}
+    got = normalize(data, "对比一下精达 2025 年报和 2026 三季报的营收", [], date(2026, 11, 3))
+    assert (got["target"]["year"], got["target"]["period"]) == (2026, "Q3")
+    assert multi_report("一季度和三季度的营收分别是多少")
+
+
+def test_read_step_uses_financials_only_when_they_cover_the_need():
+    calls = []
+    kw = dict(fin=FIN, search=lambda q: calls.append("search") or [HIT_P16],
+              gen=lambda q, h: calls.append("gen") or "| 项目 | 2025年 | 来源 |\n|---|---|---|\n| 主营业务毛利率 | 5.83% | [1] |\n",
+              check=lambda a, h: {"unverified": []})
+    got = notes.read_step(DOC_FY, "精达股份 2025 年报", "q", ["营业收入", "归母净利润"], **kw)
+    assert calls == [] and len(got) == 2
+    got = notes.read_step(DOC_FY, "精达股份 2025 年报", "q", ["营业收入", "毛利率"], **kw)
+    assert calls == ["search", "gen"] and got[-1]["t"] == "主营业务毛利率：2025年 5.83%" and got[-1]["p"] == 16
+
+
+def test_quarter_report_notes_include_the_single_third_quarter():
+    fin = {"period": "Q3", "page": 1, "years": ["2026", "2025"],
+           "items": {"revenue": {"label": "营业收入", "change": 31.81,
+                                 "values": {"2026": 23430538137.40, "2025": 17776000000.0},
+                                 "quarter": {"value": 8129474578.52, "change": 37.31}}}}
+    t = notes.from_financials(fin, DOC_Q3, "s")[0]["t"]
+    assert "2026 年第三季度单季 81.29 亿元（同比 +37.31%）" in t
+
+
+def test_trend_keeps_the_planners_main_report_when_the_annual_is_read_first():
+    from ui.turn import plan_for
+    docs = [{"doc_id": "jd25", "company": "精达股份", "year": "2025"},
+            {"doc_id": "jd26q3", "company": "精达股份", "year": "2026", "period": "Q3"}]
+    u = {"intent": "trend", "target": {"company": "精达股份", "year": 2026, "period": "Q3"},
+         "also_read": [{"year": 2025, "period": "FY", "need": []}]}
+    kw = dict(current_company="精达股份", current_year="2025", current_period="FY", docs=docs)
+    assert plan_for(u, **kw)["doc"]["doc_id"] == "jd26q3"
+    # 没有先读年报：趋势题照旧改用年报
+    assert plan_for(dict(u, also_read=[]), **kw)["action"] == "current"

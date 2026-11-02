@@ -38,6 +38,7 @@ from rag.generator import analyze, generate, get_client, make_client, resolve_st
 from rag import planner, reviewer
 from rag.history import load_older, merge, older_year, wants_trend
 from rag import notes as fact_notes
+from rag.fidelity import unverified_in_tables
 from rag.industry import RETRIEVAL_QUERY as INDUSTRY_QUERY, industry_brief, wants_industry
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
                          is_current, list_documents, load_index)
@@ -287,6 +288,38 @@ def doc_label(d: dict) -> str:
     if who and period != FY:
         who += f" {SHORT[period]}"
     return who or d["name"]
+
+
+def import_report(company: str, year, period: str, newer=None) -> tuple[str, str]:
+    """去巨潮下载一份报告并建索引，返回 (文档 id, 「精达股份 2026 三季报」)。
+
+    找不到或建索引失败时抛异常，提示语由调用方决定（主报告失败要退款报错，前置步骤失败只记一笔）。
+    「最新财报」：newer 是报告期已结束、可能提前披露的下一期，先试它，没有再用 (year, period)。
+    """
+    attempts = ([tuple(newer)] if newer else []) + [(year, period)]
+    for i, (want_year, want_period) in enumerate(attempts):
+        try:
+            data, fname, info = ensure_report(company, want_year, want_period)
+            period = want_period
+            break
+        except ReportNotFound:
+            if i == len(attempts) - 1:
+                raise
+    auto_company = info.get("company") or company
+    auto_year = str(info.get("year") or "")
+    label = f"{auto_company} {report_label(auto_year, period)}".strip()
+    new_id, err = ingest(data, f"{label}.pdf" if label else fname,
+                         check_limits=config.PUBLIC_DEMO,
+                         source_url=info["url"],
+                         source_site=source_site(info["url"]),
+                         company=auto_company, year=auto_year,
+                         period=period)
+    if not new_id:
+        raise RuntimeError(err)
+    visible = visible_ids()
+    if visible is not None:
+        visible.add(new_id)
+    return new_id, label
 
 
 def uploads_used() -> int:
@@ -548,6 +581,91 @@ def finish_turn(entry: dict) -> None:
     st.session_state["chat_warn"] = ""
 
 
+# ---------- 第二期：分步读别的报告（rag/notes.py 的前置步骤） ----------
+# 主报告以外最多再读 2 份。每份只为记笔记：主要会计数据够用就只用程序抽的数（不调模型）；
+# 要的数据超出时，在那份报告上检索 + 只出表格的简短生成，核对过的格子记成笔记。
+# 前置步骤失败不影响主回答，只在分步记录里记一笔。注意：这里只读 meta / history，不给它们赋值。
+
+def prestep_text(target: dict, i: int) -> str:
+    steps = target.get("also_read") or []
+    if i >= len(steps):
+        return "正在检索相关片段…"
+    label = report_label(steps[i]["year"], steps[i]["period"])
+    return f"第 {i + 1} 步：先读 {label}，记下要对比的数据…"
+
+
+def run_prestep(target: dict) -> None:
+    """执行第 pre_i 个前置步骤，结果写回 target；全部做完（或超时）就转回 retrieving。"""
+    steps = target.get("also_read") or []
+    i = int(target.get("pre_i") or 0)
+    log = target.setdefault("steps_log", [])
+    company = meta.get("company", "")
+    main_label = f"{company} {report_label(meta.get('year', ''), period_of(meta))}".strip()
+
+    def finish():
+        log.append({"src": main_label, "n": 0, "status": "main"})
+        target["pre_done"] = True
+        target["status"] = "retrieving"
+        target.pop("step_text", None)
+
+    if i >= len(steps):
+        finish()
+        return
+    step = steps[i]
+    label = f"{company} {report_label(step['year'], step['period'])}".strip()
+    rec = {"src": label, "n": 0, "status": "ok"}
+    target["pre_i"] = i + 1
+    target["step_text"] = prestep_text(target, i + 1)
+    if time.time() - target.get("started", time.time()) > config.PRESTEP_BUDGET:
+        # 超时：这一份和后面的都不读了，主回答照常
+        log.extend({"src": f"{company} {report_label(x['year'], x['period'])}".strip(), "n": 0,
+                    "status": "timeout"} for x in steps[i:])
+        finish()
+        return
+    try:
+        plan = turn_core.plan_resolution(
+            {"company": company, "year": step["year"], "period": step["period"]},
+            current_company=company, current_year=meta.get("year", ""),
+            current_period=period_of(meta), docs=list_documents(visible_ids()))
+        sdoc = None
+        if plan["action"] == "current":
+            rec["status"] = "same"                      # 就是主报告本身，不用另读
+        elif plan["action"] == "switch":
+            sdoc = plan["doc"]["doc_id"]
+        elif plan["action"] == "import":
+            if config.PUBLIC_DEMO and uploads_used() >= config.MAX_UPLOADS_PER_SESSION:
+                rec["status"] = "quota"
+            else:
+                sdoc, label = import_report(company, step["year"], step["period"])
+                rec["src"] = label
+        if sdoc and any(n.get("doc") == sdoc for e in history[-fact_notes.NOTE_TURNS:]
+                        for n in e.get("notes") or []):
+            rec["status"] = "have"                      # 前几轮已经有这份报告的笔记，as_hits 会带上
+            sdoc = None
+        if sdoc:
+            client = pick_client()
+            _, sret = get_retriever(sdoc, config.INDEX_VERSION, SOURCE_STAMP)
+            got = fact_notes.read_step(
+                sdoc, rec["src"],
+                fact_notes.prestep_question(company, report_label(step["year"], step["period"]),
+                                            step.get("need") or []),
+                step.get("need") or [],
+                fin=get_financials(sdoc, SOURCE_STAMP),
+                search=lambda q: sret.search_with_queries(q, client=client, use_llm=False)[0],
+                gen=lambda q, h: "".join(generate(q, h, client=client, company=company,
+                                                  year=str(step["year"]), period=step["period"],
+                                                  focus=fact_notes.PRESTEP_FOCUS, style="pro")),
+                check=unverified_in_tables)
+            target["step_notes"] = (target.get("step_notes") or []) + got
+            rec["n"] = len(got)
+    except Exception as e:
+        rec["status"] = "error"
+        target["prestep_error"] = f"{type(e).__name__}: {e}"
+    log.append(rec)
+    if i + 1 >= len(steps):
+        finish()
+
+
 def advance_turn() -> None:
     """回合状态机：resolving -> retrieving -> (history) -> generating -> analyzing / searching -> done。
 
@@ -591,6 +709,9 @@ def advance_turn() -> None:
         target["plan"] = understood
         target["target"] = understood["target"]
         target["understood"] = planner.describe(understood)
+        # 第二期：主报告以外要先读的报告（rag/planner._also_read 已做过代码兜底）。体检、几件大事不分步
+        if understood.get("also_read") and not target.get("kind"):
+            target["also_read"] = understood["also_read"]
         if understood["intent"] == "industry":
             target["kind"] = "industry"
         plan = turn_core.plan_for(
@@ -638,36 +759,12 @@ def advance_turn() -> None:
                              "请切换到已有文档，或手动上传/粘贴链接。")
                 st.rerun()
             try:
-                # 「最新财报」：下一期如果报告期已结束，先试它（可能提前披露了），没有再用已过截止日的那期
-                attempts = ([tuple(plan["newer"])] if plan.get("newer") else []) \
-                    + [(plan["year"], plan["period"])]
-                for i, (want_year, want_period) in enumerate(attempts):
-                    try:
-                        data, fname, info = ensure_report(plan["company"], want_year, want_period)
-                        plan = dict(plan, year=want_year, period=want_period)
-                        break
-                    except ReportNotFound:
-                        if i == len(attempts) - 1:
-                            raise
-                auto_company = info.get("company") or plan["company"]
-                auto_year = str(info.get("year") or "")
-                label = f"{auto_company} {report_label(auto_year, plan['period'])}".strip()
-                pretty = f"{label}.pdf"
-                new_id, err = ingest(data, pretty or fname,
-                                     check_limits=config.PUBLIC_DEMO,
-                                     source_url=info["url"],
-                                     source_site=source_site(info["url"]),
-                                     company=auto_company, year=auto_year,
-                                     period=plan["period"])
-                if not new_id:
-                    raise RuntimeError(err)
+                new_id, label = import_report(plan["company"], plan["year"], plan["period"],
+                                              newer=plan.get("newer"))
             except Exception as e:
                 refund(target)
                 fail(target, f"{e}。可以在左侧上传 PDF，或粘贴巨潮链接。")
                 st.rerun()
-            visible = visible_ids()
-            if visible is not None:
-                visible.add(new_id)
             st.session_state.doc_id = new_id
             target["doc_id"] = new_id
             target["notice"] = f"已自动导入《{label}》，基于该文档回答"
@@ -730,6 +827,20 @@ def advance_turn() -> None:
                                             latest.get("web_sources") or []))
         st.rerun()
 
+    if target["status"] == "retrieving" and target.get("also_read") and not target.get("pre_done") \
+            and target.get("kind") != "industry":
+        # 第二期：先把别的报告的数记成笔记，再在主报告上检索回答。每读一份 rerun 一次，界面状态跟着走
+        target["status"] = "prestep"
+        target["pre_i"] = 0
+        target["step_text"] = prestep_text(target, 0)
+        st.session_state["turn"] = target
+        st.rerun()
+
+    if target["status"] == "prestep":
+        run_prestep(target)
+        st.session_state["turn"] = target
+        st.rerun()
+
     if target["status"] == "retrieving":
         client = pick_client()
         if client is None:
@@ -774,7 +885,7 @@ def advance_turn() -> None:
         # 事实笔记：前几轮在别的报告里核对过的数字，接在检索片段后面编号（rag/notes.py）。
         # 行业动态的片段只用来给联网检索定方向，不带
         if target.get("kind") != "industry":
-            hits = hits + fact_notes.as_hits(history, doc_id)
+            hits = hits + fact_notes.as_hits(history, doc_id, extra=target.get("step_notes"))
         target["hits"] = hits
         target["queries"] = queries
         target["src_label"] = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}".strip()
