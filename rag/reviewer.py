@@ -17,8 +17,11 @@ import re
 
 from . import config
 from .fidelity import check as fidelity_check
+from .generator import is_abstention
 
 VERDICTS = ("pass", "retrieve", "regenerate", "replan")
+# 定期报告的常规披露项：问这些却答「未找到」，只可能是检索漏了
+_ROUTINE_RE = re.compile(r"营收|收入|利润|净利|现金流|资产|负债|毛利|分红|利润分配|派息|研发|客户|供应商|员工|股东")
 _CITE_RE = re.compile(r"\[(\d+)\]")
 _SNIPPET_CHARS = 700          # 每个片段给复核模型看多少字：够判断，又不至于让复核比生成还慢
 
@@ -29,6 +32,10 @@ PROMPT = """你是上市公司定期报告问答的复核员。给你【问题�
 1. 要点覆盖：【问题理解】里的每个要点，回答是否给出了答案；片段里确实没有时，回答明确说明"未找到/未披露"也算答到。
 2. 有无依据：回答里的数字和事实能否在片段里找到，或由片段数字算出（换算单位、四舍五入、求差、求比例都算有依据）。
 3. 漏看：回答说"未找到"，但片段里其实有。
+
+回答说"未找到"时，先想这一项报告里通常有没有：营收、利润、现金流、资产负债、毛利率、分红、研发投入、
+前五大客户和供应商、员工人数这类是定期报告的常规披露项，一定在报告里 —— 片段里没有就判 retrieve 并给检索词，
+不要判 pass。只有报告通常不披露的内容（具体合同细节、未来股价等），说"未找到"才算答到。
 
 不要因为措辞、格式、篇幅、语气、详略不通过。拿不准时判通过。
 
@@ -128,8 +135,15 @@ def review(question: str, answer: str, hits: list[dict], *, client, plan: dict |
     except Exception:
         return None
     out = normalize(data, clues)
-    if out is not None:
-        out["clues"] = clues
+    if out is None:
+        return None
+    out["clues"] = clues
+    # 常规披露项答成「未找到」：一定是检索没找全（评测里见过模型照样放行「时代新材营收多少 → 未找到」）
+    if out["verdict"] == "pass" and is_abstention(answer) \
+            and _ROUTINE_RE.search(question + " " + (plan or {}).get("restated", "")):
+        out["verdict"] = "retrieve"
+        out["queries"] = out["queries"] or ["主要会计数据和财务指标", "合并利润表 营业收入 净利润"]
+        out["note"] = out["note"] or "报告里应有这项数据，回答却说未找到"
     return out
 
 
@@ -137,15 +151,17 @@ def decide(result: dict | None, *, round_no: int, elapsed: float,
            max_retry: int | None = None, budget: float | None = None) -> str:
     """复核结果 → 下一步：pass / retrieve / regenerate / replan / accept。
 
-    accept = 没通过但不再重试，照常给出回答并标出问题。三种情况会走到这里：
-    已经回退过 max_retry 次；剩下的时间不够再跑一轮（重试一轮约 25 秒）；复核本身没跑成时
-    返回 pass（复核坏了不拦回答）。
+    accept = 没通过但不再重试，照常给出回答并标出问题。走到这里的情况：
+    已经回退过 max_retry 次；剩下的时间不够再跑一轮。复核本身没跑成时返回 pass（复核坏了不拦回答）。
+
+    「够不够再跑一轮」按**第一轮实际用了多久**估：重答一轮和第一轮差不多久（检索 + 生成 + 复核）。
+    最早按固定 25 秒估，端到端评测里趋势题第一轮 60 秒、照样放行回退，结果总共 117 秒，超了 90 秒上限。
     """
     max_retry = config.AGENT_MAX_RETRY if max_retry is None else max_retry
     budget = config.AGENT_TIME_BUDGET if budget is None else budget
     if result is None or result["verdict"] == "pass":
         return "pass"
-    if round_no >= max_retry or elapsed + 25 > budget:
+    if round_no >= max_retry or elapsed * 2 > budget:
         return "accept"
     return result["verdict"]
 

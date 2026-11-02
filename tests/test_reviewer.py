@@ -50,7 +50,8 @@ def test_program_checks_find_bad_cites_and_orphans():
     (_res("retrieve", queries=["主要会计数据"]), 0, 10, "retrieve"),
     (_res("replan"), 0, 10, "replan"),
     (_res("regenerate"), 1, 10, "accept"),                  # 已经回退过一次
-    (_res("regenerate"), 0, 70, "accept"),                  # 70 + 25 > 90：时间不够再跑一轮
+    (_res("regenerate"), 0, 40, "regenerate"),              # 第一轮 40 秒，再来一轮 80 秒，还在 90 以内
+    (_res("regenerate"), 0, 60, "accept"),                  # 回归：第一轮 60 秒再重答一轮会到 120 秒
 ])
 def test_decide(res, round_no, elapsed, want):
     assert reviewer.decide(res, round_no=round_no, elapsed=elapsed, max_retry=1, budget=90) == want
@@ -149,3 +150,31 @@ def test_without_reviewer_flow_unchanged():
     assert new["status"] in ("done", "analyzing") and "after_review" not in new
     new, entry, err = step(new, gen=gen, ana=ana) if new["status"] != "done" else (new, entry, err)
     assert "review" not in entry
+
+
+def test_empty_answer_retried_once_then_error():
+    empty = lambda *a, **k: ""
+    new, entry, err = step(_turn(), gen=empty, ana=ana)
+    assert new["status"] == "generating" and new["empty_retry"] and err is None
+    new, entry, err = step(new, gen=empty, ana=ana)
+    assert err == "模型没有返回内容，请重试。"
+
+
+class _FakeClient:
+    """复核模型永远说 pass：用来测代码兜底。"""
+
+    def __init__(self, content):
+        msg = type("M", (), {"content": content})
+        choice = type("C", (), {"message": msg})
+        resp = type("R", (), {"choices": [choice]})
+        self.chat = type("Chat", (), {"completions": type("Comp", (), {"create": lambda self, **k: resp})()})()
+
+
+def test_routine_item_abstention_forced_to_retrieve():
+    """评测里见过：「时代新材营收多少」答成「年报中未找到」，复核模型照样放行。"""
+    client = _FakeClient('{"verdict": "pass", "points": [{"point": "营业收入", "ok": true}]}')
+    out = reviewer.review("时代新材营收多少", "年报中未找到相关信息。", HITS, client=client)
+    assert out["verdict"] == "retrieve" and out["queries"]
+    # 报告通常不披露的东西，说未找到可以放行
+    out = reviewer.review("明年股价目标是多少", "年报中未找到相关信息。", HITS, client=client)
+    assert out["verdict"] == "pass"

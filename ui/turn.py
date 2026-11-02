@@ -356,6 +356,12 @@ def step(turn: dict, *, gen, ana, web=None, ind=None, client=None, company: str 
         except Exception as e:
             return turn, None, f"调用大模型失败：{e}"
 
+        # 模型偶尔一个字都不返回（端到端评测里见过）：重试一次，再空就报错退款，
+        # 不能把空回答交给用户。
+        if not (answer or "").strip():
+            if not turn.get("empty_retry"):
+                return dict(turn, empty_retry=True), None, None
+            return turn, None, "模型没有返回内容，请重试。"
         new = dict(turn, a=answer)
         # 首轮明确说年报里没有：让模型调工具补公开信息，而不是凭记忆猜。
         # 弃答不做扩展（没有结论可解释，问"为什么"只会诱发编造）；
