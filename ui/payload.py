@@ -23,7 +23,7 @@ from ui.turn import conversation_key
 # 组件不做流式输出（Streamlit 的 rerun 模型做逐字流式会卡顿、闪烁），
 # 等待时间由这几档真实状态文案填补。
 STATUS_TEXT = {
-    "resolving": "正在查找报告…",
+    "resolving": "正在理解问题…",
     "retrieving": "检索相关片段…",
     "history": "正在调取往年年报，把趋势拉长到近 6 年…",
     "generating": "正在生成回答…",
@@ -106,7 +106,7 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
     # 结构化财务卡片（ui/card.py 产出）：组件收到就用、收不到就不渲染。
     # cardTitle / cardNote 跟着消息走 —— 全局默认值是「演示数据」，不能挂到真实数字上。
     # tableCheck：回答里 Markdown 表格的逐格核对结果（ui/turn.py:history_entry 算好存下）。
-    for key in CARD_KEYS + ("tableCheck", "table", "demo", "kind"):
+    for key in CARD_KEYS + ("tableCheck", "table", "demo", "kind", "options", "understood"):
         if turn.get(key):
             msg[key] = turn[key]
     return msg

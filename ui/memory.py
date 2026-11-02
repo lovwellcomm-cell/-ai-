@@ -20,7 +20,9 @@ MAX_CONVS = 20            # 最多留几家公司
 _DOC_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _CONV_KEY_RE = re.compile(r"^(co|doc):.{1,60}$")
 
-_ENTRY_STR = {"q": 500, "a": 20000, "notice": 200, "kind": 20}
+_ENTRY_STR = {"q": 500, "a": 20000, "notice": 200, "kind": 20, "understood": 300}
+# industry 行业动态；clarify 反问（带 options）；refuse 超出范围
+_KINDS = ("industry", "clarify", "refuse")
 _HIT_STR = {"text": 4000, "section": 120, "subsection": 160}
 _WEB_STR = {"title": 200, "url": 600, "site": 80, "date": 20}
 # 卡片、表格核对这些是程序算好的展示数据：结构复杂，原样带回，只限制总体大小
@@ -68,10 +70,10 @@ def clean_entry(e, known_docs: set[str]) -> dict | None:
     out = {k: _trim(e.get(k), n) for k, n in _ENTRY_STR.items()}
     if not out["q"] or not out["a"]:
         return None
-    for k in ("notice", "kind"):
+    for k in ("notice", "kind", "understood"):
         if not out[k]:
             out.pop(k)
-    if out.get("kind") not in (None, "industry"):
+    if out.get("kind") not in (None, *_KINDS):
         out.pop("kind")
     hits = [h for h in (_clean_hit(x) for x in (e.get("hits") or [])[:12]) if h]
     out["hits"] = hits
@@ -79,6 +81,9 @@ def clean_entry(e, known_docs: set[str]) -> dict | None:
     web = [w for w in (_clean_web(x) for x in (e.get("web_sources") or [])[:10]) if w]
     if web:
         out["web_sources"] = web
+    opts = e.get("options")
+    if out.get("kind") == "clarify" and isinstance(opts, list):
+        out["options"] = [o[:60] for o in opts[:4] if isinstance(o, str) and o.strip()]
     secs = e.get("secs")
     if isinstance(secs, int) and not isinstance(secs, bool) and 0 <= secs <= 3600:
         out["secs"] = secs
@@ -96,7 +101,8 @@ def pack(history: list[dict]) -> list[dict]:
     """要存进浏览器的形状：最近 MAX_TURNS 轮，只留重新显示和翻原页需要的字段。"""
     out = []
     for e in history[-MAX_TURNS:]:
-        item = {k: e[k] for k in ("q", "a", "notice", "kind", "doc_id", "queries", "web_sources")
+        item = {k: e[k] for k in ("q", "a", "notice", "kind", "doc_id", "queries", "web_sources",
+                                  "options", "understood")
                 if e.get(k)}
         if isinstance(e.get("secs"), int):
             item["secs"] = e["secs"]
@@ -175,7 +181,7 @@ def recent_context(history: list[dict], n: int) -> list[dict]:
     out = []
     for e in history[-n:] if n > 0 else []:
         item = {"q": e.get("q", "")}
-        if e.get("kind") != "industry":
+        if e.get("kind") not in ("industry", "refuse"):
             g = answer_gist(e.get("a", ""))
             if g:
                 item["gist"] = g

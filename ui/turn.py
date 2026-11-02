@@ -81,8 +81,15 @@ def history_entry(turn: dict, answer: str) -> dict:
     if turn.get("web_error"):
         entry["web_error"] = turn["web_error"]
     # 行业动态回合：界面据此不再显示「行业动态」按钮、不出指标卡。
+    # 反问（clarify）、超出范围（refuse）也是 kind：它们没检索，回答是规划器给的一句话。
     if turn.get("kind"):
         entry["kind"] = turn["kind"]
+    # 反问的可选项：界面渲染成按钮，点了直接发送
+    if turn.get("options"):
+        entry["options"] = list(turn["options"])
+    # 规划器怎么理解这个问题的（rag/planner.describe），检索轨迹里给人看
+    if turn.get("understood"):
+        entry["understood"] = turn["understood"]
     # 依据的是哪份年报：同一公司多个年度共用一段对话后，翻原页、标注年份都要靠它。
     if turn.get("doc_id"):
         entry["doc_id"] = turn["doc_id"]
@@ -189,6 +196,39 @@ def plan_resolution(target: dict, *, current_company: str = "", current_year: st
                                               bool(d.get("demo"))))
         return {"action": "switch", "doc": best}
     return {"action": "import", "company": company, "year": year, "period": period or FY}
+
+
+def quick_entry(turn: dict, text: str, kind: str, options: list[str] | None = None) -> dict:
+    """不检索、不生成就收尾的一轮（反问、超出范围）。形状和 history_entry 一致。"""
+    t = dict(turn, hits=[], queries=[], kind=kind)
+    if options:
+        t["options"] = options
+    return history_entry(t, text)
+
+
+def plan_for(understanding: dict, *, current_company: str = "", current_year: str = "",
+             current_period: str = FY, docs=(), today: date | None = None) -> dict:
+    """规划器的理解（rag/planner.py）→ 用哪份报告。在 plan_resolution 外面多两条：
+
+    · 反问、超范围：不找报告，返回 {"action": "clarify" | "out_of_scope"}；
+    · 趋势：季报里只有本期和上年同期两个数，问多年必须用年报 —— 落在季报上就改找这家公司
+      最新的年报（用户实际遇到的：停在三季报上问「近几年发展如何」，回答「年报中未找到」）。
+    """
+    intent = understanding.get("intent")
+    if intent in ("clarify", "out_of_scope"):
+        return {"action": intent}
+    kw = dict(current_company=current_company, current_year=current_year,
+              current_period=current_period, docs=docs, today=today)
+    tgt = understanding.get("target") or {}
+    plan = plan_resolution(tgt, **kw)
+    if intent == "trend" and plan["action"] in ("current", "switch"):
+        landed = period_of(plan["doc"]) if plan["action"] == "switch" else current_period
+        if landed != FY:
+            # 年份要写明：留空的话 plan_resolution 会沿用当前季报的年份，而那一年的年报还没出
+            annual = {"company": tgt.get("company") or "", "period": FY, "multiple": False,
+                      "year": latest_year(FY, today)}
+            plan = plan_resolution(annual, **kw)
+    return plan
 
 
 def _plan_latest(target: dict, company: str, here: bool, current_year: str,

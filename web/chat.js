@@ -537,6 +537,25 @@ export default function (component) {
     WEB_LIST = m.webSources || [];
     appendProse(body, m.text, (m.sources || []).length, m.tableCheck);
 
+    // 反问：选项是可以直接发送的完整问题；「其他」把焦点交给输入框让用户自己写。
+    // 只有最后一条、而且不在生成中时可点 —— 点旧的反问选项会把对话带回过去。
+    if (m.kind === "clarify" && m.options && m.options.length) {
+      const live = idx === (d.messages || []).length - 1 && !d.busy;
+      const box = mk("div", "clarify");
+      m.options.forEach((o) => {
+        const b = mk("button", "clarify-opt", o);
+        b.type = "button";
+        b.disabled = !live;
+        b.onclick = () => { if (!d.busy) setTriggerValue("ask", { text: o }); };
+        box.appendChild(b);
+      });
+      const other = mk("button", "clarify-opt other", "其他（自己输入）");
+      other.type = "button";
+      other.disabled = !live;
+      other.onclick = () => { input.focus(); };
+      box.appendChild(other);
+      body.appendChild(box);
+    }
     if (m.kpis && m.kpis.length) body.appendChild(buildCard(m));
     if (m.queries && m.queries.length) body.appendChild(buildTrace(m));
     if (m.sources && m.sources.length) body.appendChild(buildSources(m, idx));
@@ -900,6 +919,13 @@ export default function (component) {
     const det = mk("details", "trace");
     det.appendChild(mk("summary", null, "检索轨迹 · " + m.hits + " 个片段 · 2 路召回"));
     const tb = mk("div", "trace-body");
+    // 规划器（agent1）怎么理解这个问题：意图 · 目标报告 · 补全后的问题
+    if (m.understood) {
+      const u = mk("div", "trace-line");
+      u.appendChild(document.createTextNode("问题理解 "));
+      u.appendChild(mk("b", null, m.understood));
+      tb.appendChild(u);
+    }
     (m.queries || []).forEach((qq) => {
       const line = mk("div", "trace-line");
       line.appendChild(document.createTextNode("改写检索词 "));
@@ -999,7 +1025,7 @@ export default function (component) {
     // 行业动态回合本身不再挂。点了就是发一条自然语言问题，聊天记录里读得懂。
     const company = (d.doc && d.doc.company) || "";
     const isLast = idx === (d.messages || []).length - 1;
-    if (company && isLast && m.kind !== "industry" && !d.busy) {
+    if (company && isLast && !m.kind && !d.busy) {   // 反问、超范围、行业动态都不挂
       const ind = mk("button", "act act-ind");
       ind.type = "button";
       ind.innerHTML = ICONS.pulse;

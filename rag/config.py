@@ -127,6 +127,12 @@ AUTO_IMPORT_ENABLED = get("AUTO_IMPORT_ENABLED", "1") == "1"
 TARGET_MAX_TOKENS = int(get("TARGET_MAX_TOKENS", "2000"))
 TARGET_TIMEOUT = float(get("TARGET_TIMEOUT", "20"))
 
+# agent1 规划器（rag/planner.py）：一次调用合并「识别公司年份」和「改写检索词」，再判断意图。
+# 关掉就退回旧流程。输出比识别目标长（要点、检索词、反问选项），推理型模型 max_tokens 要给足。
+AGENT_PLANNER = get("AGENT_PLANNER", "1") == "1"
+PLANNER_MAX_TOKENS = int(get("PLANNER_MAX_TOKENS", "4000"))
+PLANNER_TIMEOUT = float(get("PLANNER_TIMEOUT", "25"))
+
 # ---------- 公开演示模式 ----------
 # 部署到公网时设 PUBLIC_DEMO=1：限制提问次数、限制上传、按会话隔离上传的年报。
 PUBLIC_DEMO = get("PUBLIC_DEMO", "0") == "1"

@@ -159,17 +159,28 @@ class Retriever:
 
     def search_with_queries(self, query: str, k: int = config.TOP_K, pool: int = 50,
                             rrf_k: int = 60, client=None, use_llm: bool | None = None,
-                            history: list[str] | None = None, diag: dict | None = None):
+                            history: list[str] | None = None, diag: dict | None = None,
+                            queries: list[str] | None = None, restated: str = ""):
         """检索并同时返回所用的检索词。不修改任何共享状态，多个会话可同时调用。
 
         client 为本次请求使用的大模型客户端（用于查询改写）；use_llm 覆盖实例默认值。
         history 传最近几轮的问题，用于消解追问里的指代；diag 用来回收改写是否退化。
+
+        queries：规划器（rag/planner.py）已经给了检索词时直接用，不再调一次模型改写。
+        restated 是规划器补全了指代的完整问题，规则改写一下作为补充 —— 原问题带指代时
+        （「那2024年呢」）不能拿来检索，补全后的可以。
         """
         if not self.chunks:
             return [], []
         pool = min(pool, len(self.chunks))
         use_llm = self.use_llm_rewrite if use_llm is None else use_llm
-        queries = self._expand(query, client, use_llm, history=history, diag=diag)
+        if queries:
+            base = [rule_rewrite(restated, self.company, self.year)] if restated else []
+            queries = list(dict.fromkeys(q for q in base + list(queries) if q))
+            if diag is not None:
+                diag["rewrite"] = "planner"
+        else:
+            queries = self._expand(query, client, use_llm, history=history, diag=diag)
         qvecs = self.embed([config.QUERY_INSTRUCTION + q for q in queries])
 
         fused: dict[int, float] = {}

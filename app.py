@@ -24,7 +24,6 @@ SOURCE_STAMP = ensure_fresh()
 
 from rag import config
 from rag.chunker import chunk_pages
-from rag.company import extract_target
 try:
     from rag.disclosure import ReportNotFound, download_pdf, ensure_report, source_site
 except Exception as _import_error:          # 部署环境里的 import 失败要能被看见
@@ -34,6 +33,7 @@ except Exception as _import_error:          # 部署环境里的 import 失败�
 from rag.external import answer_with_tools
 from rag.financials import load_or_build as load_financials
 from rag.generator import analyze, generate, get_client, make_client
+from rag import planner
 from rag.history import load_older, merge, older_year, wants_trend
 from rag.industry import RETRIEVAL_QUERY as INDUSTRY_QUERY, industry_brief, wants_industry
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
@@ -551,19 +551,37 @@ def advance_turn() -> None:
             fail(target, "未配置 DeepSeek Key，无法回答。请在 .env 或 Secrets 中配置，"
                          "或在左侧填写自己的 Key。")
             st.rerun()
-        try:
-            tgt = extract_target(target["q"], client=client,
-                                 current_company=meta.get("company", ""))
-        except Exception:
-            tgt = {"company": "", "year": None, "multiple": False}
-        # 年报 / 一季报 / 半年报 / 三季报：用规则从问题里认，相对年份（「去年三季度」）一并换算
-        tgt = turn_core.with_period(tgt, target["q"])
-        target["target"] = tgt
-        plan = turn_core.plan_resolution(
-            tgt, current_company=meta.get("company", ""),
+        # agent1 规划器（rag/planner.py）：一次调用拿到意图、目标报告、要点和检索词。
+        # 失败或关掉时退回旧流程（模型认公司年份 + 规则），形状一样。
+        docs_here = list_documents(visible_ids())
+        ctx = chat_memory.recent_context(history, config.FOLLOWUP_HISTORY_TURNS)
+        understood = None
+        if config.AGENT_PLANNER:
+            understood = planner.understand(target["q"], client=client, history=ctx,
+                                            current=meta, docs=docs_here)
+        if understood is None:
+            understood = planner.fallback(target["q"], client=client, history=ctx, current=meta)
+        target["plan"] = understood
+        target["target"] = understood["target"]
+        target["understood"] = planner.describe(understood)
+        if understood["intent"] == "industry":
+            target["kind"] = "industry"
+        plan = turn_core.plan_for(
+            understood, current_company=meta.get("company", ""),
             current_year=meta.get("year", ""),
-            current_period=period_of(meta),
-            docs=list_documents(visible_ids()))
+            current_period=period_of(meta), docs=docs_here)
+
+        if plan["action"] in ("clarify", "out_of_scope"):
+            # 反问 / 超出范围：不检索、不生成，规划器给的一句话就是回答。没花生成的钱，退还额度。
+            refund(target)
+            if plan["action"] == "clarify":
+                c = understood["clarify"]
+                entry = turn_core.quick_entry(target, c["question"], "clarify", c["options"])
+            else:
+                entry = turn_core.quick_entry(
+                    target, understood["reply"] or "这里只能回答上市公司定期报告里的内容。", "refuse")
+            finish_turn(entry)
+            st.rerun()
 
         if plan["action"] == "multiple":
             refund(target)
@@ -654,9 +672,12 @@ def advance_turn() -> None:
                 hits, queries = retriever.search_with_queries(
                     INDUSTRY_QUERY, client=client, use_llm=False, diag=diag)
             else:
+                # 规划器给了检索词就直接用（不再调一次改写）；退回旧流程时照旧改写
+                pl = target.get("plan") or {}
                 hits, queries = retriever.search_with_queries(
                     target["q"], client=client, use_llm=config.LLM_REWRITE,
                     history=recent or None, diag=diag,
+                    queries=pl.get("queries") or None, restated=pl.get("restated", ""),
                 )
         except Exception as e:
             refund(target)
@@ -672,7 +693,12 @@ def advance_turn() -> None:
         # 问到营收、利润、现金流这类方向时，附上程序抽取的指标卡。
         # 抽取失败只记在回合上 —— 卡片是锦上添花，不能拖垮回答本身。
         target["status"] = "generating"
-        if target.get("kind") != "industry" and wants_card(target["q"], previous=recent):
+        # 出不出卡、要不要拉长趋势：规划器判断过就听它的（它见过上下文），否则用关键词规则
+        pl = target.get("plan") or {}
+        want_card = (pl["card"] if pl.get("source") == "planner"
+                     else wants_card(target["q"], previous=recent))
+        want_trend = pl.get("intent") == "trend" or wants_trend(target["q"], previous=recent)
+        if target.get("kind") != "industry" and want_card:
             try:
                 fin = get_financials(doc_id, SOURCE_STAMP)
                 card = build_card(fin)
@@ -682,7 +708,7 @@ def advance_turn() -> None:
             if card:
                 target.update(card)
                 # 问趋势时再抽一份往年年报，把卡片拉长到六年（单独一轮，好显示状态文案）
-                if (fin.get("period") or FY) == FY and wants_trend(target["q"], previous=recent):
+                if (fin.get("period") or FY) == FY and want_trend:
                     target["status"] = "history"
         st.session_state["turn"] = target
         st.rerun()
@@ -716,7 +742,8 @@ def advance_turn() -> None:
 
         def _gen(q, hits, *, client, company, year, history):
             return "".join(generate(q, hits, client=client, company=company,
-                                    year=year, history=history, period=period_of(meta)))
+                                    year=year, history=history, period=period_of(meta),
+                                    focus=planner.focus_block(target.get("plan"))))
 
         def _ana(q, hits, first, *, client, company, year, history):
             diag: dict = {}

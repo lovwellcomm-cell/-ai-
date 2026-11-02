@@ -79,7 +79,48 @@ def run_baseline(case: dict, client) -> dict:
             "secs": round(time.time() - t0, 1), "secs_target": round(t1 - t0, 1), "calls": 2}
 
 
-ENGINES = {"baseline": run_baseline}
+_INTENT = {"report": "report_qa"}
+
+
+def run_planner(case: dict, client) -> dict:
+    """新流程：rag/planner.py 一次调用 + 规则兜底 → ui/turn.plan_for 选报告。
+    规划器失败时和线上一样退回旧流程（记 source=fallback），检索词再走旧的改写。"""
+    from rag import planner
+    from rag.periods import period_of
+    from rag.retriever import llm_rewrite, rule_rewrite
+    from ui.turn import plan_for
+
+    today = date(*TODAY)
+    cur = _doc(case.get("cur", "jd25"))
+    history = case.get("history") or []
+    q = case["q"]
+    t0 = time.time()
+    u = planner.understand(q, client=client, history=history, current=cur, docs=DOCS, today=today)
+    calls = 1
+    if u is None:
+        u = planner.fallback(q, client=client, history=history, current=cur, today=today)
+        calls += 1
+    plan = plan_for(u, current_company=cur["company"], current_year=cur["year"],
+                    current_period=period_of(cur), docs=DOCS, today=today)
+    queries = u["queries"]
+    if not queries and u["intent"] in ("report", "trend"):
+        doc = plan["doc"] if plan.get("action") == "switch" else cur
+        extra = llm_rewrite(q, doc["year"], client=client, history=history or None)
+        queries = [] if (extra and history) else [rule_rewrite(q, doc["company"], doc["year"])]
+        queries = list(dict.fromkeys(x for x in queries + extra if x))
+        calls += 1
+    key = _plan_key(plan)
+    if key == "out_of_scope":
+        key = "current"                      # 不换报告，和测试集的写法一致
+    return {"plan": key, "intent": _INTENT.get(u["intent"], u["intent"]), "card": u["card"],
+            "queries": queries, "source": u["source"], "restated": u.get("restated"),
+            "subquestions": u.get("subquestions"), "clarify": u.get("clarify"),
+            "reply": u.get("reply"),
+            "target": {k: (u.get("target") or {}).get(k) for k in ("company", "year", "period", "multiple")},
+            "secs": round(time.time() - t0, 1), "calls": calls}
+
+
+ENGINES = {"baseline": run_baseline, "planner": run_planner}
 
 
 def score(case: dict, got: dict) -> dict:

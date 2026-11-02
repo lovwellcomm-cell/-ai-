@@ -408,6 +408,17 @@ details.trace summary:hover { color: var(--ink-2); }
 .trace-line { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-3); line-height: 1.6; }
 .trace-line b { color: var(--ink-2); font-weight: 400; }
 
+/* 反问的可选项：一列完整问题，最后一个「其他」是虚线框 */
+.clarify { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 2px; }
+.arb .clarify-opt {
+  text-align: left; font-size: 13px; line-height: 1.5; padding: 8px 13px; border-radius: var(--r-md);
+  color: var(--ink); background: var(--surface); border: 1px solid var(--line-2);
+  transition: border-color .15s ease, background .15s ease, transform .15s ease; cursor: pointer;
+}
+.arb .clarify-opt:hover:not([disabled]) { border-color: var(--accent-line); background: var(--accent-soft); transform: translateX(2px); }
+.arb .clarify-opt.other { color: var(--ink-2); border-style: dashed; }
+.arb .clarify-opt[disabled] { opacity: .55; cursor: default; }
+
 /* 来源列表 */
 /* 默认折叠（details），标题行可点；展开后列表与标题之间留同样的间距 */
 details.srcs { display: block; }

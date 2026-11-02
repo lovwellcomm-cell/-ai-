@@ -78,7 +78,8 @@ def _history_block(history: list | None) -> str:
 
 
 def build_messages(question: str, chunks: list[dict], company: str = "", year: str = "",
-                   history: list[str] | None = None, period: str = FY) -> list[dict]:
+                   history: list[str] | None = None, period: str = FY,
+                   focus: str = "") -> list[dict]:
     desc = doc_desc(company, year, period)
     system = SYSTEM_PROMPT.format(doc_desc=desc)
     if config.ANSWER_CHAR_BUDGET > 0:
@@ -87,6 +88,7 @@ def build_messages(question: str, chunks: list[dict], company: str = "", year: s
         system += ANSWER_WHY_RULE
     user = (f"【年报片段】\n{format_context(chunks)}\n\n"
             f"{_history_block(history)}"
+            f"{focus}"
             f"【问题】\n{question}")
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -106,18 +108,20 @@ def get_client():
 
 def generate(question: str, chunks: list[dict], client=None,
              company: str = "", year: str = "", usage_out: dict | None = None,
-             history: list[str] | None = None, period: str = FY) -> Iterator[str]:
+             history: list[str] | None = None, period: str = FY,
+             focus: str = "") -> Iterator[str]:
     """流式返回回答文本片段。
 
     usage_out 传字典时，会把本次调用的 token 用量填进去（需要 stream_options 才会回传）。
     生成器不能有返回值，所以用这种方式把用量带出来。
 
     history 是最近几轮的**问题**，用来消解追问里的指代。不给回答。
+    focus 是规划器的「问题理解」（rag/planner.focus_block）：补全后的问题和要逐一回答的要点。
     """
     client = client or get_client()
     stream = client.chat.completions.create(
         model=config.LLM_MODEL,
-        messages=build_messages(question, chunks, company, year, history, period),
+        messages=build_messages(question, chunks, company, year, history, period, focus),
         temperature=0.1, stream=True, timeout=config.LLM_TIMEOUT,
         stream_options={"include_usage": True},
     )
