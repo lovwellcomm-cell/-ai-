@@ -17,6 +17,7 @@ from rag.company import normalize, same_company
 from rag.external import join_external, should_search
 from rag.fidelity import unverified_in_tables
 from rag.generator import join_answer, should_analyze
+from rag.healthcheck import brief as health_brief, compact as compact_health
 from rag.reviewer import decide, summary
 from rag.periods import (FY, RANK, latest_quarter, latest_report, latest_year, next_report,
                          period_end, period_in, period_of, relative_year, wants_latest,
@@ -84,6 +85,7 @@ def history_entry(turn: dict, answer: str) -> dict:
         entry["web_error"] = turn["web_error"]
     # 行业动态回合：界面据此不再显示「行业动态」按钮、不出指标卡。
     # 反问（clarify）、超出范围（refuse）也是 kind：它们没检索，回答是规划器给的一句话。
+    # 体检（health）同理：没检索，正文和卡片是程序写的。
     if turn.get("kind"):
         entry["kind"] = turn["kind"]
     # 反问的可选项：界面渲染成按钮，点了直接发送
@@ -211,6 +213,12 @@ def quick_entry(turn: dict, text: str, kind: str, options: list[str] | None = No
     return history_entry(t, text)
 
 
+def health_entry(turn: dict, hc: dict, label: str) -> dict:
+    """体检回合：不检索、不生成，卡片和正文都由程序按 rag/healthcheck 的结果写。"""
+    t = dict(turn, hits=[], queries=[], kind="health", health=compact_health(hc))
+    return history_entry(t, health_brief(hc, label))
+
+
 def plan_for(understanding: dict, *, current_company: str = "", current_year: str = "",
              current_period: str = FY, docs=(), today: date | None = None) -> dict:
     """规划器的理解（rag/planner.py）→ 用哪份报告。在 plan_resolution 外面多两条：
@@ -218,6 +226,8 @@ def plan_for(understanding: dict, *, current_company: str = "", current_year: st
     · 反问、超范围：不找报告，返回 {"action": "clarify" | "out_of_scope"}；
     · 趋势：季报里只有本期和上年同期两个数，问多年必须用年报 —— 落在季报上就改找这家公司
       最新的年报（用户实际遇到的：停在三季报上问「近几年发展如何」，回答「年报中未找到」）。
+    · 体检：9 项里 6 项只在年报披露，落在季报上同样改用最新年报；
+      用户明说了哪一期（「三季报体检」）就照他说的。
     """
     intent = understanding.get("intent")
     if intent in ("clarify", "out_of_scope"):
@@ -226,7 +236,8 @@ def plan_for(understanding: dict, *, current_company: str = "", current_year: st
               current_period=current_period, docs=docs, today=today)
     tgt = understanding.get("target") or {}
     plan = plan_resolution(tgt, **kw)
-    if intent == "trend" and plan["action"] in ("current", "switch"):
+    annual_first = intent == "trend" or (intent == "health" and not tgt.get("period"))
+    if annual_first and plan["action"] in ("current", "switch"):
         landed = period_of(plan["doc"]) if plan["action"] == "switch" else current_period
         if landed != FY:
             # 年份要写明：留空的话 plan_resolution 会沿用当前季报的年份，而那一年的年报还没出

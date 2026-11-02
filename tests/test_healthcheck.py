@@ -301,3 +301,76 @@ def test_build_quarterly_marks_annual_only_items():
 def test_every_item_carries_its_public_rule():
     out = hc.build_from_lines([["空白页"]], None, "FY")
     assert all(it["rule"] == hc.RULES[it["key"]] for it in out["items"])
+
+
+# ---------------------------------------------------------------- 回合与卡片
+
+from ui import memory, payload, turn as turn_core      # noqa: E402
+
+
+@pytest.mark.parametrize("q,want", [
+    ("给精达股份做个年报体检", True),
+    ("这家公司有什么风险？", True),
+    ("帮我排雷", True),
+    ("财务上有没有隐患", True),
+    ("年报提示了哪些经营风险？", False),      # 管理层自述的风险：走正常回答
+    ("营业收入是多少？", False),
+])
+def test_wants_health(q, want):
+    assert hc.wants_health(q) is want
+
+
+def test_button_question_is_recognized():
+    assert hc.wants_health(hc.button_question("精达股份"))
+
+
+def _sample():
+    return hc.build_from_lines(
+        _pages("4、公司控股股东或第一大股东及其一致行动人累计质押股份数量占其所持公司股份数量比例达到 80%\n"
+               "√适用 □不适用", SZSE_TOP5),
+        _fin(ocf=-6.57e8, np_parent=1.37e8, np_deducted=1.30e8), "FY")
+
+
+def test_brief_lists_red_and_yellow_with_pages():
+    text = hc.brief(_sample(), "示例公司 2025 年报")
+    assert text.startswith("按《示例公司 2025 年报》的披露做了")
+    assert "**红灯**：现金流含金量" in text
+    assert "大股东质押 超过 80%（第 1 页）" in text
+    assert "**黄灯**：客户集中度 65.04%（第 2 页）" in text
+    assert "不构成投资建议" in text
+
+
+def test_health_entry_shape_and_rules_restored_in_payload():
+    entry = turn_core.health_entry({"q": "体检", "doc_id": "a" * 16}, _sample(), "示例 2025 年报")
+    assert entry["kind"] == "health" and entry["hits"] == [] and entry["queries"] == []
+    assert all("rule" not in it for it in entry["health"]["items"])      # 历史里不存固定文字
+    msg = payload.ai_message(entry)
+    by_key = {it["key"]: it for it in msg["health"]["items"]}
+    assert by_key["pledge"]["rule"] == hc.RULES["pledge"]
+    assert by_key["pledge"]["status"] == "red"
+
+
+def test_payload_sanitizes_restored_health():
+    # 浏览器存档带回来的数据由访客控制：不认识的项丢掉，灯色和页码按白名单
+    raw = {"items": [{"key": "audit", "status": "purple", "page": "3", "value": "x" * 99},
+                     {"key": "evil", "status": "red"}, "not a dict"]}
+    card = payload.health_card(raw)
+    assert [it["key"] for it in card["items"]] == ["audit"]
+    it = card["items"][0]
+    assert it["status"] == "none" and it["page"] is None and len(it["value"]) == 40
+
+
+def test_health_page_attaches_to_its_own_turn():
+    entry = turn_core.health_entry({"q": "体检"}, _sample(), "")
+    later = {"q": "营收多少", "a": "答", "hits": [], "queries": []}
+    page = {"hp": 2, "turn": 0, "png": "data:image/png;base64,AA"}
+    msgs = payload.build_messages([entry, later], None, page=page)
+    assert msgs[1]["page"] == page          # 第 0 轮的回答
+    assert "page" not in msgs[3]            # 不会挂到最后一条上
+
+
+def test_memory_keeps_health_kind_and_card():
+    entry = turn_core.health_entry({"q": "体检", "doc_id": "a" * 16}, _sample(), "")
+    back = memory.clean_entry(memory.pack([entry])[0], {"a" * 16})
+    assert back["kind"] == "health"
+    assert back["health"]["items"][0]["key"] == "audit"

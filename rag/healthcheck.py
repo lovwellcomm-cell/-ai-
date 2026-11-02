@@ -340,7 +340,7 @@ def check_profit(fin: dict | None, pages_lines, period: str) -> dict:
     else:
         status = _grade(share, 20, 50)
         if status == RED:
-            summary = (f"归母净利润 {_yi(np_)} 里有 {share:.0f}% 来自非经常性项目（如理财、卖资产、补助），"
+            summary = (f"归母净利润 {_yi(np_)}里有 {share:.0f}% 来自非经常性项目（如理财、卖资产、补助），"
                        f"扣掉后只剩 {_yi(ded)}，主业赚得不多。")
         elif status == YELLOW:
             summary = f"归母净利润里有 {share:.0f}% 来自非经常性项目，扣非后为 {_yi(ded)}。"
@@ -541,6 +541,58 @@ def build_from_lines(pages_lines: list[list[str]], fin: dict | None, period: str
     ordered = [items[k] for k in ORDER]
     counts = {s: sum(1 for it in ordered if it["status"] == s) for s in (RED, YELLOW, GREEN, NONE)}
     return {"version": HC_VERSION, "period": period, "items": ordered, "counts": counts}
+
+
+# ---------------------------------------------------------------- 回合与卡片
+#
+# 体检回合不检索、不调模型：卡片和摘要都是程序按上面的结果写的。
+# 「年报提示了哪些经营风险」这类问管理层自述风险的，仍走正常回答（不在下面的词里）。
+
+_WANTS_RE = re.compile(r"体检|排雷|避雷|踩雷|有没有雷|隐患|红黄绿|财务风险|风险点|"
+                       r"有什么风险|有哪些风险|有没有风险|健康状况|财务健康")
+_STATUS_NAME = {RED: "红灯", YELLOW: "黄灯", GREEN: "绿灯"}
+
+
+def wants_health(question: str) -> bool:
+    return bool(_WANTS_RE.search(question or ""))
+
+
+def button_question(company: str) -> str:
+    """「体检」按钮发出的问题。写成自然语言，聊天记录里读得懂，也能被 wants_health 认出。"""
+    who = company or "这家公司"
+    return f"给{who}做个年报体检：审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押"
+
+
+def compact(hc: dict) -> dict:
+    """存进历史和浏览器的形状：去掉判断标准（固定文字，下发时按 key 从 RULES 补回）。"""
+    keep = ("key", "label", "status", "value", "summary", "detail", "page")
+    return {"period": hc.get("period", FY), "counts": dict(hc.get("counts") or {}),
+            "items": [{k: it.get(k) for k in keep} for it in hc.get("items") or []]}
+
+
+def brief(hc: dict, label: str) -> str:
+    """回答正文：几红几黄、各是哪几项、在第几页。细节在卡片里。"""
+    items = hc.get("items") or []
+    judged = [it for it in items if it["status"] != NONE]
+    c = {s: sum(1 for it in judged if it["status"] == s) for s in (RED, YELLOW, GREEN)}
+    src = f"《{label}》" if label else "这份报告"
+    head = (f"按{src}的披露做了 {len(judged)} 项体检：**红灯 {c[RED]} 项，"
+            f"黄灯 {c[YELLOW]} 项，绿灯 {c[GREEN]} 项**。")
+    skipped = len(items) - len(judged)
+    if skipped:
+        head += f"另有 {skipped} 项{'只在年报里披露' if hc.get('period', FY) != FY else '没有找到披露'}，未作判断。"
+    paras = [head]
+    for status in (RED, YELLOW):
+        hits = [it for it in judged if it["status"] == status]
+        if hits:
+            paras.append(f"**{_STATUS_NAME[status]}**：" + "；".join(
+                f"{it['label']} {it['value']}" + (f"（第 {it['page']} 页）" if it.get("page") else "")
+                for it in hits) + "。")
+    if not c[RED] and not c[YELLOW] and judged:
+        paras.append("没有亮红灯或黄灯的项目。")
+    paras.append("每一项的判断标准写在卡片里，点开可以翻到原页核对。体检只看报告披露的数字和勾选项，"
+                 "不构成投资建议；想了解管理层自己列出的经营风险，可以问「年报提示了哪些经营风险？」")
+    return "\n\n".join(paras)
 
 
 def build(data: bytes, fin: dict | None, period: str = FY) -> dict:

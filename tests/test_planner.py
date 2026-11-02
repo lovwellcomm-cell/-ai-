@@ -104,6 +104,15 @@ def test_trend_on_quarterly_switches_to_annual():
     assert _plan(u) == {"action": "current"}
 
 
+def test_health_prefers_annual_unless_period_named():
+    """实测：在精达上问「七匹狼有什么风险」切到了七匹狼 2026 三季报，9 项只能做 3 项。"""
+    on_q3 = {"intent": "health", "target": {"company": "", "year": None, "period": None}}
+    assert _plan(on_q3, "2026", "Q3") == {"action": "switch", "doc": DOCS[0]}
+    named = {"intent": "health", "target": {"company": "", "year": None, "period": "Q3"}}
+    assert _plan(named, "2026", "Q3") == {"action": "current"}
+    assert planner.describe(dict(on_q3, intent="health")).startswith("年报体检")
+
+
 def test_clarify_and_out_of_scope_skip_resolution():
     assert _plan({"intent": "clarify", "target": {}}) == {"action": "clarify"}
     assert _plan({"intent": "out_of_scope", "target": {}}) == {"action": "out_of_scope"}

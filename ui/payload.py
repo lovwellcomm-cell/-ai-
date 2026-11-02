@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 from rag.generator import cited_numbers
+from rag.healthcheck import RULES as HEALTH_RULES
 from rag.periods import FY, RANK, SHORT, TITLE, period_of
 from ui.card import CARD_KEYS
 from ui.turn import conversation_key
@@ -83,6 +84,8 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
             msg["elapsed"] = max(0, int(time.time() - turn["started"]))
         if turn.get("kind") == "industry" and status == "generating":
             msg["statusText"] = "正在联网检索行业动态…（约半分钟）"
+        if turn.get("kind") == "health" and status == "retrieving":
+            msg["statusText"] = "正在逐项翻查报告做体检…"
         # 复核没通过、正在回退：说清楚发现了什么、在做什么（旧回答还显示着）
         if turn.get("retry") and status in ("resolving", "retrieving", "history", "generating"):
             note = (turn.get("review_last") or {}).get("note") or "回答有遗漏"
@@ -117,7 +120,30 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
     for key in CARD_KEYS + ("tableCheck", "table", "demo", "kind", "options", "understood", "review"):
         if turn.get(key):
             msg[key] = turn[key]
+    if isinstance(msg.get("health"), dict):
+        msg["health"] = health_card(msg["health"])
     return msg
+
+
+def health_card(h: dict) -> dict:
+    """体检卡下发前补回每项的判断标准（历史里不存这段固定文字）。浏览器存档带回来的数据
+    由访客控制：只留认识的 key 和灯色，其余字段一律转成有长度上限的字符串。"""
+    items = []
+    for it in (h.get("items") or [])[:len(HEALTH_RULES)]:
+        if not isinstance(it, dict) or it.get("key") not in HEALTH_RULES:
+            continue
+        page = it.get("page")
+        items.append({
+            "key": it["key"],
+            "label": str(it.get("label") or "")[:20],
+            "status": it.get("status") if it.get("status") in ("red", "yellow", "green", "none") else "none",
+            "value": str(it.get("value") or "")[:40],
+            "summary": str(it.get("summary") or "")[:300],
+            "detail": str(it.get("detail") or "")[:200],
+            "page": page if isinstance(page, int) and not isinstance(page, bool) and page > 0 else None,
+            "rule": HEALTH_RULES[it["key"]],
+        })
+    return {"period": str(h.get("period") or ""), "items": items}
 
 
 def build_messages(history: list[dict], turn: dict | None = None, page: dict | None = None,
@@ -125,7 +151,8 @@ def build_messages(history: list[dict], turn: dict | None = None, page: dict | N
     """已完成的历史轮次 + 进行中的一轮（如果有）。
 
     page 是「查看原页」渲染出来的那一页，只属于最后一条助手消息 ——
-    抽屉里展示的也永远是最后一条的引用。
+    抽屉里展示的也永远是最后一条的引用。例外是体检卡点开的原页（带 turn = 历史里第几轮）：
+    挂在那一轮的消息上，卡片在那一项下面直接展开图片。
 
     doc_labels（文档 id → 「七匹狼 2024」）：同一公司的多个年度共用一段对话，
     **只有当这段对话真的跨了不止一份年报时**，才给每条回答标上依据的年报。
@@ -145,6 +172,10 @@ def build_messages(history: list[dict], turn: dict | None = None, page: dict | N
     for past in history:
         messages.append({"role": "user", "text": past.get("q", "")})
         messages.append(_labelled(ai_message(past), past))
+    k = page.get("turn") if page else None
+    if isinstance(k, int) and 0 <= k < len(history):
+        messages[2 * k + 1]["page"] = page
+        page = None
     if turn and turn.get("q"):
         messages.append({"role": "user", "text": turn["q"]})
         messages.append(_labelled(ai_message(

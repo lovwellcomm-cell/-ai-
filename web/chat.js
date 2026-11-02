@@ -27,6 +27,10 @@ const ICONS = {
   doc: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
 };
 
+// 体检卡：灯色排序（红灯在最前）和读法。组件函数体里的 const 会撞暂时性死区，所以放这里
+const HC_ORDER = { red: 0, yellow: 1, green: 2, none: 3 };
+const HC_NAME = { red: "红灯", yellow: "黄灯", green: "绿灯", none: "未判断" };
+
 // 正在渲染的那条消息的网页来源（[网n] → 链接）。放在模块顶层，理由同 TABLE_LINE：
 // 组件函数体里的 let 会在渲染路径先用到时撞上暂时性死区。
 let WEB_LIST = [];
@@ -103,6 +107,7 @@ function syncStore(d, setTriggerValue) {
 const HERO_SUGS = [
   { key: "rev",    tag: "财务摘要",   text: "营业收入和归母净利润分别是多少？" },
   { key: "margin", tag: "经营分析",   text: "毛利率同比变化的原因是什么？" },
+  { key: "health", tag: "年报体检",   text: "给这家公司做个年报体检" },
   { key: "risk",   tag: "客户与风险", text: "前五大客户与供应商集中度如何？" },
   { key: "rd",     tag: "研发投入",   text: "研发投入的金额与资本化比例？" },
   // 教用户用“自动找年报”：点了会去巨潮导入七匹狼，再基于它的年报回答
@@ -271,7 +276,9 @@ export default function (component) {
   // 「行业动态」按钮只挂在最后一条回答上、生成中不显示：位置和忙闲也算进签名，
   // 否则发出新问题后，上一条回答不重建，按钮会留在它下面
   // elapsed 每次 rerun 都变，但读秒由前端自己往上数，不该为它重建消息
-  const msgSig = (m, i) => JSON.stringify([Object.assign({}, m, { page: undefined, elapsed: undefined }),
+  // 例外：体检卡点开的原页就画在卡片里那一项下面，它变了要重建这条消息
+  const healthPage = (m) => (m.kind === "health" && m.page ? [m.page.hp, (m.page.png || "").length] : undefined);
+  const msgSig = (m, i) => JSON.stringify([Object.assign({}, m, { page: healthPage(m), elapsed: undefined }),
     i === ms.length - 1 ? (d.busy ? "last-busy" : "last") : ""]);
   let changed = false;
   // 重建前是否已经显示着消息（而不是空对话首页）
@@ -577,6 +584,7 @@ export default function (component) {
       body.appendChild(box);
     }
     if (m.kpis && m.kpis.length) body.appendChild(buildCard(m));
+    if (m.health && m.health.items && m.health.items.length) body.appendChild(buildHealth(m, idx));
     if (m.queries && m.queries.length) body.appendChild(buildTrace(m));
     if (m.sources && m.sources.length) body.appendChild(buildSources(m, idx));
     if (m.webSources && m.webSources.length) body.appendChild(buildWebSources(m, idx));
@@ -747,6 +755,110 @@ export default function (component) {
     }
     if (m.table && m.table.rows && m.table.rows.length) body.appendChild(buildTable(m.table));
     card.appendChild(body);
+    return card;
+  }
+
+  /* ---------------- 体检卡 ----------------
+     每一项一行：灯 · 名称 · 抽到的值 · 页码；下面一句大白话。点开看判断标准、补充说明，
+     「翻到原页」把那一页渲染在这一项下面（open_page 带 p 和 turn，后端从这一轮依据的报告里取）。
+     红灯排最前，其次黄、绿、未判断。展开状态记在 s.srcOpen，和引用来源的折叠共用。
+     HC_ORDER / HC_NAME 在模块顶层（理由同 TABLE_LINE）。 */
+  function buildHealth(m, idx) {
+    s.hcHide = s.hcHide || new Set();     // 组件热更新前留下的 s 没有这个字段
+    const items = m.health.items.slice().sort((a, b) => (HC_ORDER[a.status] ?? 3) - (HC_ORDER[b.status] ?? 3));
+    const card = mk("div", "card hc");
+    const head = mk("div", "card-head");
+    head.appendChild(mk("span", "card-title", "年报体检"));
+    head.appendChild(mk("span", "tag", "程序按公开规则判断 · 不构成投资建议"));
+    card.appendChild(head);
+
+    const tally = mk("div", "hc-tally");
+    ["red", "yellow", "green"].forEach((st) => {
+      const n = items.filter((x) => x.status === st).length;
+      const t = mk("span", "hc-count " + st);
+      t.appendChild(mk("i", "hc-dot " + st));
+      t.appendChild(mk("b", null, String(n)));
+      t.appendChild(document.createTextNode(" " + HC_NAME[st]));
+      tally.appendChild(t);
+    });
+    const skipped = items.filter((x) => x.status === "none").length;
+    if (skipped) tally.appendChild(mk("span", "hc-count none", skipped + " 项未判断"));
+    card.appendChild(tally);
+
+    const list = mk("div", "hc-list");
+    const turn = (idx - 1) / 2;          // 历史里第几轮：消息按「问、答」成对排列
+    items.forEach((it) => {
+      const st = HC_ORDER[it.status] != null ? it.status : "none";
+      const key = "h" + idx + ":" + it.key;
+      const det = mk("details", "hc-item " + st);
+      det.open = s.srcOpen.has(key);
+      det.ontoggle = () => { if (det.open) s.srcOpen.add(key); else s.srcOpen.delete(key); };
+      // 大白话那一句放在 summary 里：收起时也看得到，点开只多出判断标准和原页
+      const sum = mk("summary", "hc-head");
+      const row = mk("div", "hc-row");
+      const dot = mk("i", "hc-dot " + st);
+      dot.title = HC_NAME[st];
+      row.appendChild(dot);
+      row.appendChild(mk("span", "hc-label", it.label));
+      row.appendChild(mk("span", "hc-value mono", it.value));
+      row.appendChild(mk("span", "hc-page mono", it.page ? "第 " + it.page + " 页" : ""));
+      row.appendChild(mk("span", "hc-tog"));
+      sum.appendChild(row);
+      sum.appendChild(mk("div", "hc-sum", it.summary));
+      det.appendChild(sum);
+
+      const more = mk("div", "hc-more");
+      if (it.detail) more.appendChild(mk("div", "hc-detail", it.detail));
+      const rule = mk("div", "hc-rule");
+      rule.appendChild(mk("span", "hc-rule-k", "判断标准"));
+      rule.appendChild(document.createTextNode(it.rule));
+      more.appendChild(rule);
+      if (it.page) {
+        // 服务端下发的那一页才是「已渲染」的真相；s.hcHide 只记用户手动收起过哪几项
+        const rendered = () => !!(m.page && m.page.hp === it.page);
+        const btn = mk("button", "ghost hc-open");
+        btn.type = "button";
+        btn.innerHTML = ICONS.doc;
+        const label = mk("span");
+        btn.appendChild(label);
+        more.appendChild(btn);
+        let paper = null;
+        const sync = () => {
+          const shown = rendered() && !s.hcHide.has(key);
+          label.textContent = shown ? "收起原页" : "翻到第 " + it.page + " 页";
+          if (shown && !paper) {
+            paper = mk("div", "paper-wrap");
+            const img = mk("img", "paper-img");
+            img.src = m.page.png;
+            img.alt = "原文第 " + it.page + " 页";
+            paper.appendChild(img);
+            paper.appendChild(mk("div", "paper-cap", "原文第 " + it.page + " 页" + (m.docLabel ? " · " + m.docLabel : "")));
+            more.appendChild(paper);
+          } else if (!shown && paper) {
+            paper.remove();
+            paper = null;
+          }
+        };
+        btn.onclick = (e) => {
+          e.preventDefault();
+          if (rendered()) {
+            if (s.hcHide.has(key)) s.hcHide.delete(key); else s.hcHide.add(key);
+            sync();
+            return;
+          }
+          if (d.busy) return;
+          btn.disabled = true;
+          label.textContent = "渲染中…";
+          s.srcOpen.add(key);
+          s.hcHide.delete(key);
+          setTriggerValue("open_page", { p: it.page, turn: turn, at: Date.now() });   // 只在点击里触发
+        };
+        sync();
+      }
+      det.appendChild(more);
+      list.appendChild(det);
+    });
+    card.appendChild(list);
     return card;
   }
 
@@ -1056,6 +1168,17 @@ export default function (component) {
         setTriggerValue("ask", { text: company + "所处行业的最新动态：原材料价格、竞争格局、同行进展" });
       };
       acts.appendChild(ind);
+      // 「体检」：同样只挂在最后一条，发的也是一句读得懂的问题（rag/healthcheck.button_question）
+      const hc = mk("button", "act act-hc");
+      hc.type = "button";
+      hc.innerHTML = ICONS.shield;
+      hc.appendChild(mk("span", null, "年报体检"));
+      hc.title = "审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押等 9 项，红黄绿灯 + 原文页码";
+      hc.onclick = () => {
+        hc.disabled = true;
+        setTriggerValue("ask", { text: "给" + company + "做个年报体检：审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押" });
+      };
+      acts.appendChild(hc);
     }
     return acts;
   }

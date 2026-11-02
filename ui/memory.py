@@ -21,8 +21,8 @@ _DOC_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _CONV_KEY_RE = re.compile(r"^(co|doc):.{1,60}$")
 
 _ENTRY_STR = {"q": 500, "a": 20000, "notice": 200, "kind": 20, "understood": 300}
-# industry 行业动态；clarify 反问（带 options）；refuse 超出范围
-_KINDS = ("industry", "clarify", "refuse")
+# industry 行业动态；clarify 反问（带 options）；refuse 超出范围；health 年报体检
+_KINDS = ("industry", "clarify", "refuse", "health")
 _HIT_STR = {"text": 4000, "section": 120, "subsection": 160}
 _WEB_STR = {"title": 200, "url": 600, "site": 80, "date": 20}
 # 卡片、表格核对这些是程序算好的展示数据：结构复杂，原样带回，只限制总体大小

@@ -32,6 +32,7 @@ except Exception as _import_error:          # 部署环境里的 import 失败�
     raise
 from rag.external import answer_with_tools
 from rag.financials import load_or_build as load_financials
+from rag.healthcheck import load_or_build as load_health, wants_health
 from rag.generator import analyze, generate, get_client, make_client
 from rag import planner, reviewer
 from rag.history import load_older, merge, older_year, wants_trend
@@ -204,6 +205,12 @@ def get_financials(doc_id: str, stamp: str) -> dict | None:
     return load_financials(doc_id)
 
 
+@st.cache_data(show_spinner=False)
+def get_health(doc_id: str, stamp: str) -> dict | None:
+    """年报小字体检（rag/healthcheck.py）。第一次做时读全文（约 1 秒），写成 healthcheck.json。"""
+    return load_health(doc_id, get_financials(doc_id, stamp))
+
+
 # 刚卸载过旧模块的那一次运行，把旧代码构造的缓存对象清掉（只清这几个，
 # 绝不调用 st.cache_resource.clear() —— 那会连 get_quota 一起清、额度归零）。
 from rag.freshness import take_cache_bust  # noqa: E402  （重载后这里拿到的是新版本）
@@ -213,6 +220,7 @@ if take_cache_bust(SOURCE_STAMP):
     render_page.clear()
     page_data_uri.clear()
     get_financials.clear()
+    get_health.clear()
 
 
 def _patch_meta(doc_id: str, company: str = "", year: str = "",
@@ -562,6 +570,11 @@ def advance_turn() -> None:
                                             hint=target.get("replan_hint", ""))
         if understood is None:
             understood = planner.fallback(target["q"], client=client, history=ctx, current=meta)
+        if target.get("kind") == "health":
+            # 体检只用规划器认公司和报告（「给七匹狼做个体检」要先切过去）；
+            # 它判成反问、超范围、行业动态都不算 —— 体检对当前报告总是做得了。
+            # intent 记成 health：没指定哪一期时优先用年报（turn_core.plan_for）
+            understood = dict(understood, intent="health")
         target["plan"] = understood
         target["target"] = understood["target"]
         target["understood"] = planner.describe(understood)
@@ -649,6 +662,21 @@ def advance_turn() -> None:
             st.session_state.pop("page", None)
             st.session_state["turn"] = target
             st.rerun()
+
+    if target["status"] == "retrieving" and target.get("kind") == "health":
+        # 体检：不检索、不生成。卡片和正文都由程序按披露写（ui/turn.health_entry）
+        try:
+            hc = get_health(doc_id, SOURCE_STAMP)
+        except Exception as e:
+            hc = None
+            target["health_error"] = f"{type(e).__name__}: {e}"
+        if not hc:
+            refund(target)
+            fail(target, "这份报告没能完成体检（读取原文失败）。可以换一份报告再试。")
+            st.rerun()
+        label = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}"
+        finish_turn(turn_core.health_entry(target, hc, label.strip()))
+        st.rerun()
 
     if target["status"] == "retrieving":
         client = pick_client()
@@ -835,8 +863,10 @@ if result.ask and not busy:
             "counted": count_it,
             # 读秒：界面显示「已思考 n 秒」，完成后记成这一轮的用时（ui/turn.py:history_entry）
             "started": time.time(),
-            # 行业动态走另一条路：联网检索成文，不做年报回答 + 扩展
-            **({"kind": "industry"} if wants_industry(text) else {}),
+            # 行业动态走另一条路：联网检索成文，不做年报回答 + 扩展；
+            # 体检不检索不生成，程序直接出卡片（「行业风险」这种两边都沾的算行业动态）
+            **({"kind": "industry"} if wants_industry(text)
+               else {"kind": "health"} if wants_health(text) else {}),
         }
         st.rerun()
 
@@ -868,7 +898,25 @@ if getattr(result, "pick_doc", None) and isinstance(result.pick_doc, dict) and n
         st.session_state.pop("page", None)
         st.rerun()
 
-if result.open_page and isinstance(result.open_page, dict):
+if result.open_page and isinstance(result.open_page, dict) and "p" in result.open_page:
+    # 体检卡点开的原页：{p: 页码, turn: 历史里第几轮}。从那一轮依据的报告里渲染，
+    # 页码必须在这份报告的页数之内（数据来自浏览器，按不可信输入处理）。
+    try:
+        p, k = int(result.open_page.get("p")), int(result.open_page.get("turn"))
+    except (TypeError, ValueError):
+        p, k = 0, -1
+    entry = history[k] if 0 <= k < len(history) else {}
+    source_doc = entry.get("doc_id") or doc_id
+    total = int((docs.get(source_doc) or {}).get("pages") or 0)
+    if entry.get("kind") == "health" and source_doc in docs and 1 <= p <= total:
+        try:
+            st.session_state["page"] = {"hp": p, "turn": k,
+                                        "png": page_data_uri(source_doc, p, SOURCE_STAMP)}
+        except Exception:
+            st.session_state["page"] = None
+        st.rerun()
+
+elif result.open_page and isinstance(result.open_page, dict):
     n = int(result.open_page.get("n") or 1)
     last = history[-1] if history else {}
     hits = last.get("hits")
