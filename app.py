@@ -33,6 +33,7 @@ except Exception as _import_error:          # 部署环境里的 import 失败�
 from rag.external import answer_with_tools
 from rag.financials import load_or_build as load_financials
 from rag.healthcheck import load_or_build as load_health, wants_health
+from rag import drivers as key_drivers
 from rag.generator import analyze, generate, get_client, make_client
 from rag import planner, reviewer
 from rag.history import load_older, merge, older_year, wants_trend
@@ -570,11 +571,11 @@ def advance_turn() -> None:
                                             hint=target.get("replan_hint", ""))
         if understood is None:
             understood = planner.fallback(target["q"], client=client, history=ctx, current=meta)
-        if target.get("kind") == "health":
-            # 体检只用规划器认公司和报告（「给七匹狼做个体检」要先切过去）；
-            # 它判成反问、超范围、行业动态都不算 —— 体检对当前报告总是做得了。
-            # intent 记成 health：没指定哪一期时优先用年报（turn_core.plan_for）
-            understood = dict(understood, intent="health")
+        if target.get("kind") in ("health", "drivers"):
+            # 体检、几件大事只用规划器认公司和报告（「给七匹狼做个体检」要先切过去）；
+            # 它判成反问、超范围、行业动态都不算 —— 对当前报告总是做得了。
+            # intent 照记：没指定哪一期时优先用年报（turn_core.plan_for）
+            understood = dict(understood, intent=target["kind"])
         target["plan"] = understood
         target["target"] = understood["target"]
         target["understood"] = planner.describe(understood)
@@ -676,6 +677,45 @@ def advance_turn() -> None:
             st.rerun()
         label = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}"
         finish_turn(turn_core.health_entry(target, hc, label.strip()))
+        st.rerun()
+
+    if target["status"] == "retrieving" and target.get("kind") == "drivers":
+        # 几件大事第一段：从年报里找因素（一次模型调用，按报告缓存在 drivers.json）
+        client = pick_client()
+        if client is None:
+            fail(target, "未配置 DeepSeek Key，无法分析。请在 .env 或 Secrets 中配置，或在左侧填写自己的 Key。")
+            st.rerun()
+        try:
+            found = key_drivers.load_or_build(doc_id, client=client)
+        except Exception as e:
+            found = None
+            target["drivers_error"] = f"{type(e).__name__}: {e}"
+        if not found:
+            refund(target)
+            fail(target, "这次没能从报告里找出关键因素（模型调用失败），请稍后再试。")
+            st.rerun()
+        target["found"] = found
+        target["status"] = "latest"
+        st.session_state["turn"] = target
+        st.rerun()
+
+    if target["status"] == "latest" and target.get("kind") == "drivers":
+        # 第二段：官方行情 + 联网动态（按天缓存在 drivers_now_<日期>.json），再按固定公式估算
+        client = pick_client()
+        found = target.get("found") or {}
+        try:
+            latest = key_drivers.load_latest(
+                doc_id, found, client=client,
+                api_key=getattr(client, "api_key", "") or config.DEEPSEEK_API_KEY,
+                company=meta.get("company", ""))
+        except Exception as e:
+            latest = {"date": "", "drivers": found.get("drivers") or [], "web_sources": []}
+            target["latest_error"] = f"{type(e).__name__}: {e}"
+        fin = get_financials(doc_id, SOURCE_STAMP)
+        label = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}".strip()
+        done = {k: v for k, v in target.items() if k != "found"}
+        finish_turn(turn_core.drivers_entry(done, key_drivers.card(found, latest, fin), label,
+                                            latest.get("web_sources") or []))
         st.rerun()
 
     if target["status"] == "retrieving":
@@ -866,6 +906,7 @@ if result.ask and not busy:
             # 行业动态走另一条路：联网检索成文，不做年报回答 + 扩展；
             # 体检不检索不生成，程序直接出卡片（「行业风险」这种两边都沾的算行业动态）
             **({"kind": "industry"} if wants_industry(text)
+               else {"kind": "drivers"} if key_drivers.wants_drivers(text)
                else {"kind": "health"} if wants_health(text) else {}),
         }
         st.rerun()
@@ -908,7 +949,7 @@ if result.open_page and isinstance(result.open_page, dict) and "p" in result.ope
     entry = history[k] if 0 <= k < len(history) else {}
     source_doc = entry.get("doc_id") or doc_id
     total = int((docs.get(source_doc) or {}).get("pages") or 0)
-    if entry.get("kind") == "health" and source_doc in docs and 1 <= p <= total:
+    if entry.get("kind") in ("health", "drivers") and source_doc in docs and 1 <= p <= total:
         try:
             st.session_state["page"] = {"hp": p, "turn": k,
                                         "png": page_data_uri(source_doc, p, SOURCE_STAMP)}

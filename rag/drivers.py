@@ -341,6 +341,37 @@ def _verified_amount(raw, pages: tuple[list[str], list[str]], page: int) -> dict
     return {"value": value, "unit": unit, "yuan": yuan} if yuan > 0 else None
 
 
+_AMOUNT_BEFORE_RE = re.compile(r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d{4,}(?:\.\d+)?)\s+$")
+
+
+def amount_before(pages: tuple[list[str], list[str]], page: int, value: str) -> dict | None:
+    """模型没给金额时由程序补：成本表、收入表都是「金额 占比」相邻（精达第 16 页
+    「原材料 1,613,888.96 95.45」），在那一页找到这个百分比，取紧挨在它前面的金额。
+    单位用这一页唯一声明的单位；一页声明了几种单位就分不清，不补。"""
+    flat, spaced = pages
+    if not 1 <= page <= len(flat):
+        return None
+    pct = _squash(value).rstrip("%")
+    try:
+        if not 0 < float(pct.replace(",", "")) <= 100:
+            return None
+    except ValueError:
+        return None
+    units = set(_UNIT_DECL_RE.findall(flat[page - 1]))
+    if len(units) != 1:
+        return None
+    unit = units.pop()
+    text = spaced[page - 1]
+    for m in re.finditer(r"(?<![\d.,])" + re.escape(pct) + r"(?![\d]|[.,]\d)", text):
+        before = _AMOUNT_BEFORE_RE.search(text[:m.start()])
+        if before:
+            raw = before.group(1)
+            yuan = float(raw.replace(",", "")) * UNIT_SCALE[unit]
+            if yuan > 0:
+                return {"value": raw, "unit": unit, "yuan": yuan, "inferred": True}
+    return None
+
+
 def default_market(kind, said: str) -> str:
     """利率、汇率因素的行情代码由程序定，不靠模型（实测同一份长江电力，有一轮模型就没填利率代码）：
     利率提到长期 / 5 年用 5 年期 LPR，否则 1 年期；汇率按提到的币种，都没提就用美元。"""
@@ -397,6 +428,8 @@ def verify(raw: list, pages_lines: list[list[str]], sections: dict | None = None
             if nums and text and all(_page_has_number(both, page, x, spread=0) for x in nums) \
                     and all(_page_has_number(both, page, x) for x in _NUM_RE.findall(text)):
                 exposure = {"page": page, "text": text[:80], "value": value[:30]}
+                if amount is None and d.get("type") in ("成本", "售价", "汇率"):
+                    amount = amount_before(both, page, value)
                 if amount is not None:
                     exposure["amount"] = amount
             elif stats is not None:
@@ -434,6 +467,12 @@ def build_from_lines(pages_lines: list[list[str]], *, client, company: str = "",
     raw = ask_model(sections, client=client, company=company, year=year)
     if raw is None:
         return None
+    # 结果按报告缓存，一次运气不好的输出会一直留给用户看（本地实测精达有一轮只给了 2 个）：
+    # 少于 3 个就再问一次，取多的那次
+    if len(raw) < 3:
+        again = ask_model(sections, client=client, company=company, year=year)
+        if again and len(again) > len(raw):
+            raw = again
     stats: dict = {}
     found = verify(raw, pages_lines, sections, stats)
     return {"version": DRIVERS_VERSION, "period": period,
@@ -716,3 +755,71 @@ def estimate(d: dict, fin: dict | None) -> dict:
                formula=f"{'−' if sign < 0 else ''}{BASE_NAMES[kind]} {_yi(base)} × {change} ≈ {_yi(impact)}")
     out["assume"] += "；按最近 3 个月的变化持续一整年估算"
     return out
+
+
+# ---------------------------------------------------------------- 第 5 步：回合与卡片
+#
+# 回合分两段（app.py）：retrieving 从年报里找因素（load_or_build，首次约半分钟，按报告缓存），
+# latest 查行情和联网动态（load_latest，按天缓存）并估算，然后由程序写正文和卡片收尾。
+
+CARD_TITLE = "影响这家公司的几件大事"
+
+_WANTS_RE = re.compile(r"几件大事|关键因素|驱动因素|外部因素|什么因素|哪些因素|影响.{0,4}(?:最大|业绩|利润|公司)的?.{0,4}(?:因素|事)"
+                       r"|敏感(?:性|度)|涨价.{0,8}影响|(?:最近|现在|当前).{0,8}(?:影响|变化).{0,8}(?:业绩|利润|公司)")
+
+
+def wants_drivers(question: str) -> bool:
+    return bool(_WANTS_RE.search(question or ""))
+
+
+def button_question(company: str) -> str:
+    """「几件大事」按钮发出的问题。写成自然语言，聊天记录里读得懂，也能被 wants_drivers 认出。"""
+    return f"影响{company or '这家公司'}的几件大事：哪些因素最能左右业绩、最近有什么变化"
+
+
+def card(found: dict, latest: dict, fin: dict | None) -> dict:
+    """存进历史和下发给界面的卡片：每个因素的年报依据、最新变化、估算。数字都是程序算好的。"""
+    items = []
+    for d in latest.get("drivers") or found.get("drivers") or []:
+        ex = d.get("exposure") or {}
+        now = d.get("now")
+        items.append({
+            "type": d.get("type", ""), "name": d.get("name", ""), "how": d.get("how", ""),
+            "evidence": [{"page": e["page"], "quote": e["quote"]} for e in d.get("evidence") or []],
+            "exposure": {"page": ex["page"], "text": ex["text"]} if ex else None,
+            "now": {k: now[k] for k in ("name", "source", "basis", "unit", "latest", "base",
+                                        "change_pct", "change_bp") if k in now} if now else None,
+            "news": list(d.get("news") or []),
+            "note": d.get("note", ""),
+            "estimate": estimate(d, fin),
+        })
+    return {"date": latest.get("date", ""), "period": found.get("period", FY), "items": items}
+
+
+def brief(c: dict, label: str) -> str:
+    """正文：找出了哪几件、能量化的那几条的结论，加一句口径说明。细节在卡片里。"""
+    items = c.get("items") or []
+    src = f"《{label}》" if label else "这份报告"
+    if not items:
+        return f"没能从{src}里找出有原文依据的关键因素。可以换个问法，直接问某个具体因素，比如原材料价格。"
+    paras = [f"从{src}里找出 {len(items)} 件最能左右业绩的事：" + "、".join(f"**{it['name']}**" for it in items) + "。"]
+    lines = []
+    for it in items:
+        e = it["estimate"]
+        if e.get("status") == "ok":
+            # 负号对散户不直白：说「利润约减少 2.81 亿元，相当于去年归母净利润的 46.9%」，公式留在卡片里
+            what = {"汇率": "境外收入折算", "售价": "收入"}.get(it["type"], "利润")
+            amt = e["amount"]
+            share = f"，相当于去年{e['share_of']}的 {abs(e['share']):.1f}%" if e.get("share") is not None else ""
+            lines.append(f"**{it['name']}**：近 3 个月的变化若持续一年，{what}约{'减少' if amt < 0 else '增加'} "
+                         f"{_yi(abs(amt))}{share}（上限估算）。")
+        elif e.get("status") == "sensitivity":
+            s = e["sensitivity"]
+            share = f"，相当于去年{e['share_of']}的 {abs(s['share']):.1f}%" if s.get("share") is not None else ""
+            lines.append(f"**{it['name']}**：{s['text']}{share}。")
+    if lines:
+        paras.append("\n\n".join(lines))
+    paras.append(f"行情数据来自交易所和外汇交易中心（截至 {c.get('date', '')}），联网检索的动态未经报告核验；"
+                 "估算都按固定公式、在列出的假设下算出，是上限而不是预测，不构成投资建议。"
+                 "每一件的原文依据、最新变化和算法都在卡片里，点开可以翻到原页核对。")
+    return "\n\n".join(paras)

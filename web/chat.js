@@ -24,6 +24,7 @@ const ICONS = {
   shield: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 5 6v6c0 4.4 3 8.2 7 9 4-.8 7-4.6 7-9V6l-7-3Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
   copy: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 9h10v10H9zM5 15V5h10" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
   pulse: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6H21" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  layers: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m3 13 9 5 9-5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
   doc: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
 };
 
@@ -112,6 +113,7 @@ const HERO_SUGS = [
   { key: "rev",    tag: "财务摘要",   text: "营业收入和归母净利润分别是多少？" },
   { key: "margin", tag: "经营分析",   text: "毛利率同比变化的原因是什么？" },
   { key: "health", tag: "年报体检",   text: "给这家公司做个年报体检" },
+  { key: "kd",     tag: "几件大事",   text: "影响这家公司业绩的几件大事" },
   { key: "risk",   tag: "客户与风险", text: "前五大客户与供应商集中度如何？" },
   { key: "rd",     tag: "研发投入",   text: "研发投入的金额与资本化比例？" },
   // 教用户用“自动找年报”：点了会去巨潮导入七匹狼，再基于它的年报回答
@@ -280,8 +282,9 @@ export default function (component) {
   // 「行业动态」按钮只挂在最后一条回答上、生成中不显示：位置和忙闲也算进签名，
   // 否则发出新问题后，上一条回答不重建，按钮会留在它下面
   // elapsed 每次 rerun 都变，但读秒由前端自己往上数，不该为它重建消息
-  // 例外：体检卡点开的原页就画在卡片里那一项下面，它变了要重建这条消息
-  const healthPage = (m) => (m.kind === "health" && m.page ? [m.page.hp, (m.page.png || "").length] : undefined);
+  // 例外：体检卡、几件大事点开的原页就画在卡片里那一项下面，它变了要重建这条消息
+  const healthPage = (m) => ((m.kind === "health" || m.kind === "drivers") && m.page
+    ? [m.page.hp, (m.page.png || "").length] : undefined);
   const msgSig = (m, i) => JSON.stringify([Object.assign({}, m, { page: healthPage(m), elapsed: undefined }),
     i === ms.length - 1 ? (d.busy ? "last-busy" : "last") : ""]);
   let changed = false;
@@ -603,6 +606,7 @@ export default function (component) {
     }
     if (m.kpis && m.kpis.length) body.appendChild(buildCard(m));
     if (m.health && m.health.items && m.health.items.length) body.appendChild(buildHealth(m, idx));
+    if (m.drivers && m.drivers.items && m.drivers.items.length) body.appendChild(buildDrivers(m, idx));
     if (m.queries && m.queries.length) body.appendChild(buildTrace(m));
     if (m.sources && m.sources.length) body.appendChild(buildSources(m, idx));
     if (m.webSources && m.webSources.length) body.appendChild(buildWebSources(m, idx));
@@ -793,6 +797,192 @@ export default function (component) {
      「翻到原页」把那一页渲染在这一项下面（open_page 带 p 和 turn，后端从这一轮依据的报告里取）。
      红灯排最前，其次黄、绿、未判断。展开状态记在 s.srcOpen，和引用来源的折叠共用。
      HC_ORDER / HC_NAME 在模块顶层（理由同 TABLE_LINE）。 */
+  /* 卡片里某一项下面的「翻到第 n 页」：点了发 open_page {p, turn}，服务端渲染那一页挂回这条消息
+     （m.page.hp），图片画在 container 里。体检卡有自己的一份同样逻辑，几件大事一项里可能有好几页，用这个。 */
+  function pageButton(m, key, page, turn, container) {
+    const rendered = () => !!(m.page && m.page.hp === page);
+    const btn = mk("button", "ghost hc-open");
+    btn.type = "button";
+    btn.innerHTML = ICONS.doc;
+    const label = mk("span");
+    btn.appendChild(label);
+    container.appendChild(btn);
+    let paper = null;
+    const hideKey = key + "@" + page;
+    const sync = () => {
+      const shown = rendered() && !s.hcHide.has(hideKey);
+      label.textContent = shown ? "收起第 " + page + " 页" : "翻到第 " + page + " 页";
+      if (shown && !paper) {
+        paper = mk("div", "paper-wrap");
+        const img = mk("img", "paper-img");
+        img.src = m.page.png;
+        img.alt = "原文第 " + page + " 页";
+        paper.appendChild(img);
+        paper.appendChild(mk("div", "paper-cap", "原文第 " + page + " 页" + (m.docLabel ? " · " + m.docLabel : "")));
+        container.appendChild(paper);
+      } else if (!shown && paper) {
+        paper.remove();
+        paper = null;
+      }
+    };
+    btn.onclick = (e) => {
+      e.preventDefault();
+      if (rendered()) {
+        if (s.hcHide.has(hideKey)) s.hcHide.delete(hideKey); else s.hcHide.add(hideKey);
+        sync();
+        return;
+      }
+      if (d.busy) return;
+      btn.disabled = true;
+      label.textContent = "渲染中…";
+      s.srcOpen.add(key);
+      s.hcHide.delete(hideKey);
+      setTriggerValue("open_page", { p: page, turn: turn, at: Date.now() });   // 只在点击里触发
+    };
+    sync();
+    return btn;
+  }
+
+  /* ---------------- 几件大事 ----------------
+     收起时：序号 · 类型 · 名称 · 近 3 个月的行情变化（只标方向、不上红绿，不替用户判断好坏），
+     下面是「怎么影响」和一行估算结论。展开：年报依据（可翻原页）、最新变化（官方行情 / 联网未经核验）、
+     影响估算（公式、敏感度、假设）。联网条目里的 [网n] 走 renderRich，对应这条消息的 webSources。 */
+  function kdChange(it) {
+    const n = it.now;
+    if (n && typeof n.change_pct === "number") {
+      const up = n.change_pct >= 0;
+      const b = mk("span", "kd-chg mono", n.name + " " + (up ? "▲" : "▼") + Math.abs(n.change_pct).toFixed(2) + "%");
+      b.title = "近 3 个月（" + (n.base && n.base.date) + " → " + (n.latest && n.latest.date) + "），" + n.source;
+      return b;
+    }
+    if (n && typeof n.change_bp === "number") {
+      const b = mk("span", "kd-chg mono", n.name + " " + (n.change_bp > 0 ? "+" : "") + n.change_bp + "bp");
+      b.title = "近 3 个月，" + n.source;
+      return b;
+    }
+    if (it.news && it.news.length) return mk("span", "kd-chg web", "近况 " + it.news.length + " 条");
+    return mk("span", "kd-chg");
+  }
+
+  function kdImpact(e, kind) {
+    if (!e) return null;
+    if (e.status === "ok") {
+      // 公式末尾「≈ -2.81 亿元」：负号对散户不直白，改说「利润约减少 2.81 亿元，相当于去年归母净利润的 46.9%」
+      const amount = String(e.formula || "").split("≈").pop().trim();
+      const down = /^[-−]/.test(amount);
+      const what = kind === "汇率" ? "境外收入折算" : (kind === "售价" ? "收入" : "利润");
+      const line = mk("div", "kd-impact");
+      line.appendChild(mk("span", "kd-impact-k", "估算"));
+      line.appendChild(document.createTextNode("近 3 个月的变化若持续一年，" + what + "约" + (down ? "减少 " : "增加 ")
+        + amount.replace(/^[-−]\s*/, "")
+        + (typeof e.share === "number" ? "，相当于去年" + e.share_of + "的 " + Math.abs(e.share) + "%" : "")
+        + "（上限）"));
+      return line;
+    }
+    if (e.status === "sensitivity" && e.sensitivity) {
+      const line = mk("div", "kd-impact");
+      line.appendChild(mk("span", "kd-impact-k", "敏感度"));
+      line.appendChild(document.createTextNode(e.sensitivity.text
+        + (typeof e.sensitivity.share === "number" ? "，相当于去年" + e.share_of + "的 " + Math.abs(e.sensitivity.share) + "%" : "")));
+      return line;
+    }
+    return null;
+  }
+
+  function kdBlock(title, sub) {
+    const b = mk("div", "kd-block");
+    const h = mk("div", "kd-block-t", title);
+    if (sub) h.appendChild(mk("span", "kd-block-sub", sub));
+    b.appendChild(h);
+    return b;
+  }
+
+  function buildDrivers(m, idx) {
+    s.hcHide = s.hcHide || new Set();
+    const c = m.drivers;
+    const card = mk("div", "card kd");
+    const head = mk("div", "card-head");
+    head.appendChild(mk("span", "card-title", "影响这家公司的几件大事"));
+    head.appendChild(mk("span", "tag", "年报原文 + 官方行情 · 不构成投资建议"));
+    card.appendChild(head);
+    const list = mk("div", "hc-list");
+    const turn = (idx - 1) / 2;
+    c.items.forEach((it, i) => {
+      const key = "k" + idx + ":" + i;
+      const det = mk("details", "kd-item");
+      det.open = s.srcOpen.has(key);
+      det.ontoggle = () => { if (det.open) s.srcOpen.add(key); else s.srcOpen.delete(key); };
+      const sum = mk("summary", "hc-head");
+      const row = mk("div", "kd-row");
+      row.appendChild(mk("span", "kd-no mono", String(i + 1).padStart(2, "0")));
+      row.appendChild(mk("span", "kd-type", it.type));
+      row.appendChild(mk("span", "kd-name", it.name));
+      row.appendChild(kdChange(it));
+      row.appendChild(mk("span", "hc-tog"));
+      sum.appendChild(row);
+      if (it.how) sum.appendChild(mk("div", "kd-how", it.how));
+      const imp = kdImpact(it.estimate, it.type);
+      if (imp) sum.appendChild(imp);
+      det.appendChild(sum);
+
+      const more = mk("div", "kd-more");
+      // 年报依据
+      const src = kdBlock("年报依据");
+      (it.evidence || []).forEach((ev) => {
+        const q = mk("div", "kd-quote");
+        q.appendChild(mk("span", "kd-quote-t", "“" + ev.quote + "”"));
+        q.appendChild(mk("span", "kd-pg mono", "第 " + ev.page + " 页"));
+        src.appendChild(q);
+      });
+      if (it.exposure) {
+        const ex = mk("div", "kd-exp");
+        ex.appendChild(mk("span", null, it.exposure.text));
+        if (it.exposure.page) ex.appendChild(mk("span", "kd-pg mono", "第 " + it.exposure.page + " 页"));
+        src.appendChild(ex);
+      }
+      const pages = [...new Set([...(it.evidence || []).map((e) => e.page),
+                                ...(it.exposure && it.exposure.page ? [it.exposure.page] : [])])];
+      const pbox = mk("div", "kd-pages");
+      pages.forEach((p) => pageButton(m, key, p, turn, pbox));
+      src.appendChild(pbox);
+      more.appendChild(src);
+      // 最新变化
+      const n = it.now;
+      if (n || (it.news && it.news.length) || it.note) {
+        const box = kdBlock("最新变化", n ? n.source + " · 官方数据" : (it.news && it.news.length ? "联网检索 · 未经报告核验" : ""));
+        if (n && n.base && n.latest) {
+          const v = (x) => (typeof x === "number" ? x.toLocaleString("zh-CN") : "");
+          const ch = typeof n.change_pct === "number"
+            ? (n.change_pct > 0 ? "+" : "") + n.change_pct + "%"
+            : (n.change_bp > 0 ? "+" : "") + n.change_bp + "bp";
+          box.appendChild(mk("div", "kd-now mono",
+            n.basis + "：" + n.base.date + " " + v(n.base.value) + " → " + n.latest.date + " " + v(n.latest.value)
+            + " " + n.unit + "（" + ch + "）" + (n.latest.contract ? " · 主力 " + n.latest.contract : "")));
+        }
+        (it.news || []).forEach((x) => {
+          const p = mk("div", "kd-news");
+          renderRich(p, x, 0);
+          box.appendChild(p);
+        });
+        if (it.note) box.appendChild(mk("div", "kd-note", it.note));
+        more.appendChild(box);
+      }
+      // 影响估算
+      const e = it.estimate || {};
+      const est = kdBlock("影响估算", e.status === "none" ? "" : "按固定公式由程序计算 · 上限");
+      if (e.status === "ok") est.appendChild(mk("div", "kd-formula mono", e.formula));
+      if (e.status !== "ok" && e.why) est.appendChild(mk("div", "kd-note", e.why));
+      if (e.sensitivity) est.appendChild(mk("div", "kd-sens", "敏感度：" + e.sensitivity.text));
+      if (e.assume) est.appendChild(mk("div", "hc-rule", "假设：" + e.assume));
+      more.appendChild(est);
+      det.appendChild(more);
+      list.appendChild(det);
+    });
+    card.appendChild(list);
+    if (c.date) card.appendChild(mk("div", "kd-foot", "行情截至 " + c.date + " · 交易所主力合约结算价 / 外汇交易中心中间价与 LPR"));
+    return card;
+  }
+
   function buildHealth(m, idx) {
     s.hcHide = s.hcHide || new Set();     // 组件热更新前留下的 s 没有这个字段
     const items = m.health.items.slice().sort((a, b) => (HC_ORDER[a.status] ?? 3) - (HC_ORDER[b.status] ?? 3));
@@ -1209,6 +1399,17 @@ export default function (component) {
         setTriggerValue("ask", { text: "给" + company + "做个年报体检：审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押" });
       };
       acts.appendChild(hc);
+      // 「几件大事」：同上，发一句读得懂的问题（rag/drivers.button_question）
+      const kd = mk("button", "act act-hc");
+      kd.type = "button";
+      kd.innerHTML = ICONS.layers;
+      kd.appendChild(mk("span", null, "几件大事"));
+      kd.title = "从年报里找出最能左右业绩的几个外部因素，配上最新行情和影响估算（首次约一分钟）";
+      kd.onclick = () => {
+        kd.disabled = true;
+        setTriggerValue("ask", { text: "影响" + company + "的几件大事：哪些因素最能左右业绩、最近有什么变化" });
+      };
+      acts.appendChild(kd);
     }
     return acts;
   }

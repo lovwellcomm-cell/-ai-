@@ -33,6 +33,8 @@ STATUS_TEXT = {
     "analyzing": "正在扩展分析…",
     # 年报里没有这条信息，正在调用 Search / Fetch 补充公开信息
     "searching": "正在查询公开信息…",
+    # 「几件大事」第二段：取官方行情、联网查近况、估算
+    "latest": "正在查行情和最新动态…（约半分钟）",
 }
 
 
@@ -86,6 +88,8 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
             msg["statusText"] = "正在联网检索行业动态…（约半分钟）"
         if turn.get("kind") == "health" and status == "retrieving":
             msg["statusText"] = "正在逐项翻查报告做体检…"
+        if turn.get("kind") == "drivers" and status == "retrieving":
+            msg["statusText"] = "正在从年报里找最能左右业绩的几件事…（第一次约半分钟）"
         # 复核没通过、正在回退：说清楚发现了什么、在做什么（旧回答还显示着）
         if turn.get("retry") and status in ("resolving", "retrieving", "history", "generating"):
             note = (turn.get("review_last") or {}).get("note") or "回答有遗漏"
@@ -122,7 +126,61 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
             msg[key] = turn[key]
     if isinstance(msg.get("health"), dict):
         msg["health"] = health_card(msg["health"])
+    if isinstance(msg.get("drivers"), dict):
+        msg["drivers"] = drivers_card(msg["drivers"])
     return msg
+
+
+def _s(v, n: int) -> str:
+    return str(v if v is not None else "")[:n]
+
+
+def _page(v) -> int | None:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
+
+
+def _num(v) -> float | None:
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def drivers_card(c: dict) -> dict:
+    """「几件大事」卡片下发前清洗：浏览器存档带回来的数据由访客控制，
+    只留认识的字段，字符串截长度，页码和数字核类型。"""
+    items = []
+    for it in (c.get("items") or [])[:5]:
+        if not isinstance(it, dict):
+            continue
+        ev = [{"page": _page(e.get("page")), "quote": _s(e.get("quote"), 120)}
+              for e in (it.get("evidence") or [])[:2] if isinstance(e, dict) and _page(e.get("page"))]
+        ex = it.get("exposure") if isinstance(it.get("exposure"), dict) else None
+        now = it.get("now") if isinstance(it.get("now"), dict) else None
+        if now:
+            pts = {k: {"date": _s((now.get(k) or {}).get("date"), 10),
+                       "value": _num((now.get(k) or {}).get("value")),
+                       "contract": _s((now.get(k) or {}).get("contract"), 12)}
+                   for k in ("latest", "base") if isinstance(now.get(k), dict)}
+            now = {"name": _s(now.get("name"), 20), "source": _s(now.get("source"), 20),
+                   "basis": _s(now.get("basis"), 20), "unit": _s(now.get("unit"), 12),
+                   "change_pct": _num(now.get("change_pct")), "change_bp": _num(now.get("change_bp")),
+                   **pts}
+        est = it.get("estimate") if isinstance(it.get("estimate"), dict) else {}
+        sens = est.get("sensitivity") if isinstance(est.get("sensitivity"), dict) else None
+        items.append({
+            "type": _s(it.get("type"), 4), "name": _s(it.get("name"), 30), "how": _s(it.get("how"), 200),
+            "evidence": ev,
+            "exposure": {"page": _page(ex.get("page")), "text": _s(ex.get("text"), 100)} if ex else None,
+            "now": now,
+            "news": [_s(x, 220) for x in (it.get("news") or [])[:2] if isinstance(x, str)],
+            "note": _s(it.get("note"), 80),
+            "estimate": {
+                "status": est.get("status") if est.get("status") in ("ok", "sensitivity", "none") else "none",
+                "formula": _s(est.get("formula"), 120), "why": _s(est.get("why"), 80),
+                "assume": _s(est.get("assume"), 160), "share_of": _s(est.get("share_of"), 8),
+                "share": _num(est.get("share")),
+                "sensitivity": {"text": _s(sens.get("text"), 80), "share": _num(sens.get("share"))} if sens else None,
+            },
+        })
+    return {"date": _s(c.get("date"), 10), "items": items}
 
 
 def health_card(h: dict) -> dict:

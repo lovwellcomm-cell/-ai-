@@ -254,11 +254,12 @@ def test_exposure_text_may_mention_verified_amount():
 
 
 def test_amount_unit_must_match_page_declaration():
-    # 这一页声明的是「单位：万元」，模型说成「元」差一万倍 —— 金额不要，暴露度的百分比照留
+    # 这一页声明的是「单位：万元」，模型说成「元」差一万倍 —— 模型的金额不要；
+    # 程序按这一页声明的单位重新取（98.02 前面紧挨着的 313,620.68 万元）
     ex = {"page": 7, "text": "原材料占成本 98.02%", "value": "98.02",
           "amount": {"value": "313,620.68", "unit": "元"}}
     out = dr.verify([_raw(exposure=ex)], AMOUNT_PAGE)
-    assert out[0]["exposure"]["value"] == "98.02" and "amount" not in out[0]["exposure"]
+    assert out[0]["exposure"]["amount"]["unit"] == "万元" and out[0]["exposure"]["amount"]["inferred"]
 
 
 def test_dropped_exposure_counted():
@@ -359,3 +360,121 @@ def test_concentration_mistyped_as_cost_not_estimated():
     d = _driver("成本", None, 1.1e10)
     d["name"] = "供应商集中（供应商1）"
     assert dr.estimate(d, FIN)["status"] == "none"
+
+
+# ---------------------------------------------------------------- 第 5 步：回合与卡片
+
+from ui import memory as chat_memory, payload, turn as turn_core      # noqa: E402
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("q,want", [
+    ("影响这家公司业绩的几件大事", True),
+    ("什么因素对精达影响最大？", True),
+    ("铜价涨价对公司有什么影响", True),
+    ("最近有什么变化会影响业绩", True),
+    ("营业收入是多少？", False),
+    ("给精达做个年报体检", False),
+])
+def test_wants_drivers(q, want):
+    assert dr.wants_drivers(q) is want
+
+
+def test_button_question_recognized():
+    assert dr.wants_drivers(dr.button_question("精达股份"))
+
+
+def _found_latest():
+    d = {"type": "成本", "name": "铜价", "how": "铜价上涨推高成本。", "market": "cu",
+         "evidence": [{"page": 28, "quote": "铜、铝等大宗商品价格受国际供需"}],
+         "exposure": {"page": 16, "text": "漆包线原材料占成本 95.45%", "value": "95.45",
+                      "amount": {"value": "1,613,888.96", "unit": "万元", "yuan": 1.613888896e10}}}
+    now = {"code": "cu", "name": "铜", "source": "上海期货交易所", "basis": "主力合约结算价", "unit": "元/吨",
+           "latest": {"date": "2026-11-02", "contract": "cu2612", "value": 107580.0},
+           "base": {"date": "2026-08-03", "contract": "cu2610", "value": 105740.0}, "change_pct": 1.74}
+    cust = {"type": "客户", "name": "大客户", "how": "", "market": "", "evidence": [{"page": 17, "quote": "前五名"}],
+            "exposure": None}
+    found = {"period": "FY", "drivers": [d, cust]}
+    latest = {"date": "2026-11-02", "web_sources": [],
+              "drivers": [dict(d, now=now, news=[]), dict(cust, now=None, news=[], note="以定期报告披露为准")]}
+    return found, latest
+
+
+def test_card_and_brief():
+    found, latest = _found_latest()
+    c = dr.card(found, latest, FIN)
+    first = c["items"][0]
+    assert first["estimate"]["status"] == "ok" and first["now"]["change_pct"] == 1.74
+    assert "amount" not in (first["exposure"] or {})            # 换算细节不下发
+    text = dr.brief(c, "精达股份 2025 年报")
+    assert text.startswith("从《精达股份 2025 年报》里找出 2 件")
+    assert "**铜价**：近 3 个月的变化若持续一年，利润约减少 2.81 亿元，相当于去年归母净利润的 46.9%" in text
+    assert "不构成投资建议" in text and "截至 2026-11-02" in text
+
+
+def test_drivers_entry_payload_and_memory_round_trip():
+    found, latest = _found_latest()
+    c = dr.card(found, latest, FIN)
+    e = turn_core.drivers_entry({"q": "几件大事", "doc_id": "a" * 16}, c, "精达股份 2025 年报",
+                                [{"n": 1, "title": "t", "url": "https://x.com", "site": "x", "date": "2026-10-27"}])
+    assert e["kind"] == "drivers" and e["web_sources"][0]["n"] == 1
+    msg = payload.ai_message(e)
+    assert msg["drivers"]["items"][0]["estimate"]["formula"].startswith("−这项成本")
+    assert msg["webSources"][0]["url"] == "https://x.com"
+    back = chat_memory.clean_entry(chat_memory.pack([e])[0], {"a" * 16})
+    assert back["kind"] == "drivers" and back["drivers"]["items"][1]["note"] == "以定期报告披露为准"
+
+
+def test_payload_sanitizes_restored_drivers_card():
+    raw = {"date": "2026-11-02" * 5, "items": [
+        {"name": "x" * 99, "evidence": [{"page": "3", "quote": "q"}, {"page": 5, "quote": "q" * 500}],
+         "now": {"name": "铜", "change_pct": "1.7", "latest": {"date": "2026-11-02", "value": "1"}},
+         "estimate": {"status": "evil", "share": True}},
+        "not a dict"]}
+    c = payload.drivers_card(raw)
+    it = c["items"][0]
+    assert len(c["items"]) == 1 and len(c["date"]) == 10 and len(it["name"]) == 30
+    assert it["evidence"] == [{"page": 5, "quote": "q" * 120}]          # 页码不是整数的丢掉
+    assert it["now"]["change_pct"] is None and it["now"]["latest"]["value"] is None
+    assert it["estimate"]["status"] == "none" and it["estimate"]["share"] is None
+
+
+def test_drivers_prefer_annual_report():
+    docs = [{"doc_id": "fy", "company": "精达股份", "year": "2025", "period": "FY"},
+            {"doc_id": "q3", "company": "精达股份", "year": "2026", "period": "Q3"}]
+    u = {"intent": "drivers", "target": {"company": "", "year": None, "period": None}}
+    plan = turn_core.plan_for(u, current_company="精达股份", current_year="2026", current_period="Q3",
+                              docs=docs, today=TODAY)
+    assert plan == {"action": "switch", "doc": docs[0]}
+
+
+def test_amount_inferred_from_number_before_percentage():
+    # 精达第 16 页：「漆包线 原材料 1,613,888. 96 95.45」—— 模型没给金额，程序取紧挨在 95.45 前面的那个数
+    pages = FILLER + _pages("(4). 成本分析表\n单位：万元 币种：人民币\n漆包线 原材料\n1,613,888. 96\n95.45\n"
+                            "1,442,670.1\n3\n95.77 11.87")
+    both = ([dr._squash("".join(l)) for l in pages], [dr._spaced(" ".join(l)) for l in pages])
+    a = dr.amount_before(both, 6, "95.45")
+    assert a == {"value": "1,613,888.96", "unit": "万元", "yuan": 16138889600.0, "inferred": True}
+    assert dr.amount_before(both, 6, "120") is None                     # 不是百分比
+    two_units = FILLER + _pages("单位：元\n单位：万元\n原材料 313,620.68 98.02")
+    both2 = ([dr._squash("".join(l)) for l in two_units], [dr._spaced(" ".join(l)) for l in two_units])
+    assert dr.amount_before(both2, 6, "98.02") is None                  # 一页两种单位：不猜
+
+
+def test_verify_fills_amount_for_cost_driver():
+    ex = {"page": 7, "text": "原材料占成本 98.02%", "value": "98.02"}
+    out = dr.verify([_raw(exposure=ex)], AMOUNT_PAGE)
+    assert out[0]["exposure"]["amount"]["value"] == "313,620.68" and out[0]["exposure"]["amount"]["inferred"]
+
+
+def test_too_few_drivers_asks_again(monkeypatch):
+    calls = []
+
+    def fake_ask(sections, **kw):
+        calls.append(1)
+        return [_raw(name="铜价")] if len(calls) == 1 else [_raw(name=f"因素{i}") for i in range(4)]
+    monkeypatch.setattr(dr, "ask_model", fake_ask)
+    out = dr.build_from_lines(PAGES, client=None)
+    assert len(calls) == 2 and out["proposed"] == 4

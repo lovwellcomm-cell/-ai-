@@ -17,6 +17,7 @@ from rag.company import normalize, same_company
 from rag.external import join_external, should_search
 from rag.fidelity import unverified_in_tables
 from rag.generator import join_answer, should_analyze
+from rag.drivers import brief as drivers_brief
 from rag.healthcheck import brief as health_brief, compact as compact_health
 from rag.reviewer import decide, summary
 from rag.periods import (FY, RANK, latest_quarter, latest_report, latest_year, next_report,
@@ -219,6 +220,12 @@ def health_entry(turn: dict, hc: dict, label: str) -> dict:
     return history_entry(t, health_brief(hc, label))
 
 
+def drivers_entry(turn: dict, c: dict, label: str, web_sources: list[dict]) -> dict:
+    """「几件大事」回合：正文和卡片由程序按 rag/drivers 的结果写；联网条目的 [网n] 对应 web_sources。"""
+    t = dict(turn, hits=[], queries=[], kind="drivers", drivers=c, web_sources=list(web_sources or []))
+    return history_entry(t, drivers_brief(c, label))
+
+
 def plan_for(understanding: dict, *, current_company: str = "", current_year: str = "",
              current_period: str = FY, docs=(), today: date | None = None) -> dict:
     """规划器的理解（rag/planner.py）→ 用哪份报告。在 plan_resolution 外面多两条：
@@ -226,8 +233,8 @@ def plan_for(understanding: dict, *, current_company: str = "", current_year: st
     · 反问、超范围：不找报告，返回 {"action": "clarify" | "out_of_scope"}；
     · 趋势：季报里只有本期和上年同期两个数，问多年必须用年报 —— 落在季报上就改找这家公司
       最新的年报（用户实际遇到的：停在三季报上问「近几年发展如何」，回答「年报中未找到」）。
-    · 体检：9 项里 6 项只在年报披露，落在季报上同样改用最新年报；
-      用户明说了哪一期（「三季报体检」）就照他说的。
+    · 体检、几件大事：要用年报里才有的内容（体检 9 项里 6 项、风险章节和成本构成），
+      落在季报上同样改用最新年报；用户明说了哪一期（「三季报体检」）就照他说的。
     """
     intent = understanding.get("intent")
     if intent in ("clarify", "out_of_scope"):
@@ -236,7 +243,7 @@ def plan_for(understanding: dict, *, current_company: str = "", current_year: st
               current_period=current_period, docs=docs, today=today)
     tgt = understanding.get("target") or {}
     plan = plan_resolution(tgt, **kw)
-    annual_first = intent == "trend" or (intent == "health" and not tgt.get("period"))
+    annual_first = intent == "trend" or (intent in ("health", "drivers") and not tgt.get("period"))
     if annual_first and plan["action"] in ("current", "switch"):
         landed = period_of(plan["doc"]) if plan["action"] == "switch" else current_period
         if landed != FY:
