@@ -631,7 +631,9 @@ export default function (component) {
     // 待定状态：检索和生成阶段还没有正文，只显示 spinner。
     // 但「扩展分析」阶段首轮回答已经产出，先把正文画出来再挂指示 ——
     // 用户不必等第二次模型调用跑完才看到东西。
-    if (m.status === "resolving" || m.status === "retrieving" || m.status === "history" || m.status === "generating" || m.status === "reviewing" || m.status === "analyzing" || m.status === "searching") {
+    // 除了完成和出错，都算进行中。原来是列白名单，后端新加的阶段（几件大事的 latest、分步的 prestep）
+    // 没列进来，那几十秒里这条消息被当成空回答画出来：转圈、状态、读秒全没了（线上读秒从 1 秒跳到 27 秒）
+    if (m.status && m.status !== "done" && m.status !== "error") {
       WEB_LIST = m.webSources || [];
       if (m.text) appendAnswer(body, m, idx);
       const th = mk("div", "thinking");
