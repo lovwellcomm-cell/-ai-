@@ -180,3 +180,21 @@ def test_planner_stays_on_current_report_when_notes_cover_a_cross_report_questio
     # 只问一个年份：笔记里没有，照旧换报告
     one = normalize(data, "2025 年前三季度扣非净利润是多少", facts, date(2026, 11, 3))["target"]
     assert (one["year"], one["period"]) == (2025, "Q3")
+
+
+def test_rows_with_percentage_points_keep_their_source():
+    """线上实测：「减少 0.13 个百分点」被当成金额 0.13 元去找出处，毛利率、ROE 行整行被丢。"""
+    hit = {"text": "主营业务毛利率(%) 5.83 毛利率比上年增减 减少0.13个百分点", "page_start": 188, "page_end": 188}
+    answer = ("| 项目 | 2025年 | 变化 | 来源 |\n|---|---|---|---|\n"
+              "| 主营业务毛利率 | 5.83% | 减少0.13个百分点 | [2] |\n")
+    got = notes.from_answer(answer, [HIT_P7, hit], [], DOC_FY, "s")
+    assert [(n["p"], n["t"]) for n in got] == [(188, "主营业务毛利率：2025年 5.83%；变化 减少0.13个百分点")]
+
+
+def test_merge_drops_rows_whose_amounts_are_already_noted_on_that_page():
+    card = notes.from_financials(FIN, DOC_FY, "s")
+    rows = notes.from_answer(ANSWER, [HIT_P7, HIT_P16], ["9.99 亿元"], DOC_FY, "s")
+    got = notes.merge(card, rows)
+    texts = [n["t"] for n in got]
+    assert sum(t.startswith("营业收入") for t in texts) == 1        # 表格那行和卡片重复
+    assert any(t.startswith("主营业务毛利率") for t in texts)       # 只有比率的行照留

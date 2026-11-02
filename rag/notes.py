@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 
-from .fidelity import (_CITE_RE, _SEPARATOR_RE, _TABLE_LINE_RE, _found, _hits_index,
+from .fidelity import (_CITE_RE, _PP_RE, _SEPARATOR_RE, _TABLE_LINE_RE, _found, _hits_index,
                        _split_row, extract_numbers)
 from .financials import BALANCE_KEYS
 from .periods import FY, SPAN
@@ -106,7 +106,12 @@ def from_answer(answer: str, hits: list[dict], unverified: list[str], doc_id: st
                 text = _CITE_RE.sub("", cell).replace("**", "").strip()
                 if not text or "来源" in h or any(b in cell for b in bad):
                     continue
-                nums = [n for n in extract_numbers(text) if n["kind"] != "year"]
+                # 「减少 0.13 个百分点」的 0.13 不是金额：不去掉的话会拿它去片段里找「0.13 元」，
+                # 找不到就把整行（毛利率、ROE）当成没出处丢掉（线上实测踩过）
+                nums = [n for n in extract_numbers(_PP_RE.sub(" ", text)) if n["kind"] != "year"]
+                if not nums and _PP_RE.search(text):
+                    cells.append(f"{_BOLD_RE.sub('', h).strip()} {text}".strip())
+                    continue
                 if not nums:
                     continue
                 numbers += nums
@@ -131,14 +136,31 @@ def from_answer(answer: str, hits: list[dict], unverified: list[str], doc_id: st
     return [n for n in out if n["doc"] and n["p"] > 0]
 
 
+_AMOUNT_RE = re.compile(r"-?\d[\d,]*\.\d+\s*(?:亿元|万元)")
+
+
+def _amounts(text: str) -> set[str]:
+    return {re.sub(r"\s+", "", m.group(0)) for m in _AMOUNT_RE.finditer(text)}
+
+
 def merge(*groups: list[dict]) -> list[dict]:
-    """去重（同一报告同一页同一句）并截到 MAX_PER_TURN 条。"""
+    """去重并截到 MAX_PER_TURN 条。
+
+    除了一字不差的重复，还去掉「换个说法的重复」：指标卡记了「营业收入：2025 年 246.74 亿元…」，
+    回答表格那一行又是同样三个金额 —— 金额全都已经出现在同一页某条笔记里的，不再占名额。
+    只有比率、没有金额的行（毛利率、ROE）照留。先传进来的组优先（指标卡的数字是程序复算过的）。
+    """
     seen, out = set(), []
     for n in (x for g in groups for x in g or []):
         key = (n["doc"], n["p"], n["t"])
-        if key not in seen:
-            seen.add(key)
-            out.append(n)
+        if key in seen:
+            continue
+        mine = _amounts(n["t"])
+        if mine and any(o["doc"] == n["doc"] and o["p"] == n["p"] and mine <= _amounts(o["t"])
+                        for o in out):
+            continue
+        seen.add(key)
+        out.append(n)
     return out[:MAX_PER_TURN]
 
 
