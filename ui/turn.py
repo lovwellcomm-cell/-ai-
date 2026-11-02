@@ -10,12 +10,14 @@ grep `advance_turn` 在 tests/ 里没有任何结果。
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 from rag.company import normalize, same_company
 from rag.external import join_external, should_search
 from rag.fidelity import unverified_in_tables
 from rag.generator import join_answer, should_analyze
+from rag.reviewer import decide, summary
 from rag.periods import (FY, RANK, latest_quarter, latest_report, latest_year, next_report,
                          period_end, period_in, period_of, relative_year, wants_latest,
                          wants_latest_quarter)
@@ -90,6 +92,9 @@ def history_entry(turn: dict, answer: str) -> dict:
     # 规划器怎么理解这个问题的（rag/planner.describe），检索轨迹里给人看
     if turn.get("understood"):
         entry["understood"] = turn["understood"]
+    # 复核结论（rag/reviewer.summary）：界面据此标「已复核」或列出没通过的地方
+    if turn.get("review"):
+        entry["review"] = turn["review"]
     # 依据的是哪份年报：同一公司多个年度共用一段对话后，翻原页、标注年份都要靠它。
     if turn.get("doc_id"):
         entry["doc_id"] = turn["doc_id"]
@@ -277,8 +282,33 @@ def adopt_turn(turn: dict | None, doc_id: str):
     return None, ((turn.get("doc_id"), entry) if entry else None)
 
 
+def run_parallel(jobs: dict) -> dict:
+    """{名字: 无参函数} → {名字: (成功与否, 返回值或异常)}。复核和扩展分析都是网络调用，并行跑。"""
+    out = {}
+    with ThreadPoolExecutor(max(1, len(jobs))) as ex:
+        futs = {k: ex.submit(f) for k, f in jobs.items()}
+        for k, f in futs.items():
+            try:
+                out[k] = (True, f.result())
+            except Exception as e:                   # 交给调用方按「这一路失败」处理
+                out[k] = (False, e)
+    return out
+
+
+def _with_analysis(turn: dict, ok: bool, value) -> tuple[dict, str]:
+    """扩展分析的结果并进回合：返回 (新回合, 扩展段正文)。失败不作废首轮回答。"""
+    if ok:
+        ext, diag = value
+    else:
+        ext, diag = "", {"analyze": "error", "analyze_error": str(value)}
+    new = dict(turn, analyze=diag.get("analyze", ""))
+    if diag.get("analyze_error"):
+        new["analyze_error"] = diag["analyze_error"]
+    return new, ext
+
+
 def step(turn: dict, *, gen, ana, web=None, ind=None, client=None, company: str = "",
-         year: str = "", recent: list[str] | None = None):
+         year: str = "", recent: list[str] | None = None, rev=None, now=time.time):
     """推进「生成 → 扩展 / 外部查询 → 完成」这一段。
 
     参数：
@@ -298,6 +328,11 @@ def step(turn: dict, *, gen, ana, web=None, ind=None, client=None, company: str 
 
     只有传了 `web` 才会进入外部查询：首轮弃答时优先补充公开信息；
     没传 `web`（旧调用点、部分测试）时行为不变。
+
+    传了 `rev(question, answer, hits, client=)` 就在首轮回答之后多一步 reviewing（rag/reviewer.py）：
+    复核和扩展分析并行；不通过时按 decide() 的结论回退 —— 补检索（→ retrieving）、
+    重新生成（→ generating）、重新理解（→ resolving），回退一次后不再回退。
+    回退期间旧回答一直显示着，新回答出来再替换。
 
     **不修改传入的 turn**，返回的是新字典。跨 rerun 的会话状态最容易出的错，
     就是"就地改了但忘了写回 session_state" —— 用不可变风格把这类错挡在函数外面。
@@ -323,13 +358,51 @@ def step(turn: dict, *, gen, ana, web=None, ind=None, client=None, company: str 
 
         new = dict(turn, a=answer)
         # 首轮明确说年报里没有：让模型调工具补公开信息，而不是凭记忆猜。
-        if web is not None and should_search(answer):
-            return dict(new, status="searching"), None, None
         # 弃答不做扩展（没有结论可解释，问"为什么"只会诱发编造）；
         # 纯查数的题也不做（实测 6/6 返回「无补充」，白调一次模型）。
-        if should_analyze(answer, turn["q"]):
-            return dict(new, status="analyzing"), None, None
+        if web is not None and should_search(answer):
+            nxt = "searching"
+        elif should_analyze(answer, turn["q"]):
+            nxt = "analyzing"
+        else:
+            nxt = "done"
+        # 有复核时先复核：首轮说「未找到」也要先复核 —— 可能只是检索没找全，补检索比联网更该先试
+        if rev is not None:
+            return dict(new, status="reviewing", after_review=nxt), None, None
+        if nxt != "done":
+            return dict(new, status=nxt), None, None
         return dict(new, status="done"), history_entry(new, answer), None
+
+    if status == "reviewing":
+        nxt = turn.get("after_review", "done")
+        jobs = {"review": lambda: rev(turn["q"], turn["a"], turn["hits"], client=client)}
+        if nxt == "analyzing":
+            jobs["analyze"] = lambda: ana(turn["q"], turn["hits"], turn["a"], client=client,
+                                          company=company, year=year, history=recent)
+        results = run_parallel(jobs)
+        ok, res = results["review"]
+        res = res if ok else None
+        rounds = turn.get("round", 0)
+        action = decide(res, round_no=rounds, elapsed=now() - turn.get("started", now()))
+        base = {k: v for k, v in turn.items() if k != "after_review"}
+        if action in ("retrieve", "regenerate", "replan"):
+            # 回退：旧回答留着显示（界面挂「复核发现…」），新的一轮出来再替换
+            new = dict(base, round=rounds + 1, retry=action, review_last=res)
+            if action == "retrieve":
+                return dict(new, status="retrieving", retry_queries=res["queries"]), None, None
+            if action == "regenerate":
+                return dict(new, status="generating"), None, None
+            # 重新理解可能换报告：旧报告的指标卡不能留到新报告上
+            new = {k: v for k, v in new.items() if k not in CARD_KEYS}
+            return dict(new, status="resolving", replan_hint=res.get("note", "")), None, None
+        verdict = "error" if res is None else ("pass" if action == "pass" else "fail")
+        new = dict(base, review=summary(res, rounds, verdict))
+        if nxt == "analyzing":
+            new, ext = _with_analysis(new, *results["analyze"])
+            return dict(new, status="done"), history_entry(new, join_answer(turn["a"], ext)), None
+        if nxt == "searching":
+            return dict(new, status="searching"), None, None
+        return dict(new, status="done"), history_entry(new, turn["a"]), None
 
     if status == "searching":
         diag: dict = {}
@@ -351,19 +424,14 @@ def step(turn: dict, *, gen, ana, web=None, ind=None, client=None, company: str 
                 history_entry(new, join_external(turn["a"], ext)), None)
 
     if status == "analyzing":
-        diag: dict = {}
-        ext = ""
+        # 首轮回答本身是完整的，不能因为更晚的一次**补充**调用而作废它。
+        # 失败记在回合上（测量与排查用），用户拿到的仍是一份可用的回答。
         try:
-            ext, diag = ana(turn["q"], turn["hits"], turn["a"], client=client,
-                            company=company, year=year, history=recent)
+            res = (True, ana(turn["q"], turn["hits"], turn["a"], client=client,
+                             company=company, year=year, history=recent))
         except Exception as e:
-            # 首轮回答本身是完整的，不能因为更晚的一次**补充**调用而作废它。
-            # 失败记在回合上（测量与排查用），用户拿到的仍是一份可用的回答。
-            diag = {"analyze": "error", "analyze_error": str(e)}
-            ext = ""
-        new = dict(turn, analyze=diag.get("analyze", ""))
-        if diag.get("analyze_error"):
-            new["analyze_error"] = diag["analyze_error"]
+            res = (False, e)
+        new, ext = _with_analysis(turn, *res)
         return (dict(new, status="done"),
                 history_entry(new, join_answer(turn["a"], ext)), None)
 

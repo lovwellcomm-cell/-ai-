@@ -33,7 +33,7 @@ except Exception as _import_error:          # 部署环境里的 import 失败�
 from rag.external import answer_with_tools
 from rag.financials import load_or_build as load_financials
 from rag.generator import analyze, generate, get_client, make_client
-from rag import planner
+from rag import planner, reviewer
 from rag.history import load_older, merge, older_year, wants_trend
 from rag.industry import RETRIEVAL_QUERY as INDUSTRY_QUERY, industry_brief, wants_industry
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
@@ -558,7 +558,8 @@ def advance_turn() -> None:
         understood = None
         if config.AGENT_PLANNER:
             understood = planner.understand(target["q"], client=client, history=ctx,
-                                            current=meta, docs=docs_here)
+                                            current=meta, docs=docs_here,
+                                            hint=target.get("replan_hint", ""))
         if understood is None:
             understood = planner.fallback(target["q"], client=client, history=ctx, current=meta)
         target["plan"] = understood
@@ -677,7 +678,9 @@ def advance_turn() -> None:
                 hits, queries = retriever.search_with_queries(
                     target["q"], client=client, use_llm=config.LLM_REWRITE,
                     history=recent or None, diag=diag,
-                    queries=pl.get("queries") or None, restated=pl.get("restated", ""),
+                    # 复核说要补检索时，用它给的检索词再找一遍
+                    queries=target.pop("retry_queries", None) or pl.get("queries") or None,
+                    restated=pl.get("restated", ""),
                 )
         except Exception as e:
             refund(target)
@@ -698,7 +701,8 @@ def advance_turn() -> None:
         want_card = (pl["card"] if pl.get("source") == "planner"
                      else wants_card(target["q"], previous=recent))
         want_trend = pl.get("intent") == "trend" or wants_trend(target["q"], previous=recent)
-        if target.get("kind") != "industry" and want_card:
+        # 复核回退后的第二轮检索：卡片第一轮已经算过，不再重抽（也不再拉一次往年年报）
+        if target.get("kind") != "industry" and want_card and not target.get("kpis"):
             try:
                 fin = get_financials(doc_id, SOURCE_STAMP)
                 card = build_card(fin)
@@ -736,14 +740,20 @@ def advance_turn() -> None:
         st.session_state["turn"] = target
         st.rerun()
 
-    if target["status"] in ("generating", "analyzing", "searching"):
+    if target["status"] in ("generating", "reviewing", "analyzing", "searching"):
         # 决策（要不要扩展、什么时候收尾、失败怎么办）在 ui/turn.py 里，
         # 是纯函数、有测试。这里只负责接真实模型和 session_state。
 
         def _gen(q, hits, *, client, company, year, history):
+            # 问题理解 + 上一版被复核指出的问题（回退重答时才有）
+            focus = (planner.focus_block(target.get("plan"))
+                     + reviewer.feedback_block(target.get("review_last")))
             return "".join(generate(q, hits, client=client, company=company,
                                     year=year, history=history, period=period_of(meta),
-                                    focus=planner.focus_block(target.get("plan"))))
+                                    focus=focus))
+
+        def _rev(q, answer, hits, *, client):
+            return reviewer.review(q, answer, hits, client=client, plan=target.get("plan"))
 
         def _ana(q, hits, first, *, client, company, year, history):
             diag: dict = {}
@@ -772,6 +782,7 @@ def advance_turn() -> None:
             target, gen=_gen, ana=_ana, web=_web, ind=_ind, client=pick_client(),
             company=meta.get("company", ""), year=meta.get("year", ""),
             recent=target.get("recent_ctx") or target.get("recent"),
+            rev=_rev if (config.AGENT_REVIEW and target.get("kind") != "industry") else None,
         )
         if error:
             refund(target)

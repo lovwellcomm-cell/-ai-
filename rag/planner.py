@@ -65,7 +65,8 @@ PROMPT = """你是上市公司定期报告（年报、季报）问答助手的�
 "card": false, "subquestions": [], "queries": [], "clarify": {{"question": "", "options": []}}, "reply": ""}}"""
 
 
-def _context(question: str, history: list, current: dict, docs: list[dict], today: date) -> str:
+def _context(question: str, history: list, current: dict, docs: list[dict], today: date,
+             hint: str = "") -> str:
     """喂给模型的用户消息：今天、当前报告、本地这家公司有哪些报告、对话历史、问题。"""
     company = current.get("company", "")
     cur = f"{company} {report_label(current.get('year', ''), current.get('period') or 'FY')}".strip()
@@ -85,6 +86,9 @@ def _context(question: str, history: list, current: dict, docs: list[dict], toda
             hist.append(f"用户：{h}")
     if hist:
         rows.append("【对话历史】\n" + "\n".join(hist))
+    if hint:
+        # 复核判定上一次理解错了（rag/reviewer.py 的 replan）：把它的意见交给这一次
+        rows.append(f"【上一次的理解被复核否定】{hint}")
     rows.append(f"【问题】{question}")
     return "\n".join(rows)
 
@@ -168,7 +172,7 @@ def normalize(data: dict, question: str, history: list, today: date) -> dict | N
 
 def understand(question: str, *, client, history: list | None = None,
                current: dict | None = None, docs: list[dict] | None = None,
-               today: date | None = None) -> dict | None:
+               today: date | None = None, hint: str = "") -> dict | None:
     """调一次模型拿计划。任何失败（超时、截断、不合规）都返回 None —— 调用方退回旧流程。"""
     today = today or date.today()
     current = current or {}
@@ -177,7 +181,7 @@ def understand(question: str, *, client, history: list | None = None,
             model=config.LLM_MODEL,
             messages=[{"role": "system", "content": PROMPT},
                       {"role": "user", "content": _context(question, history or [], current,
-                                                           docs or [], today)}],
+                                                           docs or [], today, hint)}],
             temperature=0, max_tokens=config.PLANNER_MAX_TOKENS, timeout=config.PLANNER_TIMEOUT,
             response_format={"type": "json_object"},
         )

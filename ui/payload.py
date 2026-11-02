@@ -26,6 +26,7 @@ STATUS_TEXT = {
     "resolving": "正在理解问题…",
     "retrieving": "检索相关片段…",
     "history": "正在调取往年年报，把趋势拉长到近 6 年…",
+    "reviewing": "正在复核回答…",
     "generating": "正在生成回答…",
     # 首轮回答已经显示出来了，这一步只是追加「为什么」的扩展分析
     "analyzing": "正在扩展分析…",
@@ -80,10 +81,17 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
         # 不下发绝对时间戳，免得服务器和浏览器的时钟差把读秒带偏。
         if turn.get("started"):
             msg["elapsed"] = max(0, int(time.time() - turn["started"]))
-    elif isinstance(turn.get("secs"), int):
-        msg["secs"] = turn["secs"]
         if turn.get("kind") == "industry" and status == "generating":
             msg["statusText"] = "正在联网检索行业动态…（约半分钟）"
+        # 复核没通过、正在回退：说清楚发现了什么、在做什么（旧回答还显示着）
+        if turn.get("retry") and status in ("resolving", "retrieving", "history", "generating"):
+            note = (turn.get("review_last") or {}).get("note") or "回答有遗漏"
+            doing = {"retrieve": "正在补充检索后重新回答", "regenerate": "正在重新生成",
+                     "replan": "正在重新理解问题"}.get(turn["retry"], "正在重新回答")
+            msg["statusText"] = f"复核发现：{note}。{doing}…"
+            msg["retrying"] = True
+    elif isinstance(turn.get("secs"), int):
+        msg["secs"] = turn["secs"]
     if error:
         msg["error"] = error
     if page:
@@ -106,7 +114,7 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
     # 结构化财务卡片（ui/card.py 产出）：组件收到就用、收不到就不渲染。
     # cardTitle / cardNote 跟着消息走 —— 全局默认值是「演示数据」，不能挂到真实数字上。
     # tableCheck：回答里 Markdown 表格的逐格核对结果（ui/turn.py:history_entry 算好存下）。
-    for key in CARD_KEYS + ("tableCheck", "table", "demo", "kind", "options", "understood"):
+    for key in CARD_KEYS + ("tableCheck", "table", "demo", "kind", "options", "understood", "review"):
         if turn.get(key):
             msg[key] = turn[key]
     return msg

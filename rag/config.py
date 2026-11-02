@@ -133,6 +133,14 @@ AGENT_PLANNER = get("AGENT_PLANNER", "1") == "1"
 PLANNER_MAX_TOKENS = int(get("PLANNER_MAX_TOKENS", "4000"))
 PLANNER_TIMEOUT = float(get("PLANNER_TIMEOUT", "25"))
 
+# agent2 复核器（rag/reviewer.py）：回答生成后查要点覆盖、有无依据。不通过最多回退 AGENT_MAX_RETRY 次，
+# 从提问起超过 AGENT_TIME_BUDGET 秒就不再回退，照常给出回答并标出问题。
+AGENT_REVIEW = get("AGENT_REVIEW", "1") == "1"
+AGENT_MAX_RETRY = int(get("AGENT_MAX_RETRY", "1"))
+AGENT_TIME_BUDGET = float(get("AGENT_TIME_BUDGET", "90"))
+REVIEW_MAX_TOKENS = int(get("REVIEW_MAX_TOKENS", "4000"))
+REVIEW_TIMEOUT = float(get("REVIEW_TIMEOUT", "30"))
+
 # ---------- 公开演示模式 ----------
 # 部署到公网时设 PUBLIC_DEMO=1：限制提问次数、限制上传、按会话隔离上传的年报。
 PUBLIC_DEMO = get("PUBLIC_DEMO", "0") == "1"

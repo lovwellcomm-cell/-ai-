@@ -503,6 +503,19 @@ export default function (component) {
       meta.appendChild(mk("span", "sep"));
       meta.appendChild(mk("span", "mono took", "用时 " + fmtSecs(m.secs)));
     }
+    // 复核（agent2）：进行中标「复核中」；通过标「已复核 ✓」，悬停看核对了哪些要点；
+    // 没通过标「复核未通过」，问题列在回答下方。复核没跑成（error）不标 —— 不假装复核过。
+    if (m.status === "reviewing" || m.retrying) {
+      meta.appendChild(mk("span", "tag review-tag pending", "复核中"));
+    } else if (m.review && m.review.verdict === "pass") {
+      const t = mk("span", "tag review-tag ok", "已复核 ✓");
+      const pts = (m.review.points || []).map((p) => (p.ok ? "✓ " : "✗ ") + p.point);
+      t.title = "已核对：要点是否答到、数字和说法能否在原文找到" + (pts.length ? "\n" + pts.join("\n") : "")
+        + (m.review.rounds ? "\n（复核后重答过 1 次）" : "");
+      meta.appendChild(t);
+    } else if (m.review && m.review.verdict === "fail") {
+      meta.appendChild(mk("span", "tag review-tag bad", "复核未通过"));
+    }
     body.appendChild(meta);
     if (m.notice) body.appendChild(mk("div", "notice", m.notice));
     wrap.appendChild(body);
@@ -510,7 +523,7 @@ export default function (component) {
     // 待定状态：检索和生成阶段还没有正文，只显示 spinner。
     // 但「扩展分析」阶段首轮回答已经产出，先把正文画出来再挂指示 ——
     // 用户不必等第二次模型调用跑完才看到东西。
-    if (m.status === "resolving" || m.status === "retrieving" || m.status === "history" || m.status === "generating" || m.status === "analyzing" || m.status === "searching") {
+    if (m.status === "resolving" || m.status === "retrieving" || m.status === "history" || m.status === "generating" || m.status === "reviewing" || m.status === "analyzing" || m.status === "searching") {
       WEB_LIST = m.webSources || [];
       if (m.text) appendProse(body, m.text, (m.sources || []).length);
       const th = mk("div", "thinking");
@@ -536,6 +549,13 @@ export default function (component) {
 
     WEB_LIST = m.webSources || [];
     appendProse(body, m.text, (m.sources || []).length, m.tableCheck);
+    if (m.review && m.review.verdict === "fail") {
+      const box = mk("div", "review-fail");
+      box.appendChild(mk("div", "review-fail-t", "复核未通过" + (m.review.rounds ? "（已重答 1 次）" : "") + "：" + (m.review.note || "部分内容未能核实")));
+      (m.review.unsupported || []).forEach((u) => box.appendChild(mk("div", "review-fail-i", "原文找不到依据：" + u)));
+      (m.review.points || []).filter((p) => !p.ok).forEach((p) => box.appendChild(mk("div", "review-fail-i", "没答到：" + p.point)));
+      body.appendChild(box);
+    }
 
     // 反问：选项是可以直接发送的完整问题；「其他」把焦点交给输入框让用户自己写。
     // 只有最后一条、而且不在生成中时可点 —— 点旧的反问选项会把对话带回过去。
@@ -928,7 +948,7 @@ export default function (component) {
     }
     (m.queries || []).forEach((qq) => {
       const line = mk("div", "trace-line");
-      line.appendChild(document.createTextNode("改写检索词 "));
+      line.appendChild(document.createTextNode("检索词 "));
       line.appendChild(mk("b", null, qq));
       tb.appendChild(line);
     });

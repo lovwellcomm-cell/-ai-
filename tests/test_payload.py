@@ -261,3 +261,13 @@ def test_history_entry_records_duration(monkeypatch):
     base = {"q": "x", "hits": [], "queries": []}
     assert turn_mod.history_entry(dict(base, started=1000.0), "回答")["secs"] == 30
     assert "secs" not in turn_mod.history_entry(base, "回答")
+
+
+def test_pending_status_overrides_still_apply():
+    """回归：加读秒时把 elif 插错位置，「进行中」的文案覆盖跑进了「已完成」分支，从此不生效。"""
+    ind = payload.ai_message({"q": "行业最新动态", "kind": "industry"}, status="generating")
+    assert ind["statusText"] == "正在联网检索行业动态…（约半分钟）"
+    retry = payload.ai_message({"q": "x", "a": "旧回答", "retry": "retrieve",
+                                "review_last": {"note": "没答到分红"}}, status="retrieving")
+    assert retry["statusText"] == "复核发现：没答到分红。正在补充检索后重新回答…"
+    assert retry["retrying"] is True and retry["text"] == "旧回答"

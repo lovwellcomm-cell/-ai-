@@ -26,7 +26,7 @@ _KINDS = ("industry", "clarify", "refuse")
 _HIT_STR = {"text": 4000, "section": 120, "subsection": 160}
 _WEB_STR = {"title": 200, "url": 600, "site": 80, "date": 20}
 # 卡片、表格核对这些是程序算好的展示数据：结构复杂，原样带回，只限制总体大小
-_OPAQUE = CARD_KEYS + ("tableCheck",)
+_OPAQUE = CARD_KEYS + ("tableCheck", "review")
 _OPAQUE_MAX = 6000
 
 
