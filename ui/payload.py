@@ -57,6 +57,9 @@ def to_sources(hits: list[dict], answer: str) -> list[dict]:
             "text": hit.get("text") or "",
             "cited": n in cited,
         })
+        # 事实笔记片段来自别的报告：原页下面要写那份报告的名字，不是当前文档
+        if hit.get("note") and hit.get("note_src"):
+            sources[-1]["from"] = hit["note_src"]
     return sources
 
 

@@ -1747,7 +1747,8 @@ export default function (component) {
         img.src = m.page.png;
         img.alt = "原文第 " + src.p1 + " 页";
         pw.appendChild(img);
-        pw.appendChild(mk("div", "paper-cap", "原文第 " + src.p1 + " 页 · " + (d.doc && d.doc.name ? d.doc.name : "")));
+        // 事实笔记片段（src.from）翻的是别的报告的原页
+        pw.appendChild(mk("div", "paper-cap", "原文第 " + src.p1 + " 页 · " + (src.from || (d.doc && d.doc.name ? d.doc.name : ""))));
         card.appendChild(pw);
       }
 

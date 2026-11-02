@@ -63,6 +63,8 @@ PROMPT = """你是上市公司定期报告（年报、季报）问答助手的�
 对话历史里的「已核对的数据」是前几轮从某份报告里核对过的数字，回答环节能直接引用。
 问题要拿新报告和这些数据对比时（"结合最新季报对比一下"），year/period 填**还没有数据**的那份报告，
 intent 按问题本身填（不要因为要多份报告就填 trend 或 clarify）；restated 里写清楚两份报告各是哪份。
+问题要的数据在「已核对的数据」和当前报告里都已经有了（只是问里写了年份），year、period 都填 null，留在当前报告，
+不要为了它去换报告或导入新报告。
 
 只输出 JSON：
 {{"restated": "", "intent": "report", "company": "", "multiple": false, "year": null, "period": null,
@@ -133,11 +135,19 @@ def normalize(data: dict, question: str, history: list, today: date) -> dict | N
         year = year_in(question)
     period = data.get("period") if data.get("period") in PERIODS else None
 
-    # 规则优先：问题里说清了报告期、「最新」、「去年三季度」时用规则的结果
-    target = with_period({"company": company, "year": year,
-                          "multiple": bool(data.get("multiple"))}, question, today)
-    if target.get("period") is None and not target.get("latest") and period:
-        target["period"] = period
+    # 跨报告对比、数据已在事实笔记里（「2025 年全年和 2026 年前三季度分别是多少」）：模型说留在当前报告，
+    # 就别让下面的规则从问题里抽出第一个年份和「前三季度」，去导入一份用不上的「2025 三季报」（实测踩过）
+    facts = any(isinstance(h, dict) and h.get("facts") for h in history or [])
+    multi_year = len(set(re.findall(r"(?<!\d)20\d\d(?!\d)", question))) >= 2
+    if facts and multi_year and data.get("year") is None and data.get("period") is None:
+        target = {"company": company, "year": None, "period": None,
+                  "multiple": bool(data.get("multiple"))}
+    else:
+        # 规则优先：问题里说清了报告期、「最新」、「去年三季度」时用规则的结果
+        target = with_period({"company": company, "year": year,
+                              "multiple": bool(data.get("multiple"))}, question, today)
+        if target.get("period") is None and not target.get("latest") and period:
+            target["period"] = period
 
     # 意图：行业动态、趋势的关键词规则有测试，命中就算数；反问和超范围只认模型
     if wants_industry(question) and intent in ("report", "trend"):

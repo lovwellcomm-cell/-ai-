@@ -158,3 +158,25 @@ def test_generator_adds_cross_report_rule_only_with_note_hits():
     msgs = build_messages("对比一下", [HIT_P16, note_hit], company="精达股份", year="2026")
     assert "前几轮已核对的数据" in msgs[0]["content"]
     assert "[2]（前几轮已核对的数据 · 精达股份 2025 年报，第7页）" in msgs[1]["content"]
+
+
+def test_sources_name_the_other_report_for_note_hits():
+    from ui.payload import to_sources
+    note_hit = dict(HIT_P7, note=True, doc_id=DOC_FY, note_src="精达股份 2025 年报",
+                    section="前几轮已核对的数据 · 精达股份 2025 年报")
+    got = to_sources([HIT_P16, note_hit], "见 [2]")
+    assert "from" not in got[0] and got[1]["from"] == "精达股份 2025 年报" and got[1]["cited"]
+
+
+def test_planner_stays_on_current_report_when_notes_cover_a_cross_report_question():
+    from datetime import date
+    from rag.planner import normalize
+    facts = [{"q": "近三年怎么样", "facts": "精达股份 2025 年报（扣非净利润）"}]
+    q = "扣非净利润的 2025 年全年和 2026 年前三季度分别是多少？"
+    data = {"intent": "report", "company": "", "year": None, "period": None}
+    assert normalize(data, q, facts, date(2026, 11, 3))["target"]["year"] is None
+    # 没有笔记：照旧按规则取问题里的年份和期
+    assert normalize(data, q, [{"q": "近三年怎么样"}], date(2026, 11, 3))["target"]["year"] == 2025
+    # 只问一个年份：笔记里没有，照旧换报告
+    one = normalize(data, "2025 年前三季度扣非净利润是多少", facts, date(2026, 11, 3))["target"]
+    assert (one["year"], one["period"]) == (2025, "Q3")
