@@ -167,6 +167,12 @@
 .lp .lp-link { padding: 8px 12px; border-radius: 999px; font-size: 13px; color: var(--ink-2);
   transition: color .2s var(--ease), background .2s var(--ease); }
 .lp .lp-link:hover { color: var(--ink); background: var(--accent-soft); }
+/* 深浅色切换：和聊天页顶栏同一对图标（深色时显示太阳，浅色时显示月亮） */
+.lp .lp-theme { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 999px;
+  color: var(--ink-2); transition: color .2s var(--ease), background .2s var(--ease); }
+.lp .lp-theme:hover { color: var(--ink); background: var(--accent-soft); }
+.lp .lp-theme:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.lp .lp-theme svg { width: 17px; height: 17px; }
 
 /* ---------- 按钮 ---------- */
 .lp .lp-btn {

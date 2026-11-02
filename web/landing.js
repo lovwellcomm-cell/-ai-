@@ -5,7 +5,7 @@
  *  1. default export 每次 data 变化都会重跑 —— 事件一律用 el.onxxx = 赋值，保持幂等；
  *     背景动画只起一个，记在模块级 LOOP 里，重跑时只更新配色。
  *  2. parentElement 是 ShadowRoot。
- *  3. setTriggerValue 只在点击里调用（「开始聊天」）。
+ *  3. setTriggerValue 只在点击里调用（「开始聊天」）；右上角深浅色切换用 setStateValue("theme")。
  *
  * 背景分层（从后往前）：透视网格（CSS）→ 流动走势线（这里的 Canvas）→ 数据标签（DOM）→ 细噪点（CSS）。
  * 走势线的构思参考 React Bits 的 Floating Lines，代码是这里重写的 Canvas 2D 版本，没有依赖。
@@ -18,6 +18,14 @@ const LOOP = {
   // 跟随圆环（.lp-cursor）套在十字线交点上，hot 表示指针停在按钮上
   ring: { x: 0, y: 0, hot: false },
   tags: null,
+};
+
+// 右上角手动切换的深浅色。按下后立刻生效，同时 setStateValue 告诉 Python（进入助手后沿用）；
+// 记在模块级，Python 那边的重跑回来之前 data.theme 还是旧值，不能被它改回去
+const THEME = { pick: null };
+const THEME_ICONS = {
+  sun: '<circle cx="12" cy="12" r="4.2" stroke="currentColor" stroke-width="1.6"/><path d="M12 2.6v2.2M12 19.2v2.2M4.2 12H2M22 12h-2.2M6.4 6.4 4.9 4.9M19.1 19.1l-1.5-1.5M6.4 17.6l-1.5 1.5M19.1 4.9l-1.5 1.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  moon: '<path d="M20 13.5A8 8 0 0 1 10.5 4a8 8 0 1 0 9.5 9.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
 };
 
 // 每条线的形状参数。写死而不是随机：每次打开看到的是同一幅画面，截图也稳定。
@@ -380,15 +388,29 @@ function wireUse(root) {
 }
 
 export default function (component) {
-  const { parentElement, data, setTriggerValue } = component;
+  const { parentElement, data, setStateValue, setTriggerValue } = component;
   const d = data && typeof data === "object" ? data : {};
   const root = parentElement.querySelector("#lp");
   if (!root) return;
 
-  const theme = d.theme === "light" ? "light" : "dark";
-  root.setAttribute("data-theme", theme);
-  LOOP.colors = palette(theme);
+  const canvas = root.querySelector("#lpBg");
+  const applyTheme = (t) => {
+    root.setAttribute("data-theme", t);
+    LOOP.colors = palette(t);
+    const icon = root.querySelector("#lpThemeIcon");
+    if (icon) icon.innerHTML = t === "dark" ? THEME_ICONS.sun : THEME_ICONS.moon;
+  };
+  const theme = THEME.pick || (d.theme === "light" ? "light" : "dark");
+  applyTheme(theme);
   LOOP.tags = [...root.querySelectorAll(".lp-dt")];
+
+  const themeBtn = root.querySelector("#lpTheme");
+  if (themeBtn) themeBtn.onclick = () => {
+    THEME.pick = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    applyTheme(THEME.pick);
+    if (canvas && !LOOP.raf) draw(canvas, 8);   // 减少动画模式下没有动画循环，手动重画静止帧
+    if (setStateValue) setStateValue("theme", THEME.pick);
+  };
 
   // 「开始聊天」只进入助手；「这样问」进入助手并直接发出 data-ask 那句话（app.py 当成一次普通提问）
   root.querySelectorAll("[data-enter]").forEach((b) => {
@@ -406,7 +428,6 @@ export default function (component) {
     };
   });
 
-  const canvas = root.querySelector("#lpBg");
   // 鼠标视差只给精确指针（鼠标、触控板）；触屏上手指一按就跳，不做
   const fine = window.matchMedia && window.matchMedia("(pointer: fine)").matches;
   root.onpointermove = fine && canvas ? (e) => {

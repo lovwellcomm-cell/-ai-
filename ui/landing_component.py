@@ -47,12 +47,18 @@ def _renderer():
 
 
 def landing_surface(data: dict, *, key: str = "landing",
-                    on_enter: Callable[[], None] | None = None):
-    """挂载开屏页，返回 ComponentResult；result.enter 有值表示点了「开始聊天」。"""
+                    on_enter: Callable[[], None] | None = None,
+                    on_theme: Callable[[], None] | None = None):
+    """挂载开屏页，返回 ComponentResult；result.enter 有值表示点了「开始聊天」。
+
+    右上角切换深浅色时前端 setStateValue("theme")；和 chat_surface 一样，
+    不传 on_theme_change 的话 Python 侧收不到这个值。
+    """
     return _renderer()(
         key=key,
         data=data,
         width="stretch",
         height="content",
         on_enter_change=on_enter or (lambda: None),
+        on_theme_change=on_theme or (lambda: None),
     )

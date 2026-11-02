@@ -299,10 +299,12 @@ def visible_ids():
 
 
 def current_theme() -> str:
-    """组件的深浅色：优先用组件内手动切换的结果，否则跟随 Streamlit 主题。"""
+    """组件的深浅色：优先用组件内手动切换的结果（聊天页 > 开屏页），否则跟随 Streamlit 主题。"""
     override = st.session_state.get("chat", {}).get("theme")
     if override in ("dark", "light"):
         return override
+    if st.session_state.get("landing_theme") in ("dark", "light"):
+        return st.session_state["landing_theme"]
     try:
         return st.context.theme.type or "light"
     except Exception:
@@ -329,7 +331,11 @@ if (not st.session_state.get("entered")
     _bg = "#070809" if _theme == "dark" else "#F6F5F2"
     st.markdown(f"<style>{LANDING_CSS} .stApp {{ background: {_bg}; }}</style>",
                 unsafe_allow_html=True)
-    landing = landing_surface({"theme": _theme})
+    # 开屏页右上角切的深浅色另存一份：进入助手后开屏页组件不再渲染，它的组件状态会被 Streamlit 清掉
+    def _keep_landing_theme():
+        st.session_state["landing_theme"] = st.session_state.get("landing", {}).get("theme")
+
+    landing = landing_surface({"theme": _theme}, on_theme=_keep_landing_theme)
     if getattr(landing, "enter", None):
         st.session_state["entered"] = True
         # 「这样问」：进入助手后直接发出那句话。数据来自浏览器，只收短字符串，照常走提问计次

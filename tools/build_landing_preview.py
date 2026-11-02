@@ -4,7 +4,7 @@
 
 开屏页本来是 Streamlit 组件：JS 是 `export default function (component)`，挂在 shadow root 里。
 这里把三份文件原样内联，用一个假的 component（parentElement = document、setTriggerValue 只打日志）
-调用它，所以预览里看到的就是线上会跑的那份代码，不是另写的示意。右上角可以切换深浅色。
+调用它，所以预览里看到的就是线上会跑的那份代码，不是另写的示意。深浅色用页面自己右上角的按钮切换。
 """
 from __future__ import annotations
 
@@ -22,27 +22,18 @@ SHELL = """<!doctype html>
 <title>开屏页预览</title>
 <style>
 html, body {{ margin: 0; background: #070809; }}
-.pv-theme {{ position: fixed; right: 16px; bottom: 16px; z-index: 100; padding: 6px 14px; border-radius: 999px;
-  font: 13px -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif; cursor: pointer;
-  color: #EDEEF0; background: rgba(20,22,25,.85); border: 1px solid rgba(255,255,255,.2); }}
 {css}
 </style>
 </head>
 <body>
 {html}
-<button class="pv-theme" id="pvTheme" type="button">切换浅色</button>
 <script type="module">
 {js}
-let theme = "dark";
-const fake = (t) => ({{ parentElement: document, data: {{ theme: t }},
-  setTriggerValue: (k, v) => console.log("setTriggerValue", k, v) }});
-let cleanup = landing(fake(theme));
-document.getElementById("pvTheme").onclick = (e) => {{
-  theme = theme === "dark" ? "light" : "dark";
-  document.body.style.background = theme === "dark" ? "#070809" : "#F6F5F2";
-  e.target.textContent = theme === "dark" ? "切换浅色" : "切换深色";
-  cleanup = landing(fake(theme));
-}};
+const fake = {{ parentElement: document, data: {{ theme: "dark" }},
+  setStateValue: (k, v) => {{ console.log("setStateValue", k, v);
+    document.body.style.background = v === "dark" ? "#070809" : "#F6F5F2"; }},
+  setTriggerValue: (k, v) => console.log("setTriggerValue", k, v) }};
+landing(fake);
 </script>
 </body>
 </html>
