@@ -1,19 +1,18 @@
 """注册并挂载开屏页组件（web/landing.*）。
 
 和 ui/chat_component.py 同一套做法：按文件 mtime 判断要不要重新注册，本地改样式不用重启。
-产品截图 web/landing-shot.webp 在注册时转成 data URI 填进 html 的 {{SHOT}}——
-组件拿不到 web/ 目录下的静态文件，内联是最简单的办法（截图约 30 KB）。
+首屏原来是一张产品截图（landing-shot.webp，注册时转成 data URI 内联）；2026-11 换成了网页元素画的
+「回答 → 原页」组合（跟随深浅主题、文字清晰），截图文件已删除。
 """
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from typing import Callable
 
 import streamlit as st
 
 WEB = Path(__file__).resolve().parent.parent / "web"
-FILES = ("landing.html", "landing.css", "landing.js", "landing-shot.webp")
+FILES = ("landing.html", "landing.css", "landing.js")
 
 
 def _read(name: str) -> str:
@@ -24,8 +23,7 @@ def _read(name: str) -> str:
 
 
 def _html() -> str:
-    shot = base64.b64encode((WEB / "landing-shot.webp").read_bytes()).decode("ascii")
-    return _read("landing.html").replace("{{SHOT}}", "data:image/webp;base64," + shot)
+    return _read("landing.html")
 
 
 def _fingerprint() -> str:

@@ -221,30 +221,79 @@
 .lp-halo-b { right: -12%; background: radial-gradient(closest-side, var(--halo-b), transparent 75%); animation-delay: -4.5s; }
 @keyframes lp-breathe { from { opacity: .75; transform: scale(.96); } to { opacity: 1; transform: scale(1.04); } }
 .lp-shot { perspective: 1600px; }
-/* --tilt / --sc 由 landing.js 按滚动位置写入；没写（减少动画、脚本没跑）时就是平的 */
-.lp-frame {
+/* 回答 → 原页：前面回答卡片，后面斜放一页年报，引线从引用编号连到原页上标出的数字。
+   --tilt / --sc 由 landing.js 按滚动位置写入（截图上沿进入视野时从后仰慢慢摆正）；没写就是平的。 */
+.lp-stage {
+  position: relative; max-width: 980px; margin: 0 auto; padding-bottom: 40px;
   transform: rotateX(var(--tilt, 0deg)) scale(var(--sc, 1));
   transform-origin: 50% 100%;
   will-change: transform;
-  position: relative; border-radius: 18px; padding: 7px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, transparent),
-                                      color-mix(in srgb, var(--surface) 60%, transparent));
-  border: 1px solid var(--shot-line);
+}
+.lp-page {
+  --paper: #FBFBF9; --paper-ink: #1C1D1F; --paper-ink-2: #55585D; --paper-rule: #D9DAD6;
+  position: absolute; z-index: 0; top: 12px; right: 0; width: 58%;
+  background: var(--paper); color: var(--paper-ink);
+  font-family: 'Songti SC', 'STSong', 'Noto Serif CJK SC', 'Source Han Serif SC', 'SimSun', serif;
+  font-size: 11.5px; line-height: 1.8;
+  padding: 26px 28px 18px; border-radius: 3px;
+  box-shadow: 0 1px 0 rgba(0,0,0,.04), 0 30px 70px -30px rgba(0,0,0,.6);
+  transform: rotate(2deg);
+}
+.lp-page-run { display: flex; justify-content: space-between; gap: 10px; font-size: 10px; color: var(--paper-ink-2);
+  border-bottom: .5px solid var(--paper-rule); padding-bottom: 5px; margin-bottom: 12px; }
+.lp-page h4 { margin: 0 0 4px; font-size: 12px; font-weight: 700; }
+.lp-page-unit { text-align: right; font-size: 10px; color: var(--paper-ink-2); margin: 0 0 4px !important; }
+.lp-page table { width: 100%; border-collapse: collapse; }
+.lp-page th, .lp-page td { border: .5px solid var(--paper-rule); padding: 3px 6px; font-weight: 400; }
+.lp-page th { color: var(--paper-ink-2); font-size: 10px; text-align: center; }
+.lp-page td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lp-page-mark { position: relative; z-index: 0; }
+.lp-page-mark::before { content: ""; position: absolute; z-index: -1; left: -3px; right: -3px; top: 36%; bottom: 0;
+  background: rgba(240,190,70,.62); border-radius: 2px 6px 3px 5px; }
+.lp-page-no { margin-top: 10px; text-align: center; font-size: 10px; color: var(--paper-ink-2); }
+
+.lp-answer {
+  position: relative; z-index: 1; width: 60%; margin-top: 56px;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 22px 24px 18px; border-radius: 18px;
+  background: var(--surface); border: 1px solid var(--shot-line);
   box-shadow: var(--shadow);
-  overflow: hidden;
+  text-align: left;
 }
-/* 顶边一道细光，模拟 Ledgely 那种屏幕边缘被光晕照亮 */
-.lp-frame::before {
-  content: ""; position: absolute; left: 8%; right: 8%; top: 0; height: 1px;
-  background: linear-gradient(90deg, transparent, var(--accent-2), transparent);
-  opacity: .8;
+/* 顶边一道细光：被光晕照亮的边缘 */
+.lp-answer::before {
+  content: ""; position: absolute; left: 8%; right: 8%; top: -1px; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-2), transparent); opacity: .8;
 }
-.lp-frame img { display: block; width: 100%; height: auto; border-radius: 12px; }
-/* 截图下沿淡出，像屏幕延伸到页面里 */
-.lp-frame::after {
-  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 32%;
-  background: linear-gradient(to bottom, transparent, var(--bg));
-}
+.lp-a-q { align-self: flex-end; max-width: 80%; padding: 8px 14px; border-radius: 14px 14px 4px 14px;
+  font-size: 13.5px; background: color-mix(in srgb, var(--ink) 6%, var(--surface)); border: 1px solid var(--line); }
+.lp-a-meta { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-3); }
+.lp-a-who { font-weight: 600; color: var(--ink-2); }
+.lp-a-rv { font-family: var(--font-mono); font-size: 10.5px; padding: 1px 7px; border-radius: 5px;
+  color: #4FAE72; border: 1px solid rgba(79,174,114,.4); }
+.lp-a-text { font-size: 14.5px; line-height: 1.85; color: var(--ink); margin: 0; }
+.lp-a-text b { font-weight: 600; }
+.lp-a-cite { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px;
+  margin: 0 2px 0 3px; padding: 0 5px; border-radius: 5px; vertical-align: 2px;
+  font-family: var(--font-mono); font-size: 10.5px; line-height: 1;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.lp-a-text .lp-a-cite:first-of-type { box-shadow: 0 0 0 4px var(--accent-soft); }
+.lp-a-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px;
+  background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.lp-a-kpis div { background: var(--surface); padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lp-a-kpis span { font-size: 11px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lp-a-kpis b { font-size: 19px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.lp-a-kpis small { font-size: 11px; font-weight: 500; color: var(--ink-2); margin-left: 2px; }
+.lp-a-kpis i { font-style: normal; font-family: var(--font-mono); font-size: 10.5px; color: #4FAE72; }
+.lp-a-src { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2);
+  padding-top: 12px; border-top: 1px solid var(--line); }
+.lp-a-pg { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--ink-3); }
+
+.lp-stage-line { position: absolute; left: 0; top: 0; z-index: 2; pointer-events: none; overflow: visible; }
+/* 起点在卡片右边缘「第 7 页」那一行：给它一个金色小端点，读起来是「从这里连过去」 */
+.lp-a-pg { color: var(--accent); }
+.lp-stage-line path { fill: none; stroke: var(--accent); stroke-width: 1.3; stroke-dasharray: 3 4; opacity: .9; }
+.lp-stage-line circle { fill: var(--accent); }
 .lp-shot figcaption {
   position: relative; margin-top: 14px; text-align: center;
   font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); letter-spacing: .03em;
@@ -362,8 +411,11 @@
   .lp-cta .lp-btn { justify-content: center; }
   .lp-shot, .lp-how, .lp-end, .lp-foot { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
   .lp-shot { margin-top: 44px; }
-  .lp-frame { padding: 4px; border-radius: 12px; }
-  .lp-frame img { border-radius: 9px; }
+  .lp-stage { padding-bottom: 0; display: flex; flex-direction: column-reverse; }
+  .lp-page { position: relative; width: 100%; top: auto; right: auto; margin-top: -26px; transform: rotate(1.2deg); font-size: 10px; padding: 16px 14px 12px; }
+  .lp-answer { width: 100%; margin-top: 0; }
+  .lp-a-kpis b { font-size: 16px; }
+  .lp-stage-line { display: none; }
   .lp-how { padding-top: 84px; }
   .lp-use { grid-template-columns: 1fr; gap: 28px; }
   .lp-sheet-wrap { position: static; }

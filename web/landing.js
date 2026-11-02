@@ -230,6 +230,45 @@ function startLoop(canvas, root) {
   LOOP.raf = requestAnimationFrame(tick);
 }
 
+/* 首屏的「回答 → 原页」：从回答卡片底部「来源 · 第 7 页」那一行的右端画一条虚线到原页上标出的营业收入。
+   （从正文里的引用编号出发会横穿正文，压在字上。）
+   引线在倾斜的 .lp-stage 里面，用布局坐标（offsetLeft / offsetTop 链）算，不受滚动倾斜影响；
+   原页自己转了 2°，终点按这个角度绕原页中心换算。手机上原页排在回答下面，不画。 */
+const PAGE_ROT = 2 * Math.PI / 180;
+
+function offsetIn(el, ancestor) {
+  let x = 0, y = 0;
+  for (let n = el; n && n !== ancestor; n = n.offsetParent) { x += n.offsetLeft; y += n.offsetTop; }
+  return { x, y };
+}
+
+function drawStageLine(root) {
+  const stage = root.querySelector(".lp-stage");
+  const svg = root.querySelector(".lp-stage-line");
+  if (!stage || !svg || window.innerWidth <= 760) return;
+  const answer = stage.querySelector(".lp-answer");
+  const src = stage.querySelector(".lp-a-src");
+  const page = stage.querySelector(".lp-page");
+  const mark = stage.querySelector(".lp-page-mark");
+  if (!answer || !src || !page || !mark) return;
+  const s = offsetIn(src, stage);
+  const p = offsetIn(page, stage);
+  const m = offsetIn(mark, page);
+  // 标记左边缘中点，在原页里的坐标 → 绕原页中心转 2° → 加上原页的位置
+  const cx = page.offsetWidth / 2, cy = page.offsetHeight / 2;
+  const mx = m.x - 4 - cx, my = m.y + mark.offsetHeight / 2 - cy;
+  const ex = p.x + cx + mx * Math.cos(PAGE_ROT) - my * Math.sin(PAGE_ROT);
+  const ey = p.y + cy + mx * Math.sin(PAGE_ROT) + my * Math.cos(PAGE_ROT);
+  const sx = answer.offsetLeft + answer.offsetWidth - 6, sy = s.y + src.offsetHeight / 2 + 6;
+  svg.setAttribute("width", stage.offsetWidth);
+  svg.setAttribute("height", stage.offsetHeight);
+  svg.querySelector("path").setAttribute("d",
+    `M${sx},${sy} C${sx + 70},${sy} ${ex - 60},${ey} ${ex},${ey}`);
+  const dot = svg.querySelector("circle");
+  dot.setAttribute("cx", ex);
+  dot.setAttribute("cy", ey);
+}
+
 /* 「怎么用」：批注 ↔ 荧光笔。进入视野时荧光笔依次划过一次（减少动画时直接显示）；
    悬停 / 聚焦 / 点按一条批注，左边对应位置加深，桌面端再画一条引线。点按会固定住，再点一次放开。 */
 const USE = { pinned: null, observer: null };
@@ -317,6 +356,10 @@ export default function (component) {
   root.onpointerleave = () => { LOOP.mouse.on = false; };
 
   wireUse(root);
+  drawStageLine(root);
+  // 字体加载完、窗口变宽变窄后排版会变，引线跟着重画
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => drawStageLine(root));
+  window.onresize = () => drawStageLine(root);
 
   if (canvas && LOOP.canvas !== canvas) startLoop(canvas, root);
   else if (canvas && !LOOP.raf) draw(canvas, 8);   // 减少动画模式下换了主题，重画一次静止帧

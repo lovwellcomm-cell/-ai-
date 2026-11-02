@@ -1,7 +1,7 @@
 <!--
   开屏页静态骨架。由 ui/landing_component.py 读取后作为 st.components.v2.component(html=...) 传入，
   和 chat.html 一样必须保持多行（Streamlit 靠换行区分内联代码和文件路径）。
-  {{SHOT}} 在注册时替换成产品截图的 data URI（web/landing-shot.webp，真实回答的截图）。
+  首屏是网页元素画的「回答 → 原页」组合（原来的截图已删除），数字取自精达股份 2025 年报第 7 页。
   这一页没有任何用户输入或模型输出，全是写死的文案。
 -->
 <div class="lp" id="lp" data-theme="dark">
@@ -40,10 +40,43 @@
     <figure class="lp-shot">
       <div class="lp-halo lp-halo-a" aria-hidden="true"></div>
       <div class="lp-halo lp-halo-b" aria-hidden="true"></div>
-      <div class="lp-frame">
-        <img src="{{SHOT}}" alt="助手回答示例：精达股份 2025 年营业收入 246.74 亿元、归母净利润 5.99 亿元，带引用编号、对比表格和主要会计数据指标卡" loading="eager" decoding="async">
+      <!--
+        回答 → 原页：前面一张回答卡片（跟随深浅主题、矢量清晰），后面斜放一页年报，
+        回答里的引用编号用虚线连到原页上被荧光笔标出的数字（landing.js 计算引线位置）。
+        原来是一张深色聊天截图：放在浅色开屏页上是一块黑板，位图文字发虚，也看不到新功能。
+        数字全部取自精达股份 2025 年报第 7 页「主要会计数据」，图注写明是按真实回答重排的示意。
+      -->
+      <div class="lp-stage">
+        <div class="lp-page" aria-hidden="true">
+          <div class="lp-page-run"><span>铜陵精达特种电磁线股份有限公司</span><span>2025 年年度报告</span></div>
+          <h4>七、近三年主要会计数据和财务指标</h4>
+          <p class="lp-page-unit">单位：元　币种：人民币</p>
+          <table>
+            <thead><tr><th>主要会计数据</th><th>2025 年</th><th>2024 年</th><th>增减（%）</th></tr></thead>
+            <tbody>
+              <tr><td>营业收入</td><td class="n"><span class="lp-page-mark">24,673,670,269.16</span></td><td class="n">22,322,579,930.98</td><td class="n">10.53</td></tr>
+              <tr><td>利润总额</td><td class="n">806,125,138.82</td><td class="n">736,916,287.61</td><td class="n">9.39</td></tr>
+              <tr><td>归属于上市公司股东的净利润</td><td class="n"><span class="lp-page-mark">599,143,119.39</span></td><td class="n">561,708,879.75</td><td class="n">6.66</td></tr>
+              <tr><td>经营活动产生的现金流量净额</td><td class="n">2,475,082,817.33</td><td class="n">-589,153,155.66</td><td class="n">520.11</td></tr>
+            </tbody>
+          </table>
+          <div class="lp-page-no">7</div>
+        </div>
+
+        <div class="lp-answer" role="img" aria-label="回答示例：精达股份 2025 年营业收入 246.74 亿元、同比增长 10.53%，归母净利润 5.99 亿元、同比增长 6.66%，引用编号指向年报第 7 页">
+          <div class="lp-a-q">营业收入和归母净利润分别是多少？</div>
+          <div class="lp-a-meta"><span class="lp-a-who">年报助手</span><span class="lp-a-rv">已复核 ✓</span></div>
+          <p class="lp-a-text">2025 年营业收入 <b>246.74 亿元</b><span class="lp-a-cite">1</span>，同比增长 10.53%；归属于上市公司股东的净利润 <b>5.99 亿元</b><span class="lp-a-cite">1</span>，同比增长 6.66%。</p>
+          <div class="lp-a-kpis">
+            <div><span>营业收入</span><b>246.74<small>亿元</small></b><i>▲ 10.53%</i></div>
+            <div><span>归母净利润</span><b>5.99<small>亿元</small></b><i>▲ 6.66%</i></div>
+            <div><span>经营现金流净额</span><b>24.75<small>亿元</small></b><i>▲ 520.11%</i></div>
+          </div>
+          <div class="lp-a-src"><span class="lp-a-cite">1</span>七、近三年主要会计数据和财务指标<span class="lp-a-pg">第 7 页</span></div>
+        </div>
+        <svg class="lp-stage-line" aria-hidden="true"><path d=""/><circle r="3.2"/></svg>
       </div>
-      <figcaption>真实回答截图 · 精达股份 2025 年报</figcaption>
+      <figcaption>按真实回答重排的示意，数字取自精达股份 2025 年报第 7 页</figcaption>
     </figure>
 
     <!--
