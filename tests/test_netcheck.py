@@ -78,3 +78,20 @@ def test_probe_survives_timeout(monkeypatch):
     assert out["search"]["ok"] is False and out["search"]["status"] is None
     assert "TimeoutError" in out["search"]["error"]
     assert out["pdf"]["ms"] >= 0
+
+
+def test_probe_market_hits_every_source_once(monkeypatch):
+    seen = []
+
+    def fake_open(req, timeout):
+        seen.append((req.get_method(), req.full_url))
+        return FakeResp(body=b'{"ok":1}')
+
+    monkeypatch.setattr(netcheck, "_open", fake_open)
+    out = netcheck.probe_market()
+    assert set(out) == set(netcheck.MARKET)
+    assert all(v["ok"] for v in out.values())
+    # 广期所是 POST 表单，其余 GET
+    methods = {url: m for m, url in seen}
+    assert methods[netcheck.MARKET["gfex"][0]] == "POST"
+    assert methods[netcheck.MARKET["shfe"]] == "GET"
