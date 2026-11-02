@@ -15,6 +15,8 @@ const LOOP = {
   canvas: null, root: null, raf: 0, colors: null, observer: null, visible: true,
   // 鼠标：目标位置和缓动后的位置（画布 CSS 像素），on 表示指针在页面上
   mouse: { x: 0, y: 0, tx: 0, ty: 0, k: 0, on: false },
+  // 跟随圆环（.lp-cursor）比十字线再慢半拍，hot 表示指针停在按钮上
+  ring: { x: 0, y: 0, hot: false },
   tags: null,
 };
 
@@ -67,7 +69,7 @@ function lineY(L, xPx, w, t, h, dpr) {
   const mx = m.x * dpr, my = m.y * dpr;
   const sx = w * 0.14, sy = h * 0.16;
   const g = Math.exp(-((xPx - mx) ** 2) / (2 * sx * sx)) * Math.exp(-((y - my) ** 2) / (2 * sy * sy));
-  const pull = Math.max(-36 * dpr, Math.min(36 * dpr, (my - y) * 0.35));
+  const pull = Math.max(-48 * dpr, Math.min(48 * dpr, (my - y) * 0.42));
   return y + pull * g * m.k;
 }
 
@@ -122,7 +124,66 @@ function draw(canvas, t) {
       ctx.beginPath(); ctx.arc(px, py, 2.2 * dpr, 0, Math.PI * 2); ctx.fill();
     });
   });
+  drawCrosshair(ctx, w, h, t, dpr, pal);
   placeTags(dots, t);
+}
+
+/* 看盘十字光标：鼠标在走势线这片区域里时，画一横一竖两条金色细虚线（往边缘淡出），
+   竖线和每条走势线相交处亮一个小点，像在行情图上读线。不标任何数字 —— 背景线是装饰，标了就是编数。
+   强度跟着 mouse.k 渐入渐出；减少动画时根本不跑循环，也就不画。 */
+function drawCrosshair(ctx, w, h, t, dpr, pal) {
+  const m = LOOP.mouse;
+  if (m.k < 0.02) return;
+  const [r, g, b] = pal.a;
+  const x = m.x * dpr, y = m.y * dpr, k = m.k;
+  ctx.save();
+  ctx.setLineDash([3 * dpr, 5 * dpr]);
+  ctx.lineWidth = 1 * dpr;
+  const v = ctx.createLinearGradient(0, y - h * 0.45, 0, y + h * 0.45);
+  v.addColorStop(0, `rgba(${r},${g},${b},0)`);
+  v.addColorStop(0.5, `rgba(${r},${g},${b},${0.55 * k * pal.gain})`);
+  v.addColorStop(1, `rgba(${r},${g},${b},0)`);
+  ctx.strokeStyle = v;
+  ctx.beginPath(); ctx.moveTo(x, Math.max(0, y - h * 0.45)); ctx.lineTo(x, Math.min(h, y + h * 0.45)); ctx.stroke();
+  const hz = ctx.createLinearGradient(x - w * 0.32, 0, x + w * 0.32, 0);
+  hz.addColorStop(0, `rgba(${r},${g},${b},0)`);
+  hz.addColorStop(0.5, `rgba(${r},${g},${b},${0.42 * k * pal.gain})`);
+  hz.addColorStop(1, `rgba(${r},${g},${b},0)`);
+  ctx.strokeStyle = hz;
+  ctx.beginPath(); ctx.moveTo(Math.max(0, x - w * 0.32), y); ctx.lineTo(Math.min(w, x + w * 0.32), y); ctx.stroke();
+  ctx.setLineDash([]);
+  // 竖线与每条走势线的交点：只画离光标不太远的（太远的交点和光标没关系，满屏都是点会乱）
+  LINES.forEach((L, i) => {
+    const ly = lineY(L, x, w, t, h, dpr);
+    const near = Math.exp(-((ly - y) ** 2) / (2 * (h * 0.22) ** 2));
+    if (near < 0.08) return;
+    const [lr, lg, lb] = pal[L.hue];
+    const a = k * near * (i === MAIN ? 1 : 0.75);
+    if (i === MAIN) {
+      // 最亮那条线的交点带一圈呼吸光
+      const pulse = 9 + 3 * Math.sin(t * 3.2);
+      const glow = ctx.createRadialGradient(x, ly, 0, x, ly, pulse * dpr);
+      glow.addColorStop(0, `rgba(${lr},${lg},${lb},${0.5 * a * pal.gain})`);
+      glow.addColorStop(1, `rgba(${lr},${lg},${lb},0)`);
+      ctx.fillStyle = glow;
+      ctx.beginPath(); ctx.arc(x, ly, pulse * dpr, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.strokeStyle = `rgba(${lr},${lg},${lb},${0.9 * a * pal.gain + 0.05 * a})`;
+    ctx.lineWidth = 1.2 * dpr;
+    ctx.beginPath(); ctx.arc(x, ly, (i === MAIN ? 3.4 : 2.6) * dpr, 0, Math.PI * 2); ctx.stroke();
+  });
+  ctx.restore();
+}
+
+/* 跟随圆环和网格聚光：圆环比十字线再慢半拍追上来；位置、强度写进 CSS 变量，由 CSS 画。 */
+function updateCursor(root) {
+  const m = LOOP.mouse, ring = LOOP.ring;
+  ring.x += (m.tx - ring.x) * 0.18;
+  ring.y += (m.ty - ring.y) * 0.18;
+  root.style.setProperty("--cx", ring.x.toFixed(1) + "px");
+  root.style.setProperty("--cy", ring.y.toFixed(1) + "px");
+  root.style.setProperty("--ck", m.k.toFixed(3));
+  root.classList.toggle("lp-hot", ring.hot);
 }
 
 /* ---------------- 数据标签 ---------------- */
@@ -211,6 +272,7 @@ function startLoop(canvas, root) {
     m.y += (m.ty - m.y) * 0.08;
     m.k += ((m.on ? 1 : 0) - m.k) * 0.05;
     updateTilt(root);
+    updateCursor(root);
     if (LOOP.visible && !document.hidden) {
       draw(canvas, 8 + (now - t0) / 1000);
       // 光晕跟着鼠标轻微偏移（-1..1），金色和红色方向相反，做出前后层次
