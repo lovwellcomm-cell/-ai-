@@ -141,6 +141,12 @@ AGENT_TIME_BUDGET = float(get("AGENT_TIME_BUDGET", "90"))
 REVIEW_MAX_TOKENS = int(get("REVIEW_MAX_TOKENS", "4000"))
 REVIEW_TIMEOUT = float(get("REVIEW_TIMEOUT", "30"))
 
+# 「影响这家公司的几件大事」（rag/drivers.py）：读几段原文挑因素，每份报告做一次后缓存。
+# 输出 5 个因素约 1500 token，推理型模型先花几千 token 推理 —— 给 2000 时实测全被推理吃光、正文为空；
+# 长江电力实测推理用到 5046。按实际用量计费，上限给宽一些。
+DRIVERS_MAX_TOKENS = int(get("DRIVERS_MAX_TOKENS", "12000"))
+DRIVERS_TIMEOUT = float(get("DRIVERS_TIMEOUT", "90"))
+
 # ---------- 公开演示模式 ----------
 # 部署到公网时设 PUBLIC_DEMO=1：限制提问次数、限制上传、按会话隔离上传的年报。
 PUBLIC_DEMO = get("PUBLIC_DEMO", "0") == "1"
