@@ -16,3 +16,6 @@ tools/demo-video/timeline.started
 
 # 离线测量的输出（tools/eval_depth.py 生成，可随时重跑）
 eval_out/
+
+# 开屏页预览（python -m tools.build_landing_preview 生成，内联了 web/landing.*，随时可重新生成）
+design/landing-preview.html

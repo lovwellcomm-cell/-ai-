@@ -15,7 +15,7 @@ const LOOP = {
   canvas: null, root: null, raf: 0, colors: null, observer: null, visible: true,
   // 鼠标：目标位置和缓动后的位置（画布 CSS 像素），on 表示指针在页面上
   mouse: { x: 0, y: 0, tx: 0, ty: 0, k: 0, on: false },
-  // 跟随圆环（.lp-cursor）比十字线再慢半拍，hot 表示指针停在按钮上
+  // 跟随圆环（.lp-cursor）套在十字线交点上，hot 表示指针停在按钮上
   ring: { x: 0, y: 0, hot: false },
   tags: null,
 };
@@ -175,11 +175,12 @@ function drawCrosshair(ctx, w, h, t, dpr, pal) {
   ctx.restore();
 }
 
-/* 跟随圆环和网格聚光：圆环比十字线再慢半拍追上来；位置、强度写进 CSS 变量，由 CSS 画。 */
+/* 跟随圆环和网格聚光：圆环套在十字线的交点上（用同一个缓动后的位置，跟随的「慢半拍」来自这里的缓动；
+   原来圆环单独用更快的缓动，鼠标一动就和十字线分开了）。位置、强度写进 CSS 变量，由 CSS 画。 */
 function updateCursor(root) {
   const m = LOOP.mouse, ring = LOOP.ring;
-  ring.x += (m.tx - ring.x) * 0.18;
-  ring.y += (m.ty - ring.y) * 0.18;
+  ring.x = m.x;
+  ring.y = m.y;
   root.style.setProperty("--cx", ring.x.toFixed(1) + "px");
   root.style.setProperty("--cy", ring.y.toFixed(1) + "px");
   root.style.setProperty("--ck", m.k.toFixed(3));
@@ -412,8 +413,13 @@ export default function (component) {
     const r = canvas.getBoundingClientRect();
     LOOP.mouse.tx = e.clientX - r.left;
     LOOP.mouse.ty = e.clientY - r.top;
-    if (!LOOP.mouse.on) { LOOP.mouse.x = LOOP.mouse.tx; LOOP.mouse.y = LOOP.mouse.ty; }
+    if (!LOOP.mouse.on) {
+      LOOP.mouse.x = LOOP.ring.x = LOOP.mouse.tx;
+      LOOP.mouse.y = LOOP.ring.y = LOOP.mouse.ty;
+    }
     LOOP.mouse.on = e.clientY - r.top < r.height;   // 滚到网格以下就不再拉线
+    // 指针停在按钮上：跟随圆环放大变淡，让位给按钮
+    LOOP.ring.hot = !!(e.target && e.target.closest && e.target.closest("button"));
   } : null;
   root.onpointerleave = () => { LOOP.mouse.on = false; };
 

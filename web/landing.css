@@ -25,6 +25,7 @@
   --grain: .05;
   --clear: rgba(246,245,242,.88);
   --spot: rgba(185,138,24,.13);
+  --spot-2: rgba(185,138,24,.16);
   --font-ui: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI',
              'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei',
              'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif;
@@ -54,6 +55,7 @@
   --grain: .09;
   --clear: rgba(7,8,9,.82);
   --spot: rgba(224,178,78,.14);
+  --spot-2: rgba(224,178,78,.13);
   color-scheme: dark;
 }
 
@@ -122,6 +124,34 @@
   position: absolute; inset: 0; pointer-events: none;
   opacity: var(--grain); mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+/* ---------- 看盘十字光标 ----------
+   鼠标在首屏走势线这片区域时：canvas 上画十字虚线和读线点（landing.js drawCrosshair），
+   这里画跟随圆环和网格聚光。位置 --cx / --cy、强度 --ck 由 landing.js 每帧写入；
+   指针停在按钮上（.lp-hot）圆环放大变淡，让位给按钮。触屏、减少动画时不显示。 */
+.lp-spot {
+  position: absolute; left: 0; top: 0; width: 100%; height: 980px; pointer-events: none;
+  background: radial-gradient(240px circle at var(--cx, -999px) var(--cy, -999px), var(--spot-2), transparent 70%);
+  opacity: var(--ck, 0);
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+}
+.lp-cursor {
+  position: absolute; left: 0; top: 0; z-index: 50; pointer-events: none;
+  width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%;
+  border: 1.2px solid var(--accent); opacity: calc(var(--ck, 0) * .85);
+  transform: translate(var(--cx, -999px), var(--cy, -999px)) scale(1);
+  transition: width .25s var(--ease), height .25s var(--ease), margin .25s var(--ease), opacity .25s, background .25s;
+  box-shadow: 0 0 18px var(--accent-soft), inset 0 0 10px var(--accent-soft);
+}
+.lp-cursor i { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
+  border-radius: 50%; background: var(--accent); }
+.lp.lp-hot .lp-cursor { width: 58px; height: 58px; margin: -29px 0 0 -29px; opacity: calc(var(--ck, 0) * .35);
+  background: var(--accent-soft); }
+.lp.lp-hot .lp-cursor i { opacity: 0; }
+@media (pointer: coarse), (prefers-reduced-motion: reduce) {
+  .lp-cursor, .lp-spot { display: none; }
 }
 
 /* ---------- 导航 ---------- */

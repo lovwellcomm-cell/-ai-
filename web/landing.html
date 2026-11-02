@@ -7,6 +7,8 @@
 <div class="lp" id="lp" data-theme="dark">
   <!-- 背景四层：透视网格 → 走势线 → 数据标签 → 细噪点。都只是装饰，读屏跳过 -->
   <div class="lp-floor" aria-hidden="true"></div>
+  <!-- 网格聚光：鼠标附近的坐标纸亮一点（landing.js 写 --cx / --cy / --ck） -->
+  <div class="lp-spot" aria-hidden="true"></div>
   <canvas class="lp-bg" id="lpBg" aria-hidden="true"></canvas>
   <div class="lp-tags" aria-hidden="true">
     <div class="lp-dt"><span class="lp-dt-src">精达股份 2025 年报 · 第 7 页</span><span class="lp-dt-row"><b class="lp-dt-k"></b><span class="lp-dt-v"></span><span class="lp-dt-c"></span></span></div>
@@ -163,4 +165,6 @@
     <span>年报 AI 研究助手 · 数据来源：巨潮资讯 cninfo.com.cn</span>
     <span>回答由大模型基于报告原文生成，可能有误，请以原文为准。仅供研究学习，不构成投资建议。</span>
   </footer>
+  <!-- 看盘十字光标的跟随圆环：只是装饰，不拦截点击；系统箭头照常显示 -->
+  <div class="lp-cursor" aria-hidden="true"><i></i></div>
 </div>
