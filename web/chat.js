@@ -113,7 +113,9 @@ function syncStore(d, setTriggerValue) {
 }
 
 /* 首页的推荐问题排成年报开头的「目录」：左边是用途，点线引到示例问题，右边小字是回答会带什么。
-   「换一家」那两句教用户用「自动找年报」：点了会去巨潮导入七匹狼，再基于它的报告回答。 */
+   「换一家」那两句教用户用「自动找年报」：点了会去巨潮导入另一家公司，再基于它的报告回答。
+   {co} 渲染时换成 SWITCH_COS 里第一家**不是当前公司**的（看着七匹狼时示例不能还是七匹狼）。 */
+const SWITCH_COS = ["七匹狼", "时代新材", "贵州茅台"];
 const HERO_TOC = [
   { k: "查一个数", sub: "营收、利润、现金流，带出处", qs: [
     { text: "营业收入和归母净利润分别是多少？", what: "指标卡" },
@@ -125,8 +127,8 @@ const HERO_TOC = [
     { text: "影响这家公司业绩的几件大事", what: "行情 + 估算" },
     { text: "所处行业的最新动态", what: "联网" }] },
   { k: "换一家", sub: "自动从巨潮资讯导入", qs: [
-    { text: "七匹狼利润率变化如何？", what: "导入年报" },
-    { text: "七匹狼三季度利润怎么样？", what: "换季报" }] },
+    { text: "{co}利润率变化如何？", what: "导入年报" },
+    { text: "{co}三季度利润怎么样？", what: "换季报" }] },
 ];
 
 /* 拼进 innerHTML 的动态字符串一律先转义。
@@ -537,6 +539,8 @@ export default function (component) {
     hero.appendChild(head);
 
     const toc = mk("div", "toc");
+    const cur = (d.doc && d.doc.company) || "";
+    const other = SWITCH_COS.find((c) => !cur || (!cur.includes(c) && !c.includes(cur))) || SWITCH_COS[0];
     HERO_TOC.forEach((g) => {
       const row = mk("div", "toc-row");
       const k = mk("div", "toc-k", g.k);
@@ -544,11 +548,12 @@ export default function (component) {
       row.appendChild(k);
       const qs = mk("div", "toc-qs");
       g.qs.forEach((x) => {
+        const text = x.text.replace("{co}", other);
         const b = mk("button", "toc-q");
         b.type = "button";
-        b.appendChild(mk("span", "toc-q-t", x.text));
+        b.appendChild(mk("span", "toc-q-t", text));
         b.appendChild(mk("em", null, x.what));
-        b.onclick = () => { if (!busy) ask(x.text); };
+        b.onclick = () => { if (!busy) ask(text); };
         qs.appendChild(b);
       });
       row.appendChild(qs);
