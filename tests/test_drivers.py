@@ -163,3 +163,76 @@ def test_ask_model_retries_once_after_failure():
     # 推理吃光 token：正文为空也算失败，重试一次后放弃
     c = _Client("", "")
     assert dr.ask_model({"risk": [(6, "铜价")]}, client=c) is None and c.calls == 2
+
+
+# ---------------------------------------------------------------- 第 3 步：最新变化
+
+from datetime import date  # noqa: E402
+
+TODAY = date(2026, 11, 2)
+
+
+def test_clean_news_rules():
+    text = """【1】
+- 2026-10-27 全国生猪均价 10.71 元/公斤，连续 7 周下跌[网1]
+- 2026-10-30 瘦肉型猪出栏均价 9.04 元/公斤 [网9]
+- 全国猪价下跌[网2]
+- 2025-12-01 一年前的消息[网2]
+- 2026-10-31 第三条超出每个因素的上限[网3]
+【2】
+- 未找到近期可核实的信息
+【7】
+- 2026-10-01 编号不存在的因素[网1]"""
+    out = dr.clean_news(text, n_drivers=2, n_web=3, today=TODAY)
+    # 第 2 条引用了不存在的 [网9]、第 3 条没日期、第 4 条超过 6 个月 —— 都删；每个因素最多 2 条
+    assert out == {1: ["2026-10-27 全国生猪均价 10.71 元/公斤，连续 7 周下跌[网1]",
+                       "2026-10-31 第三条超出每个因素的上限[网3]"]}
+
+
+def test_clean_news_markdown_link_citation():
+    out = dr.clean_news("【1】\n- 2026-10 玻纤提价[网2](https://x.com/a)", 1, 2, TODAY)
+    assert out[1] == ["2026-10 玻纤提价[网2]"]
+
+
+def test_latest_changes_routes_data_search_and_customers(monkeypatch):
+    found = {"drivers": [
+        {"type": "成本", "name": "铜价", "market": "cu", "how": ""},
+        {"type": "售价", "name": "生猪价格", "market": "lh", "how": ""},     # 大商所：联网
+        {"type": "政策", "name": "药品集采", "market": "", "how": ""},
+        {"type": "客户", "name": "大客户", "market": "", "how": ""},        # 不搜
+        {"type": "汇率", "name": "美元汇率", "market": "USD", "how": ""},   # 官方数据取不到：改联网
+    ]}
+    quotes = {"cu": {"name": "铜", "change_pct": 1.74}, "USD": None}
+    monkeypatch.setattr(dr.market, "quote", lambda code, name, src, today=None: quotes.get(code))
+    asked = {}
+
+    def fake_search(targets, **kw):
+        asked["names"] = [d["name"] for d in targets]
+        return {1: ["2026-10-27 猪价下跌[网1]"]}, [{"n": 1, "url": "https://a"}]
+    monkeypatch.setattr(dr, "search_news", fake_search)
+    out = dr.latest_changes(found, client=None, api_key="k", today=TODAY)
+    by = {d["name"]: d for d in out["drivers"]}
+    assert asked["names"] == ["生猪价格", "药品集采", "美元汇率"]
+    assert by["铜价"]["now"]["change_pct"] == 1.74 and by["铜价"]["news"] == []
+    assert by["生猪价格"]["news"] == ["2026-10-27 猪价下跌[网1]"]
+    assert by["大客户"]["now"] is None and "定期报告" in by["大客户"]["note"]
+    assert out["date"] == "2026-11-02" and out["web_sources"][0]["n"] == 1
+    assert "now" not in found["drivers"][0]          # 不改传进来的结果（它是缓存里的东西）
+
+
+def test_search_news_skipped_without_key_or_targets():
+    assert dr.search_news([], client=None, api_key="k") == ({}, [])
+    assert dr.search_news([{"name": "x", "market": ""}], client=None, api_key="") == ({}, [])
+
+
+def test_market_code_must_match_what_the_driver_says():
+    # 实测：时代新材「玻纤、树脂等原材料价格」被配上天然橡胶（ru）—— 对不上就去掉代码
+    out = dr.verify([_raw(name="玻纤、树脂等原材料价格", how="原材料涨价推高成本。", market="ru")], PAGES)
+    assert out[0]["market"] == ""
+    # 词出现在原文引用里也算（这里引用里有「铜」）
+    out = dr.verify([_raw(name="大宗商品价格", how="涨价推高成本。", market="cu")], PAGES)
+    assert out[0]["market"] == "cu"
+
+
+def test_every_market_code_has_match_words():
+    assert set(dr.MARKET_WORDS) == set(dr.MARKETS)
