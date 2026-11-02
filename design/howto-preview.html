@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>使用方法预览</title>
+<!--
+  「怎么用」的设计预览，不接入应用。三部分：
+    1. 开屏页的「怎么用」：一页批注过的年报 —— 左边是年报原文片段（宋体，像 PDF），
+       右边是页边批注，每条是一句可以直接问的话；悬停 / 点按批注，左边对应的地方亮起荧光笔
+    2. 聊天首页：推荐问题排成年报开头的「目录」
+    3. 第一次用到时的小提示
+  数字全部取自真实年报（精达股份 2025 年报第 16、17 页）和线上实测结果。
+-->
+<style>
+:root {
+  --bg: #070809;
+  --surface: #121417;
+  --surface-2: #181B1F;
+  --line: rgba(255,255,255,.075);
+  --line-2: rgba(255,255,255,.15);
+  --ink: #EDEEF0;
+  --ink-2: #A4AAB2;
+  --ink-3: #6E757E;
+  --accent: #E0B24E;
+  --accent-soft: rgba(224,178,78,.12);
+  --accent-line: rgba(224,178,78,.34);
+  --red: #D9615A;
+  --green: #4FAE72;
+  --amber: #E39A3B;
+  /* 纸面：PDF 的冷白，不用米黄 */
+  --paper: #FBFBF9;
+  --paper-ink: #1C1D1F;
+  --paper-ink-2: #55585D;
+  --paper-rule: #D9DAD6;
+  --hl: rgba(240,190,70,.55);
+  --hl-red: rgba(217,97,90,.32);
+  --sans: 'Manrope', -apple-system, 'Segoe UI Variable Text', 'Segoe UI', 'PingFang SC',
+          'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  /* 年报正文用宋体：A 股年报 PDF 的样子 */
+  --serif: 'Songti SC', 'STSong', 'Noto Serif CJK SC', 'Source Han Serif SC', 'SimSun', serif;
+  --mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+  --ease: cubic-bezier(.32,.72,0,1);
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #F6F5F2;
+  --surface: #FFFFFF;
+  --surface-2: #F1F0EC;
+  --line: rgba(12,13,15,.09);
+  --line-2: rgba(12,13,15,.16);
+  --ink: #0C0D0F;
+  --ink-2: #4E535A;
+  --ink-3: #868B92;
+  --accent: #8A6608;
+  --accent-soft: rgba(138,102,8,.10);
+  --accent-line: rgba(138,102,8,.32);
+  --red: #BF4239;
+  --green: #1B7F49;
+  --amber: #B26B00;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--sans); font-size: 15px; line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+/* 预览本身的说明栏：不属于设计稿 */
+.pv-bar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 10px 24px; background: color-mix(in srgb, var(--bg) 88%, transparent);
+  border-bottom: 1px solid var(--line); backdrop-filter: blur(8px);
+  font-size: 13px; color: var(--ink-2);
+}
+.pv-bar b { color: var(--ink); font-weight: 600; }
+.pv-bar nav { display: flex; gap: 14px; flex-wrap: wrap; }
+.pv-bar a { color: var(--ink-2); text-decoration: none; }
+.pv-bar a:hover { color: var(--accent); }
+.pv-theme { margin-left: auto; padding: 4px 12px; border: 1px solid var(--line-2); border-radius: 999px; font-size: 12.5px; }
+.pv-part { max-width: 1120px; margin: 0 auto; padding: 72px 24px 32px; }
+.pv-label { font-size: 12.5px; color: var(--ink-3); margin-bottom: 28px; padding-bottom: 10px; border-bottom: 1px dashed var(--line-2); }
+
+/* ============================================================
+   1. 开屏页「怎么用」：批注过的年报
+   ============================================================ */
+.use-head { max-width: 620px; margin-bottom: 44px; }
+.use-head h2 { margin: 0 0 12px; font-size: clamp(26px, 3.4vw, 36px); line-height: 1.25; font-weight: 700; letter-spacing: -.01em; }
+.use-head p { margin: 0; color: var(--ink-2); }
+
+.use { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 56px; align-items: start; }
+
+/* 左：一页年报 */
+.sheet-wrap { position: sticky; top: 72px; }
+.sheet {
+  position: relative;
+  background: var(--paper); color: var(--paper-ink);
+  font-family: var(--serif); font-size: 13.5px; line-height: 1.85;
+  padding: 34px 38px 30px;
+  border-radius: 3px;
+  box-shadow: 0 1px 0 rgba(0,0,0,.04), 0 30px 80px -34px rgba(0,0,0,.65);
+  transform: rotate(-.6deg);
+}
+.sheet-runner { display: flex; justify-content: space-between; font-size: 11px; color: var(--paper-ink-2);
+  border-bottom: .5px solid var(--paper-rule); padding-bottom: 6px; margin-bottom: 16px; }
+.sheet h4 { margin: 14px 0 6px; font-size: 13.5px; font-weight: 700; }
+.sheet p { margin: 0 0 8px; text-indent: 2em; color: var(--paper-ink); }
+.sheet .unit { text-align: right; font-size: 11px; color: var(--paper-ink-2); margin: 0 0 4px; text-indent: 0; }
+.sheet table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-bottom: 10px; }
+.sheet th, .sheet td { border: .5px solid var(--paper-rule); padding: 3px 7px; font-weight: 400; }
+.sheet th { color: var(--paper-ink-2); font-size: 11.5px; text-align: center; }
+.sheet td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.sheet-page { margin-top: 14px; text-align: center; font-size: 11px; color: var(--paper-ink-2); }
+
+/* 荧光笔：一条从左往右涂开的半透明色带，压在字后面 */
+.mark { position: relative; z-index: 0; white-space: nowrap; }
+.mark::before {
+  content: ""; position: absolute; z-index: -1; left: -3px; right: -3px; top: 38%; bottom: 0;
+  background: var(--hl); border-radius: 2px 6px 3px 5px;
+  transform: scaleX(0); transform-origin: left center;
+  transition: transform .55s var(--ease), background .2s;
+}
+.mark.red::before { background: var(--hl-red); }
+.sheet.drawn .mark::before { transform: scaleX(1); }
+.sheet.drawn .mark:nth-of-type(n)::before { transition-delay: calc(var(--i, 0) * 260ms); }
+.mark.on::before { background: rgba(240,190,70,.95); transition-delay: 0s !important; }
+.mark.red.on::before { background: rgba(217,97,90,.55); }
+td .mark { white-space: normal; }
+
+/* 页边的引用编号，模仿回答里的 [n] */
+.cite { display: inline-flex; align-items: center; justify-content: center; min-width: 17px; height: 17px; margin-left: 3px;
+  padding: 0 4px; border-radius: 5px; font-family: var(--mono); font-size: 10px; line-height: 1;
+  color: #8A6608; background: rgba(138,102,8,.12); border: 1px solid rgba(138,102,8,.32); vertical-align: 2px; text-indent: 0; }
+
+/* 右：页边批注 */
+.notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.note {
+  position: relative; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 0 14px;
+  padding: 18px 18px 18px 14px; border-radius: 14px; cursor: pointer;
+  border: 1px solid transparent; transition: background .2s, border-color .2s;
+}
+.note:hover, .note.on { background: var(--surface); border-color: var(--line); }
+.note-ico { grid-row: span 3; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.note-ico svg { width: 16px; height: 16px; }
+.note q { quotes: "“" "”"; font-size: 17px; font-weight: 600; line-height: 1.45; color: var(--ink); }
+.note-what { margin: 6px 0 0; color: var(--ink-2); font-size: 14px; }
+.note-eg { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink-3); }
+.lights { display: inline-flex; gap: 5px; }
+.lights i { width: 9px; height: 9px; border-radius: 50%; }
+.chip-num { font-family: var(--mono); font-size: 12px; color: var(--ink); padding: 1px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line); }
+.note-try { margin-top: 12px; justify-self: start; display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 12px; border-radius: 999px; font-size: 13px; color: var(--accent);
+  border: 1px solid var(--accent-line); background: var(--accent-soft); }
+.note-try:hover { background: var(--accent); color: #16130A; }
+.note-try svg { width: 13px; height: 13px; }
+
+/* 批注与纸面之间的引线：桌面端才画 */
+.leader { position: absolute; pointer-events: none; z-index: 5; inset: 0; overflow: visible; }
+.leader path { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 3 4; opacity: 0; transition: opacity .2s; }
+.leader circle { fill: var(--accent); opacity: 0; transition: opacity .2s; }
+.leader.on path, .leader.on circle { opacity: .9; }
+
+.use-fine { margin-top: 28px; font-size: 12.5px; color: var(--ink-3); }
+
+/* ============================================================
+   2. 聊天首页：目录
+   ============================================================ */
+.chat-mock { max-width: 760px; margin: 0 auto; }
+.chat-mock h3 { margin: 0 0 6px; font-size: clamp(24px, 3vw, 30px); font-weight: 700; letter-spacing: -.01em; }
+.chat-mock .lead { margin: 0 0 30px; color: var(--ink-2); }
+.toc { border-top: 1px solid var(--line-2); }
+.toc-row { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 22px; padding: 18px 0 16px; border-bottom: 1px solid var(--line); }
+.toc-k { font-weight: 600; font-size: 14.5px; }
+.toc-k small { display: block; margin-top: 3px; font-weight: 400; font-size: 12.5px; color: var(--ink-3); line-height: 1.5; }
+.toc-qs { display: flex; flex-direction: column; }
+.toc-q { display: flex; align-items: baseline; gap: 10px; padding: 5px 0; text-align: left; color: var(--ink); font-size: 14.5px; }
+.toc-q span:first-child { flex: none; max-width: 75%; }
+.toc-q::after { content: ""; order: 2; flex: 1; border-bottom: 1.5px dotted var(--line-2); transform: translateY(-4px); }
+.toc-q em { order: 3; flex: none; font-style: normal; font-size: 12px; color: var(--ink-3); }
+.toc-q:hover span:first-child { color: var(--accent); }
+.toc-q:hover::after { border-color: var(--accent-line); }
+.toc-foot { margin-top: 16px; font-size: 12.5px; color: var(--ink-3); }
+
+/* ============================================================
+   3. 第一次用到时的小提示
+   ============================================================ */
+.tips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; }
+.tip-demo { padding: 22px 20px 24px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); }
+.tip-demo h5 { margin: 0 0 16px; font-size: 13px; font-weight: 600; color: var(--ink-3); }
+.tip-demo .ans { font-size: 14.5px; line-height: 1.8; position: relative; }
+.tag-rv { display: inline-block; font-family: var(--mono); font-size: 10.5px; padding: 1px 7px; border-radius: 5px;
+  color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 40%, transparent); }
+.cite-ui { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 2px;
+  border-radius: 5px; font-family: var(--mono); font-size: 10.5px; color: var(--accent); background: var(--accent-soft);
+  border: 1px solid var(--accent-line); vertical-align: 2px; box-shadow: 0 0 0 4px var(--accent-soft); }
+.coach { position: relative; margin-top: 14px; padding: 12px 14px 12px; border-radius: 12px;
+  background: var(--surface-2); border: 1px solid var(--accent-line); font-size: 13px; color: var(--ink-2); line-height: 1.6; }
+.coach::before { content: ""; position: absolute; top: -6px; left: var(--x, 40px); width: 10px; height: 10px; transform: rotate(45deg);
+  background: var(--surface-2); border-left: 1px solid var(--accent-line); border-top: 1px solid var(--accent-line); }
+.coach b { color: var(--ink); font-weight: 600; }
+.coach-ok { display: block; margin-top: 8px; margin-left: auto; font-size: 12.5px; color: var(--accent); }
+.mini-card { margin-top: 2px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; font-size: 13px; }
+.mini-card div { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+.mini-card div:last-child { border-bottom: 0; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.mini-card .v { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
+
+.pv-notes { max-width: 1120px; margin: 40px auto 80px; padding: 0 24px; color: var(--ink-3); font-size: 13px; }
+.pv-notes li { margin-bottom: 4px; }
+
+@media (max-width: 900px) {
+  .use { grid-template-columns: 1fr; gap: 32px; }
+  .sheet-wrap { position: static; }
+  .sheet { transform: none; padding: 24px 20px; }
+  .leader { display: none; }
+  .tips { grid-template-columns: 1fr; }
+  .toc-row { grid-template-columns: 1fr; gap: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mark::before { transition: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="pv-bar">
+  <b>使用方法 · 设计预览</b>
+  <nav><a href="#p1">1 开屏页「怎么用」</a><a href="#p2">2 聊天首页</a><a href="#p3">3 第一次用到时的提示</a></nav>
+  <button class="pv-theme" id="pvTheme" type="button">切换浅色</button>
+</div>
+
+<!-- ============================ 1 ============================ -->
+<section class="pv-part" id="p1">
+  <div class="pv-label">预览 1｜放在开屏页截图下面，替换现在的「它怎么工作」</div>
+
+  <div class="use-head">
+    <h2>像划重点一样读年报</h2>
+    <p>不用翻 200 页。问一句话，助手在原文里替你划出关键的那几行，每个数字都能翻回 PDF 原页核对。</p>
+  </div>
+
+  <div class="use" id="use">
+    <div class="sheet-wrap">
+      <article class="sheet" id="sheet" aria-label="精达股份 2025 年年度报告节选，第 7、16、17、28 页">
+        <div class="sheet-runner"><span>铜陵精达特种电磁线股份有限公司</span><span>2025 年年度报告</span></div>
+        <h4>（4）成本分析表</h4>
+        <p class="unit">单位：万元　币种：人民币</p>
+        <table>
+          <thead><tr><th>分产品</th><th>成本构成项目</th><th>本期金额</th><th>占总成本比例（%）</th></tr></thead>
+          <tbody>
+            <tr><td>漆包线</td><td><span class="mark" data-k="drivers" style="--i:1">原材料</span></td><td class="n"><span class="mark" data-k="drivers" style="--i:1">1,613,888.96</span></td><td class="n"><span class="mark" data-k="drivers" style="--i:1">95.45</span></td></tr>
+            <tr><td>漆包线</td><td>能源</td><td class="n">26,540.12</td><td class="n">1.57</td></tr>
+            <tr><td>汽车、电子线</td><td>原材料</td><td class="n">313,620.68</td><td class="n">98.02</td></tr>
+          </tbody>
+        </table>
+        <h4>（7）主要销售客户及主要供应商情况</h4>
+        <p><span class="mark" data-k="health" style="--i:2">前五名客户销售额 238,841.38 万元，占年度销售总额 9.69%</span>；其中前五名客户销售额中关联方销售额 0 万元。</p>
+        <h4>（四）可能面对的风险</h4>
+        <p>……<span class="mark red" data-k="drivers" style="--i:3">铜、铝等大宗商品价格受国际供需、货币政策、地缘事件等多重因素影响</span>……</p>
+        <h4>主要会计数据</h4>
+        <p class="unit">单位：元　币种：人民币</p>
+        <table>
+          <thead><tr><th>主要会计数据</th><th>2025 年</th><th>2024 年</th><th>增减（%）</th></tr></thead>
+          <tbody><tr><td>营业收入</td><td class="n"><span class="mark" data-k="ask" style="--i:0">24,673,670,269.16</span><span class="cite">3</span></td><td class="n">22,322,579,930.98</td><td class="n">10.53</td></tr></tbody>
+        </table>
+        <div class="sheet-page">节选自精达股份 2025 年报第 7、16、17、28 页</div>
+      </article>
+      <svg class="leader" id="leader" aria-hidden="true"><path d=""/><circle r="3"/></svg>
+    </div>
+
+    <ol class="notes" id="notes">
+      <li class="note" data-k="ask" tabindex="0">
+        <span class="note-ico"><svg viewBox="0 0 24 24" fill="none"><path d="M5 5h14v10H9l-4 4V5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></span>
+        <q>精达去年营收多少？比前年多了多少？</q>
+        <p class="note-what">直接问，回答里的每个数字后面都有编号，点开就是原文那一段，再点一下翻到 PDF 原页。营收、利润这些关键数字由程序从报表里抽出来复算过。</p>
+        <button class="note-try" type="button"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>这样问</button>
+      </li>
+      <li class="note" data-k="health" tabindex="0">
+        <span class="note-ico"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v6c0 4.4 3 8.2 7 9 4-.8 7-4.6 7-9V6l-7-3Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></span>
+        <q>给这家公司做个年报体检</q>
+        <p class="note-what">翻出散户最容易漏看的 9 处小字：审计意见、利润有多少是真赚的、客户集不集中、商誉、大股东质押……每项按公开的规则亮红黄绿灯，标着原文页码。</p>
+        <div class="note-eg"><span class="lights"><i style="background:var(--green)"></i><i style="background:var(--green)"></i><i style="background:var(--red)"></i></span>精达 9 项全绿；七匹狼利润 97% 来自理财等非经常项目，亮红灯</div>
+        <button class="note-try" type="button"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>这样问</button>
+      </li>
+      <li class="note" data-k="drivers" tabindex="0">
+        <span class="note-ico"><svg viewBox="0 0 24 24" fill="none"><path d="m12 3 9 5-9 5-9-5 9-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m3 13 9 5 9-5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+        <q>影响这家公司业绩的几件大事是什么？</q>
+        <p class="note-what">从年报里找出最能左右业绩的外部因素，配上交易所的最新行情，按固定公式算出影响有多大。</p>
+        <div class="note-eg"><span class="chip-num">铜 ▲1.74%</span>原材料占漆包线成本 95.45%，若持续一年，利润约少 2.81 亿元（上限）</div>
+        <button class="note-try" type="button"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>这样问</button>
+      </li>
+      <li class="note" data-k="switch" tabindex="0">
+        <span class="note-ico"><svg viewBox="0 0 24 24" fill="none"><path d="M4 7h13l-3-3M20 17H7l3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <q>七匹狼三季度利润怎么样？</q>
+        <p class="note-what">问到别的公司、别的年份或某个季度，助手先去巨潮资讯把那份报告找来，再基于它回答。同一家公司的年报和季报共用一段对话。</p>
+        <button class="note-try" type="button"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>这样问</button>
+      </li>
+    </ol>
+  </div>
+  <p class="use-fine">回答下面还有「行业动态」按钮：联网查原材料价格和同行进展，单独成段、写明未经报告核验。</p>
+</section>
+
+<!-- ============================ 2 ============================ -->
+<section class="pv-part" id="p2">
+  <div class="pv-label">预览 2｜聊天首页：推荐问题排成年报开头的「目录」，点一行就直接发问</div>
+  <div class="chat-mock">
+    <h3>想从这份年报里知道什么？</h3>
+    <p class="lead">当前是《精达股份 2025 年报》。回答只依据原文，每处都能翻到原页核对。</p>
+    <div class="toc">
+      <div class="toc-row">
+        <div class="toc-k">查一个数<small>营收、利润、现金流，带出处</small></div>
+        <div class="toc-qs">
+          <button class="toc-q" type="button"><span>营业收入和归母净利润分别是多少？</span><em>指标卡</em></button>
+          <button class="toc-q" type="button"><span>毛利率同比变化的原因是什么？</span><em>原文 + 分析</em></button>
+        </div>
+      </div>
+      <div class="toc-row">
+        <div class="toc-k">看隐患<small>散户最容易漏看的小字</small></div>
+        <div class="toc-qs">
+          <button class="toc-q" type="button"><span>给这家公司做个年报体检</span><em>9 项红黄绿灯</em></button>
+          <button class="toc-q" type="button"><span>前五大客户与供应商集中度如何？</span><em>原文</em></button>
+        </div>
+      </div>
+      <div class="toc-row">
+        <div class="toc-k">看外面<small>行情和行业的新变化</small></div>
+        <div class="toc-qs">
+          <button class="toc-q" type="button"><span>影响这家公司业绩的几件大事</span><em>行情 + 估算</em></button>
+          <button class="toc-q" type="button"><span>所处行业的最新动态</span><em>联网</em></button>
+        </div>
+      </div>
+      <div class="toc-row">
+        <div class="toc-k">换一家<small>自动从巨潮资讯导入</small></div>
+        <div class="toc-qs">
+          <button class="toc-q" type="button"><span>七匹狼利润率变化如何？</span><em>导入年报</em></button>
+          <button class="toc-q" type="button"><span>那三季度呢？</span><em>换季报</em></button>
+        </div>
+      </div>
+    </div>
+    <p class="toc-foot">也可以直接打字。右侧的说明是回答会带什么，不是按钮名称。</p>
+  </div>
+</section>
+
+<!-- ============================ 3 ============================ -->
+<section class="pv-part" id="p3">
+  <div class="pv-label">预览 3｜第一次出现时各提示一次，点「知道了」以后不再出现（记在浏览器里）</div>
+  <div class="tips">
+    <div class="tip-demo">
+      <h5>回答里第一次出现引用编号</h5>
+      <div class="ans">2025 年营业收入 246.74 亿元<span class="cite-ui">3</span>，同比增长 10.53%。</div>
+      <div class="coach" style="--x:276px"><b>点编号看原文。</b>右侧会打开引用的那一段，再点「查看原页」就是 PDF 那一页。<button class="coach-ok" type="button">知道了</button></div>
+    </div>
+    <div class="tip-demo">
+      <h5>第一次出现复核标签</h5>
+      <div class="ans">年报助手　<span class="tag-rv">已复核 ✓</span></div>
+      <div class="coach" style="--x:88px"><b>鼠标移到标签上</b>（手机点一下），看复核检查了什么：要点有没有答到、数字能不能在原文找到。<button class="coach-ok" type="button">知道了</button></div>
+    </div>
+    <div class="tip-demo">
+      <h5>第一次出现体检卡 / 大事卡</h5>
+      <div class="mini-card">
+        <div><i class="dot" style="background:var(--red)"></i>利润含金量<span class="v">97.11%</span></div>
+        <div><i class="dot" style="background:var(--green)"></i>客户集中度<span class="v">11.58%</span></div>
+      </div>
+      <div class="coach" style="--x:30px"><b>点任意一行展开</b>：判断标准、原文页码，还能直接在卡片里翻到那一页。<button class="coach-ok" type="button">知道了</button></div>
+    </div>
+  </div>
+</section>
+
+<ul class="pv-notes">
+  <li>预览 1 是全页唯一的动效：进入视野时荧光笔依次划过；悬停或点按右边批注，左边对应位置加深并画出引线。系统设置了「减少动态效果」时直接显示，不播放。</li>
+  <li>「这样问」在正式版里会直接进入聊天并发出这句话。</li>
+  <li>深浅两套配色都按现有对话面板的颜色来，纸面用接近 PDF 的冷白。</li>
+</ul>
+
+<script>
+(function () {
+  const root = document.documentElement;
+  const btn = document.getElementById("pvTheme");
+  btn.onclick = () => {
+    const light = root.dataset.theme !== "light";
+    root.dataset.theme = light ? "light" : "";
+    btn.textContent = light ? "切换深色" : "切换浅色";
+  };
+
+  // 荧光笔：进入视野时依次划过一次
+  const sheet = document.getElementById("sheet");
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce || !("IntersectionObserver" in window)) sheet.classList.add("drawn");
+  else new IntersectionObserver((es, ob) => {
+    if (es.some((e) => e.isIntersecting)) { sheet.classList.add("drawn"); ob.disconnect(); }
+  }, { threshold: .35 }).observe(sheet);
+
+  // 批注 ↔ 荧光笔：悬停 / 聚焦 / 点按时加深对应位置，桌面端画一条引线
+  const marks = [...sheet.querySelectorAll(".mark")];
+  const leader = document.getElementById("leader");
+  const path = leader.querySelector("path"), dot = leader.querySelector("circle");
+  const wrap = leader.parentElement;
+  let pinned = null;
+  function light(note) {
+    const k = note && note.dataset.k;
+    document.querySelectorAll(".note").forEach((n) => n.classList.toggle("on", n === note));
+    marks.forEach((m) => m.classList.toggle("on", m.dataset.k === k));
+    const target = marks.find((m) => m.dataset.k === k);
+    if (!note || !target || innerWidth <= 900) { leader.classList.remove("on"); return; }
+    const w = wrap.getBoundingClientRect(), t = target.getBoundingClientRect(), n = note.getBoundingClientRect();
+    leader.setAttribute("width", w.width + 120); leader.setAttribute("height", w.height);
+    const x1 = t.right - w.left + 4, y1 = t.top + t.height / 2 - w.top;
+    const x2 = n.left - w.left - 6, y2 = n.top + 30 - w.top;
+    path.setAttribute("d", `M${x1},${y1} C${x1 + 50},${y1} ${x2 - 50},${y2} ${x2},${y2}`);
+    dot.setAttribute("cx", x1); dot.setAttribute("cy", y1);
+    leader.classList.add("on");
+  }
+  document.querySelectorAll(".note").forEach((n) => {
+    n.addEventListener("mouseenter", () => light(n));
+    n.addEventListener("mouseleave", () => light(pinned));
+    n.addEventListener("focus", () => light(n));
+    n.addEventListener("click", () => { pinned = pinned === n ? null : n; light(pinned || n); });
+  });
+  addEventListener("scroll", () => { const on = document.querySelector(".note.on"); if (on) light(on); }, { passive: true });
+})();
+</script>
+</body>
+</html>
