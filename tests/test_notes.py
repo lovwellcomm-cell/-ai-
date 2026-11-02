@@ -301,3 +301,11 @@ def test_trend_keeps_the_planners_main_report_when_the_annual_is_read_first():
     assert plan_for(u, **kw)["doc"]["doc_id"] == "jd26q3"
     # 没有先读年报：趋势题照旧改用年报
     assert plan_for(dict(u, also_read=[]), **kw)["action"] == "current"
+
+
+def test_already_noted_only_when_the_needed_data_is_covered():
+    """线上实测：半年报前几轮只记了营收利润，这次问毛利率却被当成「已记下」跳过。"""
+    hist = [{"q": "营收", "notes": notes.from_financials(FIN, DOC_FY, "s")}]
+    assert notes.already_noted(hist, DOC_FY, ["营业收入", "归母净利润"])
+    assert not notes.already_noted(hist, DOC_FY, ["毛利率"])
+    assert not notes.already_noted(hist, DOC_Q3, ["营业收入"])

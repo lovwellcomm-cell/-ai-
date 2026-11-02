@@ -245,3 +245,14 @@ def read_step(sdoc: str, src: str, question: str, need: list[str], *, fin, searc
         bad = (check(answer, hits) or {}).get("unverified") or []
         got = merge(got, from_answer(answer, hits, bad, sdoc, src))
     return got
+
+
+def already_noted(history: list[dict], sdoc: str, need: list[str], turns: int = NOTE_TURNS) -> bool:
+    """前几轮是否已经有这份报告**这次要的**数据，可以跳过前置步骤。
+
+    前几轮记过这份报告的笔记，不等于记过这次要的数：之前问营收记下的是主要会计数据，这次问毛利率要的是营业成本
+    （线上实测：跳过后主回答说「上半年营业成本未披露」）。所以只有要的数据都在主要会计数据范围内时才算已有。
+    """
+    if not covered_by_financials(need):
+        return False
+    return any(n.get("doc") == sdoc for e in history[-turns:] for n in e.get("notes") or [])

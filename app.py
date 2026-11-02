@@ -638,9 +638,8 @@ def run_prestep(target: dict) -> None:
             else:
                 sdoc, label = import_report(company, step["year"], step["period"])
                 rec["src"] = label
-        if sdoc and any(n.get("doc") == sdoc for e in history[-fact_notes.NOTE_TURNS:]
-                        for n in e.get("notes") or []):
-            rec["status"] = "have"                      # 前几轮已经有这份报告的笔记，as_hits 会带上
+        if sdoc and fact_notes.already_noted(history, sdoc, step.get("need") or []):
+            rec["status"] = "have"                      # 前几轮已经有这份报告要的数，as_hits 会带上
             sdoc = None
         if sdoc:
             client = pick_client()
