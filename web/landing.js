@@ -162,6 +162,30 @@ function placeTags(dots, t) {
   });
 }
 
+/* ---------------- 截图随滚动立起来 ---------------- */
+
+// 截图一开始向后仰、略小，滚到它进入视口下半部分时摆正。直接在动画循环里读位置，
+// 不挂滚动监听：Streamlit 的滚动容器在组件外面（stMain），监听它要穿过 shadow root。
+const TILT_MAX = 18;      // 度
+let lastTilt = "";
+
+function updateTilt(root) {
+  // 量外层 .lp-shot（不倾斜）的位置：量 .lp-frame 的话，倾斜本身会改变它的包围盒，角度会自己来回抖
+  const shot = root.querySelector(".lp-shot");
+  if (!shot) return;
+  const vh = window.innerHeight || 800;
+  const top = shot.getBoundingClientRect().top;
+  // 截图上沿从视口底部走到视口顶部附近（约 0.9 个屏高）的过程中逐渐摆正
+  const p = Math.min(1, Math.max(0, (vh - top) / (vh * 0.9)));
+  const e = 1 - (1 - p) ** 2;                          // 缓出：越接近摆正越慢
+  const max = vh < 700 || window.innerWidth < 760 ? TILT_MAX * 0.55 : TILT_MAX;
+  const tilt = (max * (1 - e)).toFixed(2) + "deg";
+  if (tilt === lastTilt) return;
+  lastTilt = tilt;
+  root.style.setProperty("--tilt", tilt);
+  root.style.setProperty("--sc", (0.94 + 0.06 * e).toFixed(4));
+}
+
 /* ---------------- 动画循环 ---------------- */
 
 function stopLoop() {
@@ -186,6 +210,7 @@ function startLoop(canvas, root) {
     m.x += (m.tx - m.x) * 0.08;
     m.y += (m.ty - m.y) * 0.08;
     m.k += ((m.on ? 1 : 0) - m.k) * 0.05;
+    updateTilt(root);
     if (LOOP.visible && !document.hidden) {
       draw(canvas, 8 + (now - t0) / 1000);
       // 光晕跟着鼠标轻微偏移（-1..1），金色和红色方向相反，做出前后层次
@@ -240,6 +265,15 @@ export default function (component) {
     LOOP.mouse.on = e.clientY - r.top < r.height;   // 滚到网格以下就不再拉线
   } : null;
   root.onpointerleave = () => { LOOP.mouse.on = false; };
+
+  // 卖点卡片：一团金色柔光跟着光标走（位置写进卡片自己的 --mx / --my，CSS 画光）
+  root.querySelectorAll(".lp-card").forEach((card) => {
+    card.onpointermove = fine ? (e) => {
+      const r = card.getBoundingClientRect();
+      card.style.setProperty("--mx", (e.clientX - r.left).toFixed(0) + "px");
+      card.style.setProperty("--my", (e.clientY - r.top).toFixed(0) + "px");
+    } : null;
+  });
 
   if (canvas && LOOP.canvas !== canvas) startLoop(canvas, root);
   else if (canvas && !LOOP.raf) draw(canvas, 8);   // 减少动画模式下换了主题，重画一次静止帧

@@ -24,6 +24,7 @@
   --grid: rgba(138,102,8,.10);
   --grain: .05;
   --clear: rgba(246,245,242,.88);
+  --spot: rgba(185,138,24,.13);
   --font-ui: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI',
              'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei',
              'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif;
@@ -52,6 +53,7 @@
   --grid: rgba(224,178,78,.11);
   --grain: .09;
   --clear: rgba(7,8,9,.82);
+  --spot: rgba(224,178,78,.14);
   color-scheme: dark;
 }
 
@@ -218,7 +220,12 @@
 .lp-halo-a { left: -12%; background: radial-gradient(closest-side, var(--halo-a), transparent 75%); }
 .lp-halo-b { right: -12%; background: radial-gradient(closest-side, var(--halo-b), transparent 75%); animation-delay: -4.5s; }
 @keyframes lp-breathe { from { opacity: .75; transform: scale(.96); } to { opacity: 1; transform: scale(1.04); } }
+.lp-shot { perspective: 1600px; }
+/* --tilt / --sc 由 landing.js 按滚动位置写入；没写（减少动画、脚本没跑）时就是平的 */
 .lp-frame {
+  transform: rotateX(var(--tilt, 0deg)) scale(var(--sc, 1));
+  transform-origin: 50% 100%;
+  will-change: transform;
   position: relative; border-radius: 18px; padding: 7px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, transparent),
                                       color-mix(in srgb, var(--surface) 60%, transparent));
@@ -276,6 +283,14 @@
   transition: border-color .3s var(--ease), transform .3s var(--ease);
 }
 .lp-card:hover { border-color: var(--accent-line); transform: translateY(-2px); }
+/* 跟随光标的金色柔光：位置来自 landing.js 写入的 --mx / --my */
+.lp-card { overflow: hidden; isolation: isolate; }
+.lp-card::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(340px circle at var(--mx, 50%) var(--my, 50%), var(--spot), transparent 62%);
+  opacity: 0; transition: opacity .35s var(--ease);
+}
+.lp-card:hover::before { opacity: 1; }
 .lp-tag {
   align-self: flex-start; padding: 3px 10px; border-radius: 999px;
   font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .04em;
