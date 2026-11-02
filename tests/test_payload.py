@@ -244,3 +244,20 @@ def test_build_data_carries_the_menu():
     data = payload.build_data(doc={"company": "精达股份", "year": "2025"}, messages=[],
                               reports=[{"year": "2025", "items": []}])
     assert data["reports"] == [{"year": "2025", "items": []}]
+
+
+def test_pending_message_carries_elapsed_and_done_carries_secs(monkeypatch):
+    monkeypatch.setattr(payload.time, "time", lambda: 1012.7)
+    pending = payload.ai_message({"q": "x", "started": 1000.0}, status="generating")
+    assert pending["elapsed"] == 12 and "secs" not in pending
+    done = payload.ai_message({"q": "x", "a": "回答", "secs": 23}, status="done")
+    assert done["secs"] == 23 and "elapsed" not in done
+    assert "elapsed" not in payload.ai_message({"q": "x"}, status="generating")
+
+
+def test_history_entry_records_duration(monkeypatch):
+    from ui import turn as turn_mod
+    monkeypatch.setattr(turn_mod.time, "time", lambda: 1030.4)
+    base = {"q": "x", "hits": [], "queries": []}
+    assert turn_mod.history_entry(dict(base, started=1000.0), "回答")["secs"] == 30
+    assert "secs" not in turn_mod.history_entry(base, "回答")

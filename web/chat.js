@@ -30,6 +30,24 @@ const ICONS = {
 // 正在渲染的那条消息的网页来源（[网n] → 链接）。放在模块顶层，理由同 TABLE_LINE：
 // 组件函数体里的 let 会在渲染路径先用到时撞上暂时性死区。
 let WEB_LIST = [];
+let CHART_SEQ = 0;           // 图表渐变的 id 序号：同一页多张图不能共用 id
+// 读秒：一个模块级计时器，每秒刷新对话流里所有「已思考 n 秒」。服务器阻塞（检索、生成）时
+// 组件不会重渲染，但浏览器里的计时器照走 —— 读秒的意义正在于此。
+let TICKER = 0;
+let TICK_ROOT = null;
+const THINK_T0 = new Map();  // 文档|消息序号 → 读秒起点（本地时钟）；换阶段重建节点时沿用，不倒退
+
+function fmtSecs(n) {
+  n = Math.max(0, Math.floor(Number(n) || 0));
+  return n < 60 ? n + " 秒" : Math.floor(n / 60) + " 分 " + String(n % 60).padStart(2, "0") + " 秒";
+}
+
+function tick() {
+  if (!TICK_ROOT || !TICK_ROOT.isConnected) return;
+  TICK_ROOT.querySelectorAll(".thinking .secs").forEach((el) => {
+    el.textContent = fmtSecs((Date.now() - Number(el.dataset.t0)) / 1000);
+  });
+}
 
 // 对话存档（ui/memory.py 定形状）：localStorage 里一个键，{convs: {对话键: [条目…]}, last: 文档id}。
 // 只存在访客自己的浏览器里；服务器每次历史有变化就把当前公司那段送来（d.persist）。
@@ -104,7 +122,7 @@ const S = new Map();
 function localState(key) {
   let s = S.get(key);
   if (!s) {
-    s = { draft: "", scrollTop: 0, atBottom: true, drawer: false, turnIdx: -1, srcIdx: 0, activeCite: null, collapsed: new Set(), srcOpen: new Set(), headSig: null, msgSigs: [], drawerSig: null, themeOverride: null };
+    s = { draft: "", scrollTop: 0, atBottom: true, pinned: false, revealed: null, msgCount: 0, drawer: false, turnIdx: -1, srcIdx: 0, activeCite: null, collapsed: new Set(), srcOpen: new Set(), headSig: null, msgSigs: [], drawerSig: null, themeOverride: null };
     S.set(key, s);
   }
   return s;
@@ -252,7 +270,8 @@ export default function (component) {
   const headSig = JSON.stringify([d.doc, d.heroEyebrow, d.heroFoot, ms.length === 0]);
   // 「行业动态」按钮只挂在最后一条回答上、生成中不显示：位置和忙闲也算进签名，
   // 否则发出新问题后，上一条回答不重建，按钮会留在它下面
-  const msgSig = (m, i) => JSON.stringify([Object.assign({}, m, { page: undefined }),
+  // elapsed 每次 rerun 都变，但读秒由前端自己往上数，不该为它重建消息
+  const msgSig = (m, i) => JSON.stringify([Object.assign({}, m, { page: undefined, elapsed: undefined }),
     i === ms.length - 1 ? (d.busy ? "last-busy" : "last") : ""]);
   let changed = false;
   // 重建前是否已经显示着消息（而不是空对话首页）
@@ -297,14 +316,45 @@ export default function (component) {
     s.msgSigs = sigs;
   }
   if (changed) {
-    // 原本贴在底部就继续贴底。当场设一次（不留一帧空档），图片和字体撑高后下一帧再补一次
+    // 滚动规则：
+    //  · 发出新问题（消息变多、最后一条还没有正文）：滚到底，看得到自己的问题和读秒；
+    //  · 回答正文第一次出现：把这一问对齐到顶部，从头读 —— 以前是贴底，长回答一出来
+    //    就落在结尾。只在用户原本跟着看（贴底）时这样做，自己往上翻了就不动；
+    //  · 之后的阶段（扩展分析补段落、指标卡出现）原地不动，直到下一个问题。
+    const last = ms.length - 1;
+    const lm = ms[last];
+    const grew = ms.length > s.msgCount;
+    const rk = (d.docId || "") + "|" + last;
+    let reveal = null;
+    if (lm && lm.role === "ai" && lm.text && s.revealed !== rk) {
+      s.revealed = rk;
+      if (s.atBottom || grew) reveal = threadInner.children[last - 1] || threadInner.children[last];
+      s.pinned = true;
+    } else if (grew) {
+      s.pinned = false;
+      s.atBottom = true;
+    }
     const stick = () => {
-      if (s.atBottom) thread.scrollTop = thread.scrollHeight;
+      if (s.atBottom && !s.pinned) thread.scrollTop = thread.scrollHeight;
       else thread.scrollTop = Math.min(s.scrollTop, thread.scrollHeight);
     };
-    stick();
-    requestAnimationFrame(stick);
+    if (reveal) {
+      // 当场先保持原位（不跳），排版完成后再平滑滚到这一问的顶部
+      thread.scrollTop = Math.min(s.scrollTop, thread.scrollHeight);
+      requestAnimationFrame(() => {
+        const top = thread.scrollTop + reveal.getBoundingClientRect().top - thread.getBoundingClientRect().top - 16;
+        const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        thread.scrollTo({ top: Math.max(0, top), behavior: still ? "auto" : "smooth" });
+      });
+    } else {
+      // 当场设一次（不留一帧空档），图片和字体撑高后下一帧再补一次
+      stick();
+      requestAnimationFrame(stick);
+    }
   }
+  s.msgCount = ms.length;
+  TICK_ROOT = threadInner;
+  if (!TICKER) TICKER = setInterval(tick, 1000);
   // 正文重建后要把当前选中的引用角标高亮补回来（它是纯前端状态，不在 data 里）
   if (s.activeCite) markCite(s.activeCite);
 
@@ -449,6 +499,10 @@ export default function (component) {
     if (m.demo) meta.appendChild(mk("span", "tag", "演示回答"));
     // 同一公司多个年度共用一段对话时，标出这条回答依据的是哪份年报（只在跨年报时下发）
     if (m.docLabel) meta.appendChild(mk("span", "tag doc-tag", m.docLabel));
+    if (typeof m.secs === "number") {
+      meta.appendChild(mk("span", "sep"));
+      meta.appendChild(mk("span", "mono took", "用时 " + fmtSecs(m.secs)));
+    }
     body.appendChild(meta);
     if (m.notice) body.appendChild(mk("div", "notice", m.notice));
     wrap.appendChild(body);
@@ -456,12 +510,19 @@ export default function (component) {
     // 待定状态：检索和生成阶段还没有正文，只显示 spinner。
     // 但「扩展分析」阶段首轮回答已经产出，先把正文画出来再挂指示 ——
     // 用户不必等第二次模型调用跑完才看到东西。
-    if (m.status === "resolving" || m.status === "retrieving" || m.status === "generating" || m.status === "analyzing" || m.status === "searching") {
+    if (m.status === "resolving" || m.status === "retrieving" || m.status === "history" || m.status === "generating" || m.status === "analyzing" || m.status === "searching") {
       WEB_LIST = m.webSources || [];
       if (m.text) appendProse(body, m.text, (m.sources || []).length);
       const th = mk("div", "thinking");
       th.appendChild(mk("i", "spin"));
       th.appendChild(mk("span", null, m.statusText || "检索相关片段…"));
+      // 起点 = 现在 − 服务器说的已用秒数；同一条消息换阶段时取更早的那个，读秒不会倒退
+      const key = (d.docId || "") + "|" + idx;
+      const t0 = Math.min(THINK_T0.get(key) || Infinity, Date.now() - (Number(m.elapsed) || 0) * 1000);
+      THINK_T0.set(key, t0);
+      const secs = mk("span", "secs", fmtSecs((Date.now() - t0) / 1000));
+      secs.dataset.t0 = String(t0);
+      th.appendChild(secs);
       body.appendChild(th);
       return wrap;
     }
@@ -702,47 +763,110 @@ export default function (component) {
            "L" + (x + r) + "," + (y + h) + "Q" + x + "," + (y + h) + " " + x + "," + (y + h - r) + "Z";
   }
 
+  /* 三年画柱、六年画折线（后端在 c.kind 里说明）。两种图共用坐标和悬停提示。
+     SVG 只拼数字和我方常量，标签走 esc；提示框里的文字走 textContent。 */
   function chartNode(c) {
-    const box = mk("div", "chart");
+    const line = c.kind === "line";
+    const box = mk("div", "chart " + (line ? "is-line" : "is-bar"));
     const title = mk("div", "chart-t");
     const t1 = mk("span", null, c.title);
     t1.appendChild(mk("span", "mono", "　" + (c.range || "") + " · " + (c.unit || "")));
     title.appendChild(t1);
     box.appendChild(title);
+    if (c.cagr) box.appendChild(mk("div", "chart-sub " + (/-\d/.test(c.cagr) ? "down" : "up"), c.cagr));
 
-    const W = 260, top = 18, base = 92, plot = base - top;
-    const x0 = 16, x1 = 250, n = c.values.length, band = (x1 - x0) / n, bw = 26;
+    const W = 260, H = 128, top = 20, base = 92, plot = base - top;
+    const x0 = 16, x1 = 250, n = c.values.length, band = (x1 - x0) / n, bw = 28;
     const vals = c.values.map(Number);
     // 以零为基线：有负值时（例如某年经营现金流为负）零线上移，负值向下画并用 --neg。
-    // 以前负值会被画成 3px 的正柱子，看起来像「很小的正数」。
     const hi = Math.max(0, ...vals), lo = Math.min(0, ...vals);
     const span = (hi - lo) || 1;
     const zero = top + hi / span * plot;
     const barH = (v) => Math.max(3, Math.abs(v) / span * plot);
     const barTop = (v) => (v >= 0 ? zero - barH(v) : zero);
-    let svg = '<svg viewBox="0 0 ' + W + ' 118" role="img" aria-label="' + esc(c.title + " " + (c.range || "")) + '">';
-    svg += '<line x1="' + x0 + '" y1="' + top + '" x2="' + x1 + '" y2="' + top + '" stroke="var(--line)" stroke-width="1" stroke-dasharray="2 3"/>';
-    svg += '<line x1="' + x0 + '" y1="' + zero + '" x2="' + x1 + '" y2="' + zero + '" stroke="var(--line)" stroke-width="1"/>';
+    // 折线两端各留 10px，首尾的点和数字不贴边
+    const px = (i) => (line ? x0 + 10 + i * (x1 - x0 - 20) / Math.max(1, n - 1) : x0 + i * band + band / 2);
+    const py = (v) => zero - v / span * plot;
+    const id = "cg" + (++CHART_SEQ);
+    const mono = 'font-family="var(--font-mono)" text-anchor="middle"';
+
+    let svg = '<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="' + esc(c.title + " " + (c.range || "")) + '">';
+    svg += "<defs>" +
+      '<linearGradient id="' + id + 'u" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--mark);stop-opacity:1"/><stop offset="1" style="stop-color:var(--mark);stop-opacity:.62"/></linearGradient>' +
+      '<linearGradient id="' + id + 'p" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--mark);stop-opacity:.48"/><stop offset="1" style="stop-color:var(--mark);stop-opacity:.14"/></linearGradient>' +
+      '<linearGradient id="' + id + 'n" x1="0" y1="1" x2="0" y2="0"><stop offset="0" style="stop-color:var(--neg);stop-opacity:.9"/><stop offset="1" style="stop-color:var(--neg);stop-opacity:.4"/></linearGradient>' +
+      '<linearGradient id="' + id + 'a" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--mark);stop-opacity:.30"/><stop offset="1" style="stop-color:var(--mark);stop-opacity:0"/></linearGradient>' +
+      "</defs>";
+    // 网格：顶线 + 两条中间线，都是淡虚线；零线实线
+    [0, 1 / 3, 2 / 3].forEach((f) => {
+      const gy = top + f * plot;
+      if (Math.abs(gy - zero) > 2) svg += '<line x1="' + x0 + '" y1="' + gy + '" x2="' + x1 + '" y2="' + gy + '" stroke="var(--line)" stroke-width="1" stroke-dasharray="2 3"/>';
+    });
+    svg += '<line x1="' + x0 + '" y1="' + zero + '" x2="' + x1 + '" y2="' + zero + '" stroke="var(--line-2)" stroke-width="1"/>';
+    // 悬停时的列高亮（柱）/ 竖向参考线（折线），默认隐藏
+    svg += line
+      ? '<line class="guide" x1="0" y1="' + top + '" x2="0" y2="' + base + '" stroke="var(--accent-line)" stroke-width="1" stroke-dasharray="3 3"/>'
+      : '<rect class="guide" x="0" y="' + (top - 6) + '" width="' + band + '" height="' + (plot + 6) + '" rx="6" fill="var(--accent-soft)"/>';
+
+    if (line) {
+      const pts = vals.map((v, i) => [px(i), py(v)]);
+      const d = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join("");
+      svg += '<path class="area" d="' + d + "L" + pts[n - 1][0].toFixed(1) + "," + zero + "L" + pts[0][0].toFixed(1) + "," + zero + 'Z" fill="url(#' + id + 'a)"/>';
+      svg += '<path class="stroke" d="' + d + '" pathLength="1" fill="none" stroke="var(--mark)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+      vals.forEach((v, i) => {
+        const [cx, cy] = pts[i];
+        const col = v >= 0 ? "var(--mark)" : "var(--neg)";
+        if (i === n - 1) {
+          svg += '<circle class="halo" cx="' + cx + '" cy="' + cy + '" r="7.5" style="fill:' + col + '" opacity=".18"/>';
+          svg += '<circle class="pt" data-i="' + i + '" cx="' + cx + '" cy="' + cy + '" r="3.6" style="fill:' + col + '" stroke="var(--surface)" stroke-width="1.5"/>';
+        } else {
+          svg += '<circle class="pt" data-i="' + i + '" cx="' + cx + '" cy="' + cy + '" r="2.6" fill="var(--surface)" style="stroke:' + col + '" stroke-width="1.5"/>';
+        }
+        svg += "<text " + mono + ' x="' + cx + '" y="' + (base + 15) + '" font-size="9.5" fill="var(--ink-3)">' + esc(c.labels[i]) + "</text>";
+        // 只标首尾两个数：六个数挤在一起反而看不清走势，其余靠悬停
+        if (i === 0 || i === n - 1) {
+          // 标在远离相邻线段的一侧：相邻点更高，线往上走，数字就放到点下方
+          const below = vals[i === 0 ? 1 : n - 2] > v;
+          const ly = below ? Math.min(base - 4, cy + 15) : Math.max(top - 6, cy - 9);
+          const anchor = i === 0 ? "start" : "end";
+          const lx = i === 0 ? cx - 4 : cx + 4;
+          svg += '<text font-family="var(--font-mono)" text-anchor="' + anchor + '" x="' + lx + '" y="' + ly + '" font-size="' + (i ? 10.5 : 9.5) + '" font-weight="' + (i ? 500 : 400) + '" fill="var(--' + (i ? "ink" : "ink-3") + ')">' + v.toFixed(2) + "</text>";
+        }
+      });
+    } else {
+      vals.forEach((v, i) => {
+        const bx = x0 + i * band + (band - bw) / 2;
+        const h = barH(v), by = barTop(v), last = i === n - 1;
+        const fill = v < 0 ? id + "n" : id + (last ? "u" : "p");
+        const path = v >= 0 ? barPath(bx, by, bw, h, 5) : barPathDown(bx, by, bw, h, 5);
+        svg += '<g class="bar' + (v < 0 ? " neg" : "") + '" data-i="' + i + '" style="--i:' + i + '">';
+        svg += '<path d="' + path + '" fill="url(#' + fill + ')"/>';
+        // 柱顶一道亮边：比纯色块更有「实物」感
+        const capY = v >= 0 ? by + .75 : by + h - .75;
+        svg += '<line x1="' + (bx + 4) + '" y1="' + capY + '" x2="' + (bx + bw - 4) + '" y2="' + capY + '" stroke="' + (v >= 0 ? "var(--mark)" : "var(--neg)") + '" stroke-width="1.5" stroke-linecap="round" opacity="' + (last ? .9 : .7) + '"/>';
+        svg += "</g>";
+        // 数值标在柱顶上方；负值标在零线上方，避免和底部年份重叠
+        const ly = v >= 0 ? by - 6 : zero - 6;
+        svg += "<text " + mono + ' x="' + (bx + bw / 2) + '" y="' + ly + '" font-size="' + (last ? 10.5 : 9) + '" font-weight="' + (last ? 500 : 400) + '" fill="var(--' + (last ? "ink" : "ink-3") + ')">' + v.toFixed(2) + "</text>";
+        svg += "<text " + mono + ' x="' + (bx + bw / 2) + '" y="' + (base + 14) + '" font-size="9.5" fill="var(--ink-2)">' + esc(c.labels[i]) + "</text>";
+        const yoy = (c.yoy && c.yoy[i]) || "—";
+        const col = yoy === "—" ? "var(--ink-3)" : (yoy.charAt(0) === "-" ? "var(--neg)" : "var(--pos)");
+        svg += "<text " + mono + ' x="' + (bx + bw / 2) + '" y="' + (base + 26) + '" font-size="8.5" fill="' + col + '">' + esc(yoy) + "</text>";
+      });
+    }
     vals.forEach((v, i) => {
-      const bx = x0 + i * band + (band - bw) / 2;
-      const h = barH(v), by = barTop(v);
-      const path = v >= 0 ? barPath(bx, by, bw, h, 4) : barPathDown(bx, by, bw, h, 4);
-      svg += '<path d="' + path + '" fill="' + (v >= 0 ? "var(--mark)" : "var(--neg)") + '" opacity="' + (i === n - 1 ? 1 : .55) + '"/>';
-      svg += '<text x="' + (bx + bw / 2) + '" y="' + (base + 15) + '" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-3)">' + esc(c.labels[i]) + '</text>';
-      if (i === n - 1) {
-        // 负值的数字也标在零线上方，避免和底部年份重叠
-        const ly = v >= 0 ? by - 7 : zero - 7;
-        svg += '<text x="' + (bx + bw / 2) + '" y="' + ly + '" text-anchor="middle" font-family="var(--font-mono)" font-size="10.5" font-weight="500" fill="var(--ink)">' + v.toFixed(2) + '</text>';
-      }
-      svg += '<rect class="hit" data-i="' + i + '" x="' + (x0 + i * band) + '" y="' + top + '" width="' + band + '" height="' + plot + '" fill="transparent" style="cursor:crosshair"/>';
+      const hx = line ? px(i) - band / 2 : x0 + i * band;
+      svg += '<rect class="hit" data-i="' + i + '" x="' + hx + '" y="' + (top - 8) + '" width="' + band + '" height="' + (plot + 8) + '" fill="transparent" style="cursor:crosshair"/>';
     });
     svg += "</svg>";
     const holder = mk("div");
     holder.innerHTML = svg;                       // 只含数字与我方生成的属性，标签已 esc
-    box.appendChild(holder.firstChild);
+    const svgEl = holder.firstChild;
+    box.appendChild(svgEl);
 
     const tip = mk("div", "tip");
     box.appendChild(tip);
+    const guide = svgEl.querySelector(".guide");
     box.querySelectorAll(".hit").forEach((hit) => {
       hit.onmouseenter = () => {
         const i = Number(hit.dataset.i);
@@ -753,12 +877,20 @@ export default function (component) {
         t.appendChild(document.createTextNode("同比 " + ((c.yoy && c.yoy[i]) || "—")));
         clear(tip);
         tip.appendChild(t);
-        const cx = x0 + i * band + band / 2;
+        const cx = px(i);
+        const anchorY = line ? py(vals[i]) - 8 : Math.min(barTop(vals[i]), zero) - 16;
         tip.style.left = (cx / W * 100) + "%";
-        tip.style.top = ((Math.min(barTop(vals[i]), zero) - 10) / 118 * 100) + "%";
+        tip.style.top = (anchorY / H * 100) + "%";
         tip.classList.add("show");
+        if (line) { guide.setAttribute("x1", cx); guide.setAttribute("x2", cx); }
+        else guide.setAttribute("x", x0 + i * band);
+        box.classList.add("hovering");
+        svgEl.querySelectorAll("[data-i]").forEach((el) => el.classList.toggle("on", Number(el.dataset.i) === i));
       };
-      hit.onmouseleave = () => tip.classList.remove("show");
+      hit.onmouseleave = () => {
+        tip.classList.remove("show");
+        box.classList.remove("hovering");
+      };
     });
     return box;
   }

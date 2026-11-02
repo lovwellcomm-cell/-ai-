@@ -51,11 +51,12 @@ def _fmt(v: float) -> str:
     return f"{v:,.2f}"
 
 
-def _series(fin: dict, key: str) -> list[float] | None:
+def _series(fin: dict, key: str, years: list[str] | None = None) -> list[float] | None:
+    years = years or fin["years"]
     item = fin["items"].get(key)
-    if not item or any(y not in item["values"] for y in fin["years"]):
+    if not item or any(y not in item["values"] for y in years):
         return None
-    return [item["values"][y] for y in reversed(fin["years"])]   # 旧 → 新
+    return [item["values"][y] for y in reversed(years)]   # 旧 → 新
 
 
 def _amount_kpi(fin: dict, key: str, label: str) -> dict | None:
@@ -130,16 +131,30 @@ def _cash_kpi(fin: dict) -> dict | None:
     return kpi
 
 
+def _cagr(vals: list[float]) -> str | None:
+    """复合增速。首尾任一年 ≤ 0 时没有意义（亏损转盈利算不出「年均增长」），不出。"""
+    first, last, n = vals[0], vals[-1], len(vals) - 1
+    if n < 2 or first <= 0 or last <= 0:
+        return None
+    return f"{((last / first) ** (1 / n) - 1) * 100:+.2f}%"
+
+
 def _chart(fin: dict, key: str, title: str) -> dict | None:
-    vals = _series(fin, key)
+    """三年画柱；接上往年年报（rag/history.py）后画折线，另给复合增速。
+    某个科目在往年那份里没抽到时，这张图退回三年，不画断开的折线。"""
+    years = fin["years"]
+    vals = _series(fin, key, years)
+    if not vals and len(years) > 3:
+        years = years[:3]
+        vals = _series(fin, key, years)
     if not vals:
         return None
     div, unit = _scale_for(vals)
-    labels = list(reversed(fin["years"]))
+    labels = list(reversed(years))
     yoy = ["—"]
     for prev, cur in zip(vals, vals[1:]):
         yoy.append("—" if not prev else f"{(cur - prev) / abs(prev) * 100:+.2f}%")
-    return {
+    chart = {
         "title": title,
         "range": f"{labels[0]}–{labels[-1]}",
         "unit": unit,
@@ -147,10 +162,19 @@ def _chart(fin: dict, key: str, title: str) -> dict | None:
         "values": [round(v / div, 2) for v in vals],
         "yoy": yoy,
     }
+    if len(vals) > 3:
+        chart["kind"] = "line"
+        cagr = _cagr(vals)
+        if cagr:
+            chart["cagr"] = f"{len(vals) - 1} 年复合增速 {cagr}"
+    return chart
 
 
 def _note(fin: dict) -> str:
     period = fin.get("period") or FY
+    if period == FY and fin.get("sources"):
+        parts = [f"{s['years']} 出自 {s['label']}第 {s['page']} 页" for s in fin["sources"]]
+        return " · ".join(["程序抽取", *parts, "均已与披露增减核对"])
     if period == FY:
         return f"程序抽取 · 年报第 {fin['page']} 页 · 已与披露增减核对"
     check = "已与利润表、现金流量表核对" if period == Q3 else "已与披露增减核对"
@@ -188,4 +212,6 @@ def build_card(fin: dict | None) -> dict | None:
     title = f"主要会计数据 · {fin['years'][0]}"
     if period != FY:
         title += f" {SPAN[period]}"
+    elif any(c.get("kind") == "line" for c in charts):
+        title += f" · 近 {len(fin['years'])} 年"
     return {"kpis": kpis, "charts": charts, "cardTitle": title, "cardNote": _note(fin)}

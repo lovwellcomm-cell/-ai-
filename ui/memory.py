@@ -79,6 +79,9 @@ def clean_entry(e, known_docs: set[str]) -> dict | None:
     web = [w for w in (_clean_web(x) for x in (e.get("web_sources") or [])[:10]) if w]
     if web:
         out["web_sources"] = web
+    secs = e.get("secs")
+    if isinstance(secs, int) and not isinstance(secs, bool) and 0 <= secs <= 3600:
+        out["secs"] = secs
     did = e.get("doc_id")
     if isinstance(did, str) and _DOC_ID_RE.match(did) and did in known_docs:
         out["doc_id"] = did
@@ -95,6 +98,8 @@ def pack(history: list[dict]) -> list[dict]:
     for e in history[-MAX_TURNS:]:
         item = {k: e[k] for k in ("q", "a", "notice", "kind", "doc_id", "queries", "web_sources")
                 if e.get(k)}
+        if isinstance(e.get("secs"), int):
+            item["secs"] = e["secs"]
         item["hits"] = [{k: h.get(k) for k in ("text", "section", "subsection",
                                                 "page_start", "page_end")}
                         for h in (e.get("hits") or [])]

@@ -305,6 +305,9 @@ table.md-tbl { width: 100%; border-collapse: collapse; font-size: 13px; line-hei
 
 /* 检索中 */
 .thinking { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--ink-3); }
+.thinking .secs { font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums;
+  padding: 1px 7px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); }
+.msg-meta .took { font-size: 10.5px; color: var(--ink-3); }
 .spin {
   width: 13px; height: 13px; border-radius: 50%; flex: none;
   border: 1.5px solid var(--line-2); border-top-color: var(--accent);
@@ -318,7 +321,7 @@ table.md-tbl { width: 100%; border-collapse: collapse; font-size: 13px; line-hei
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 12px 15px; border-bottom: 1px solid var(--line); background: var(--surface-2);
 }
-.card-title { font-size: 12.5px; font-weight: 600; }
+.card-title { font-size: 12.5px; font-weight: 600; white-space: nowrap; flex: none; }
 .card-body { padding: 15px; display: flex; flex-direction: column; gap: 16px; }
 .kpis {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
@@ -341,7 +344,28 @@ table.md-tbl { width: 100%; border-collapse: collapse; font-size: 13px; line-hei
   display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
 }
 .chart-t .mono { font-size: 10px; color: var(--ink-3); }
+.chart-sub { font-family: var(--font-mono); font-size: 10.5px; margin: -3px 0 4px; }
+.chart-sub.up { color: var(--pos); }
+.chart-sub.down { color: var(--neg); }
 .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+/* 柱：从零线长出来，依次错开；悬停时这一列高亮、其余变淡 */
+.chart .bar { transform-box: fill-box; transform-origin: 50% 100%;
+  animation: bar-grow .62s cubic-bezier(.2,.75,.25,1) both; animation-delay: calc(var(--i) * 80ms);
+  transition: opacity .15s ease; }
+.chart .bar.neg { transform-origin: 50% 0; }
+@keyframes bar-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+.chart .guide { opacity: 0; transition: opacity .15s ease; pointer-events: none; }
+.chart.hovering .guide { opacity: 1; }
+.chart.is-bar.hovering .bar:not(.on) { opacity: .4; }
+
+/* 折线：线从左往右画出，面积和点随后淡入 */
+.chart .stroke { stroke-dasharray: 1; stroke-dashoffset: 0; animation: line-draw .9s cubic-bezier(.3,.6,.2,1) both; }
+@keyframes line-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.chart .area, .chart .pt, .chart .halo { animation: rise-fade .5s ease .45s both; }
+@keyframes rise-fade { from { opacity: 0; } }
+.chart .pt { transform-box: fill-box; transform-origin: center; transition: transform .15s ease; }
+.chart.is-line.hovering .pt.on { transform: scale(1.45); }
 .tip {
   position: absolute; z-index: 5; pointer-events: none;
   transform: translate(-50%, -100%);

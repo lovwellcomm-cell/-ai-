@@ -95,3 +95,10 @@ def test_history_block_shows_question_and_gist():
     assert "助手（上一轮结论摘要，已去掉数字）：营收增长，利润下滑。" in block
     assert "用户：那原因呢" in block and "数字和事实只能来自本轮" in block
     assert _history_block([]) == "" and _history_block(None) == ""
+
+
+def test_secs_round_trip_and_rejects_bad_values():
+    convs, _ = unpack({"convs": {"co:精达": pack([dict(ENTRY, secs=23)])}}, KNOWN)
+    assert convs["co:精达"][0]["secs"] == 23
+    for bad in (-1, 99999, "23", True, 2.5):
+        assert "secs" not in clean_entry(dict(ENTRY, secs=bad), KNOWN)

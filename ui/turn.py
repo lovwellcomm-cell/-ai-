@@ -9,6 +9,7 @@ grep `advance_turn` 在 tests/ 里没有任何结果。
 """
 from __future__ import annotations
 
+import time
 from datetime import date
 
 from rag.company import normalize, same_company
@@ -84,6 +85,9 @@ def history_entry(turn: dict, answer: str) -> dict:
     # 依据的是哪份年报：同一公司多个年度共用一段对话后，翻原页、标注年份都要靠它。
     if turn.get("doc_id"):
         entry["doc_id"] = turn["doc_id"]
+    # 这一轮用了多久（从发出问题到回答完整），界面在回答顶部显示「用时 n 秒」
+    if turn.get("started"):
+        entry["secs"] = max(0, int(round(time.time() - turn["started"])))
     # 自动导入的提示要跟着回答保留下来；没有就不写键，保持旧条目形状不变。
     if turn.get("notice"):
         entry["notice"] = turn["notice"]

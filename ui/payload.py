@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from rag.generator import cited_numbers
@@ -24,6 +25,7 @@ from ui.turn import conversation_key
 STATUS_TEXT = {
     "resolving": "正在查找报告…",
     "retrieving": "检索相关片段…",
+    "history": "正在调取往年年报，把趋势拉长到近 6 年…",
     "generating": "正在生成回答…",
     # 首轮回答已经显示出来了，这一步只是追加「为什么」的扩展分析
     "analyzing": "正在扩展分析…",
@@ -74,6 +76,12 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
     }
     if status != "done":
         msg["statusText"] = STATUS_TEXT.get(status, "")
+        # 读秒的起点由服务器算好「已经过去几秒」下发，前端接着往上数 ——
+        # 不下发绝对时间戳，免得服务器和浏览器的时钟差把读秒带偏。
+        if turn.get("started"):
+            msg["elapsed"] = max(0, int(time.time() - turn["started"]))
+    elif isinstance(turn.get("secs"), int):
+        msg["secs"] = turn["secs"]
         if turn.get("kind") == "industry" and status == "generating":
             msg["statusText"] = "正在联网检索行业动态…（约半分钟）"
     if error:

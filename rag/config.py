@@ -134,4 +134,8 @@ SESSION_LIMIT = int(get("SESSION_LIMIT", "5"))   # 每个会话免费提问次�
 DAILY_LIMIT = int(get("DAILY_LIMIT", "100"))     # 全站每天免费提问次数
 MAX_PAGES = int(get("MAX_PAGES", "400"))         # 上传年报的页数上限
 MAX_UPLOADS_PER_SESSION = int(get("MAX_UPLOADS_PER_SESSION", "2"))
+# 多年趋势：每个会话最多从巨潮下载几份往年年报（只抽表、不建索引；命中缓存不计数）。
+HISTORY_FETCHES_PER_SESSION = int(get("HISTORY_FETCHES_PER_SESSION", "3"))
+# 往年年报只读前 30 页抽表，等不了太久：超时就退回三年卡。
+HISTORY_DOWNLOAD_TIMEOUT = float(get("HISTORY_DOWNLOAD_TIMEOUT", "20"))
 UPLOAD_TTL_HOURS = int(get("UPLOAD_TTL_HOURS", "24"))  # 访客上传文档的保留时长

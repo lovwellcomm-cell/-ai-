@@ -11,6 +11,7 @@
 import base64
 import json
 import os
+import time
 
 import streamlit as st
 
@@ -33,6 +34,7 @@ except Exception as _import_error:          # 部署环境里的 import 失败�
 from rag.external import answer_with_tools
 from rag.financials import load_or_build as load_financials
 from rag.generator import analyze, generate, get_client, make_client
+from rag.history import load_older, merge, older_year, wants_trend
 from rag.industry import RETRIEVAL_QUERY as INDUSTRY_QUERY, industry_brief, wants_industry
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
                          is_current, list_documents, load_index)
@@ -526,7 +528,7 @@ def finish_turn(entry: dict) -> None:
 
 
 def advance_turn() -> None:
-    """回合状态机：resolving -> retrieving -> generating -> analyzing / searching -> done。
+    """回合状态机：resolving -> retrieving -> (history) -> generating -> analyzing / searching -> done。
 
     关键是「先挂载组件、再做耗时工作」：组件挂载的增量会在几十毫秒内送达浏览器并绘制，
     之后的阻塞调用（检索、生成）期间用户看到的就是刚挂上去的那一帧。已实测成立。
@@ -660,14 +662,41 @@ def advance_turn() -> None:
         target["queries"] = queries
         # 问到营收、利润、现金流这类方向时，附上程序抽取的指标卡。
         # 抽取失败只记在回合上 —— 卡片是锦上添花，不能拖垮回答本身。
+        target["status"] = "generating"
         if target.get("kind") != "industry" and wants_card(target["q"], previous=recent):
             try:
-                card = build_card(get_financials(doc_id, SOURCE_STAMP))
+                fin = get_financials(doc_id, SOURCE_STAMP)
+                card = build_card(fin)
             except Exception as e:
-                card = None
+                fin, card = None, None
                 target["card_error"] = f"{type(e).__name__}: {e}"
             if card:
                 target.update(card)
+                # 问趋势时再抽一份往年年报，把卡片拉长到六年（单独一轮，好显示状态文案）
+                if (fin.get("period") or FY) == FY and wants_trend(target["q"], previous=recent):
+                    target["status"] = "history"
+        st.session_state["turn"] = target
+        st.rerun()
+
+    if target["status"] == "history":
+        # 拉长到六年是锦上添花：任何失败都退回三年卡，回答照常生成。
+        # 注意别给 meta / doc_id 赋值：它们是模块级变量，函数里一赋值就整函数变局部
+        company = meta.get("company", "")
+        fin = get_financials(doc_id, SOURCE_STAMP)
+        year = older_year(fin or {})
+        if fin and year and company:
+            used = st.session_state.get("history_fetches", 0)
+            try:
+                older, fetched = load_older(
+                    company, year, list_documents(None),
+                    allow_fetch=used < config.HISTORY_FETCHES_PER_SESSION)
+                if fetched:
+                    st.session_state["history_fetches"] = used + 1
+                card = build_card(merge(fin, older))
+                if card:
+                    target.update(card)
+            except Exception as e:
+                target["history_error"] = f"{type(e).__name__}: {e}"
         target["status"] = "generating"
         st.session_state["turn"] = target
         st.rerun()
@@ -757,6 +786,8 @@ if result.ask and not busy:
             "doc_id": doc_id, "q": text,
             "status": "resolving" if config.AUTO_IMPORT_ENABLED else "retrieving",
             "counted": count_it,
+            # 读秒：界面显示「已思考 n 秒」，完成后记成这一轮的用时（ui/turn.py:history_entry）
+            "started": time.time(),
             # 行业动态走另一条路：联网检索成文，不做年报回答 + 扩展
             **({"kind": "industry"} if wants_industry(text) else {}),
         }
