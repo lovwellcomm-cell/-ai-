@@ -1,6 +1,7 @@
 """端到端对比：旧流程（识别目标 + 改写检索词 → 检索 → 生成 → 扩展）vs 新流程（规划器 → 检索 → 生成 → 复核∥扩展 → 最多回退一次）。
 
 用法：python -m tools.eval_e2e [--engines old,new] [--only 1,5] [--tag 名字]
+     回答改版对比：--engines new,plain（plain = 新流程 + 通俗版提示词，new 是专业版）
 结果写到 eval_out/e2e-<tag>.md（不入库）。要真实模型；只用本地已有的报告（不导入新报告，免得测的是网速）。
 
 驱动的是线上同一个状态机 ui/turn.step，只是不经过 Streamlit。联网补充（web）两边都关掉 ——
@@ -16,6 +17,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -76,6 +79,9 @@ def _meta(key: str) -> dict:
 
 
 def run(case: dict, engine: str) -> dict:
+    # plain：新流程，只是回答用通俗版提示词（rag/generator.PLAIN_RULE_8）
+    style = "plain" if engine == "plain" else "pro"
+    engine = "new" if engine == "plain" else engine
     from rag import planner, reviewer
     from rag.company import extract_target
     from rag.generator import analyze, generate, get_client
@@ -105,7 +111,7 @@ def run(case: dict, engine: str) -> dict:
         return None, plan_resolution(tgt, **kw)
 
     u, plan = resolve()
-    out = {"engine": engine, "n": case["n"]}
+    out = {"engine": "plain" if style == "plain" else engine, "n": case["n"]}
     if plan["action"] in ("clarify", "out_of_scope", "multiple", "import"):
         out.update(action=plan["action"], doc=None, answer=(u or {}).get("reply") or "",
                    secs=round(time.time() - t0, 1), calls=client.calls)
@@ -127,7 +133,7 @@ def run(case: dict, engine: str) -> dict:
         t = state["turn"]
         focus = planner.focus_block(u) + reviewer.feedback_block(t.get("review_last"))
         return "".join(generate(qq, hh, client=client, company=company, year=year,
-                                history=history, period=period, focus=focus))
+                                history=history, period=period, focus=focus, style=style))
 
     def ana(qq, hh, first, *, client, company, year, history):
         diag: dict = {}                                  # 和 app.py 的 _ana 同一个契约：(正文, 诊断)
@@ -175,7 +181,29 @@ def judge(case: dict, got: dict) -> dict:
     abstain = ans.strip().startswith("年报中未找到") and bool(case["nums"])
     orphan = check(ans, got.get("hits") or []).get("无出处", 0) if ans else None
     return {"ok": doc_ok and nums_ok and not abstain and not got.get("error"),
-            "doc": doc_ok, "nums": nums_ok, "abstain": abstain, "orphan": orphan}
+            "doc": doc_ok, "nums": nums_ok, "abstain": abstain, "orphan": orphan,
+            **readability(ans)}
+
+
+_SENT_END = re.compile(r"(?<=[。！？])")
+_FIXED = ("据片段数字计算", "据片段数据推断")
+
+
+def readability(ans: str) -> dict:
+    """可读性的几个粗指标（只看首轮回答，扩展分析不算）：
+    · lead_num：第一句里有没有数字（结论先行、带关键数字）；
+    · lead_len：第一句多少字；avg_len：平均句长；
+    · jargon：「片段」这类内部用语出现几次（固定短语不算，界面会处理）。"""
+    body = (ans or "").split("**扩展分析**")[0]
+    prose = "\n".join(ln for ln in body.splitlines() if not ln.strip().startswith("|"))
+    sents = [x.strip() for x in _SENT_END.split(prose.replace("\n", "")) if x.strip()]
+    first = sents[0] if sents else ""
+    rest = prose
+    for f in _FIXED:
+        rest = rest.replace(f, "")
+    return {"lead_num": bool(re.search(r"\d", first)), "lead_len": len(first),
+            "avg_len": round(sum(map(len, sents)) / len(sents), 1) if sents else 0,
+            "jargon": rest.count("片段")}
 
 
 def main() -> None:
@@ -219,11 +247,15 @@ def main() -> None:
         ("耗时中位数（秒）", lambda e: str(med([r[2].get('secs', 0) for r in col(e, lambda r: True)]))),
         ("耗时最长（秒）", lambda e: str(max([r[2].get('secs', 0) for r in col(e, lambda r: True)] or [0]))),
         ("模型调用（合计）", lambda e: str(sum(r[2].get('calls', 0) for r in col(e, lambda r: True)))),
+        ("首句带数字", lambda e: f"{len(col(e, lambda r: r[3].get('lead_num')))} / {len(col(e, lambda r: 'lead_num' in r[3]))}"),
+        ("首句字数中位数", lambda e: str(med([r[3]['lead_len'] for r in col(e, lambda r: 'lead_len' in r[3])]))),
+        ("平均句长中位数", lambda e: str(med([r[3]['avg_len'] for r in col(e, lambda r: 'avg_len' in r[3])]))),
+        ("「片段」用语（合计）", lambda e: str(sum(r[3].get('jargon', 0) for r in col(e, lambda r: True)))),
     ]:
         lines.append(f"| {name} | " + " | ".join(fn(e) for e in engines) + " |")
-    if "new" in engines:
-        revs = [r[2].get("review") or {} for r in rows if r[1] == "new"]
-        lines.append(f"\n复核：通过 {sum(v.get('verdict') == 'pass' for v in revs)}，"
+    for eng in [e for e in engines if e in ("new", "plain")]:
+        revs = [r[2].get("review") or {} for r in rows if r[1] == eng]
+        lines.append(f"\n复核（{eng}）：通过 {sum(v.get('verdict') == 'pass' for v in revs)}，"
                      f"未通过 {sum(v.get('verdict') == 'fail' for v in revs)}，"
                      f"出错 {sum(v.get('verdict') == 'error' for v in revs)}，"
                      f"回退过 {sum(1 for v in revs if v.get('rounds'))} 题")
@@ -255,6 +287,11 @@ def main() -> None:
     md = "\n".join(lines)
     OUT.mkdir(exist_ok=True)
     (OUT / f"e2e-{args.tag}.md").write_text(md, encoding="utf-8")
+    # 回答原文另存一份，改版对比要逐题读
+    (OUT / f"e2e-{args.tag}.json").write_text(json.dumps(
+        [{"n": c["n"], "q": c["q"], "engine": e, "answer": g.get("answer"), "ok": j["ok"],
+          "orphan": j["orphan"], "review": (g.get("review") or {}).get("verdict"), "secs": g.get("secs")}
+         for c, e, g, j in rows], ensure_ascii=False, indent=1), encoding="utf-8")
     print(md)
 
 

@@ -19,6 +19,7 @@ from rag.generator import cited_numbers
 from rag.healthcheck import RULES as HEALTH_RULES
 from rag.periods import FY, RANK, SHORT, TITLE, period_of
 from ui.card import CARD_KEYS
+from ui.glossary import payload as glossary_payload
 from ui.turn import conversation_key
 
 # 组件不做流式输出（Streamlit 的 rerun 模型做逐字流式会卡顿、闪烁），
@@ -121,7 +122,7 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
     # 结构化财务卡片（ui/card.py 产出）：组件收到就用、收不到就不渲染。
     # cardTitle / cardNote 跟着消息走 —— 全局默认值是「演示数据」，不能挂到真实数字上。
     # tableCheck：回答里 Markdown 表格的逐格核对结果（ui/turn.py:history_entry 算好存下）。
-    for key in CARD_KEYS + ("tableCheck", "table", "demo", "kind", "options", "understood", "review"):
+    for key in CARD_KEYS + ("tableCheck", "table", "demo", "kind", "options", "understood", "review", "style"):
         if turn.get(key):
             msg[key] = turn[key]
     if isinstance(msg.get("health"), dict):
@@ -290,6 +291,7 @@ def build_data(
     reports: list[dict] | None = None,
     persist: dict | None = None,
     restore_wanted: bool = False,
+    style_switch: bool = True,
 ) -> dict:
     """组装下发给组件的完整 data。"""
     company = doc.get("company") or ""
@@ -331,5 +333,10 @@ def build_data(
         # restoreWanted 为真时组件把 localStorage 里的存档送回来一次。
         "persist": persist,
         "restoreWanted": bool(restore_wanted),
+        # 回答风格：style_switch 为假（回滚开关 ANSWER_STYLE=pro）时界面不显示「通俗 / 专业」切换
+        "styleSwitch": bool(style_switch),
+        "styleDefault": "plain" if style_switch else "pro",
+        # 通俗版回答里的术语解释（ui/glossary.py，程序维护的固定词表）
+        "glossary": glossary_payload() if style_switch else [],
         "docId": doc.get("doc_id") or "",
     })

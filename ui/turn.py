@@ -101,6 +101,10 @@ def history_entry(turn: dict, answer: str) -> dict:
     # 依据的是哪份年报：同一公司多个年度共用一段对话后，翻原页、标注年份都要靠它。
     if turn.get("doc_id"):
         entry["doc_id"] = turn["doc_id"]
+    # 回答风格（通俗 / 专业）：界面据此决定要不要加术语解释、「算」标签、收起「为什么会这样」。
+    # 只有年报回答才有（体检、几件大事是程序写的正文）；旧条目没有这个键，按专业版显示。
+    if turn.get("style") and not turn.get("kind"):
+        entry["style"] = turn["style"]
     # 这一轮用了多久（从发出问题到回答完整），界面在回答顶部显示「用时 n 秒」
     if turn.get("started"):
         entry["secs"] = max(0, int(round(time.time() - turn["started"])))

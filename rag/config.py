@@ -61,6 +61,10 @@ LLM_TIMEOUT = float(get("LLM_TIMEOUT", "60"))
 # 而且不是靠截断输出 —— 模型的推理量本身从 8297 个 token 降到 2845。
 # 设 0 表示不限（会明显变慢，见 rag/generator.py:ANSWER_BUDGET_RULE 的实测数据）。
 ANSWER_CHAR_BUDGET = int(get("ANSWER_CHAR_BUDGET", "600"))
+# 回答风格。plain = 默认通俗（结论先行 + 「这意味着什么」+「需要留意」），界面可切「专业」；
+# pro = 回滚开关：全部回答用原来的提示词（rag/generator.SYSTEM_PROMPT 原样），界面不显示切换。
+# 两套提示词分开写，专业版一个字没改 —— 改这个值就能退回改版之前。
+ANSWER_STYLE = get("ANSWER_STYLE", "plain")
 # ---------- 扩展分析（第二次模型调用）----------
 # 首轮回答之后再问一次模型「为什么会是这个结果」，作为独立一段追加在后面。
 # 动机：实测发现模型一直在复述检索到的数字，没有做解释；而用户对「深度」的定义正是归因。

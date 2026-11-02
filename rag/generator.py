@@ -16,6 +16,40 @@ SYSTEM_PROMPT = """你是一名严谨的上市公司年报研究助手。下面�
 7. 只有片段里确实没有相关数据时，回答的第一句必须是“年报中未找到相关信息”，然后再说明找到了哪些相关内容；不要改写成“片段中未找到”等其他说法。
 8. 使用中文。先用一两句话给结论。回答涉及两个以上数字（多个科目、本期与上期、多个年份或业务板块）时，把数字整理成一张 Markdown 表格：第一列是项目名，后面按需要列出本期、上期、变化（增减额或增减比例、百分点），最后一列“来源”写 [编号]；表格只放片段里的数字或据片段数字算出的数。表格之后最多用 3 个要点补充口径、原因或需要注意的地方，每点标 [编号]，不要把表格里的数字再复述一遍。只有一两个数字时直接写在句子里，不用表格。"""
 
+# ---------- 通俗版（面向散户）----------
+# 只换第 8 条（版式），1–7 条（只用片段、标引用、合并口径、换算、「未找到」的固定说法）原样保留，
+# 准确性的约束和专业版完全一样。专业版 SYSTEM_PROMPT 不动，config.ANSWER_STYLE=pro 就退回改版前。
+# 几处措辞来自试跑（2026-11-03，精达营收 / 七匹狼毛利率 / 精达现金流，新旧各跑一遍）：
+#   · 单位写在每一格里：单位挪到表头后格子里只剩裸数字，逐格核对认不出，多出 5 个「无出处」；
+#   · 不另算倍数：模型自己算了「是去年的 13.4 倍」，现金流那题多出 12 个「无出处」；
+#   · 不复述表格：第一版草稿的「这意味着什么」是把表里的数换个说法再念一遍；
+#   · 「片段」改叫「年报」，但两个固定短语照写 —— 弃答判定和评测靠它们，界面把「据片段数字计算」显示成「算」标签。
+PLAIN_RULE_8 = """8. 使用中文。读者是没有财务背景的普通投资者，但数字、口径必须和专业版一样准确。对读者说话时把“片段”称为“年报”；固定短语“据片段数字计算”“据片段数据推断”“年报中未找到相关信息”照原样写，界面会处理。严格按下面的顺序写：
+   ① 第一段只写一两句大白话结论，直接回答问题，带上最关键的一两个数字并标 [编号]。正文不附原值（第 6 条的括号原值这里不写）。不要用“综上”“总体来看”开头。
+   ② 回答涉及两个以上数字时，接一张 Markdown 表格：第一列是项目名，后面按需要列出本期、上期、变化，最后一列“来源”写 [编号]。单位写在每个格子里（如“246.74 亿元”），不要只写在表头。只放年报里的数字或据片段数字算出的增减额、增减比例。只有一两个数字时不用表格。
+   ③ 小标题“**这意味着什么**”，最多 3 条，每条一句话，说出表格里看不出来的东西：几个数字放在一起说明了什么（例如“利润增速慢于收入，说明多卖的货没有同比例变成利润”）。不要换个说法复述表格里的单个数字；只用表格里或年报里已有的数字，不要另算倍数、差额或比例。每条标 [编号]；不评价股价，不给买卖建议。
+   ④ 小标题“**需要留意**”，最多 2 条，只写会改变读者理解的口径或风险提醒（例如母公司口径、一次性收益、和去年口径不同）；没有就整段不写。
+   每句尽量不超过 40 个字。专业名词照原样写，不要自己加括号解释（界面会给术语加解释）。"""
+
+STYLES = ("plain", "pro")
+
+
+def resolve_style(requested: str | None) -> str:
+    """这一轮用哪种风格。回滚开关优先：config 设成 pro 时，界面传什么都按专业版答。"""
+    if config.ANSWER_STYLE == "pro":
+        return "pro"
+    if requested in STYLES:
+        return requested
+    return config.ANSWER_STYLE if config.ANSWER_STYLE in STYLES else "plain"
+
+
+def system_prompt(desc: str, style: str = "pro") -> str:
+    base = SYSTEM_PROMPT.format(doc_desc=desc)
+    if style != "plain":
+        return base
+    return base[:base.index("8. 使用中文")] + PLAIN_RULE_8
+
+
 # 明确写出字数上限。**必须给数字** —— 实测过几种软约束，都没用：
 #     A 不限长度      48.2s  推理 8297 tok  正文 1596 字
 #     B 「600 字以内」 17.9s  推理 2845 tok  正文  760 字   ← 快 2.6 倍
@@ -79,9 +113,9 @@ def _history_block(history: list | None) -> str:
 
 def build_messages(question: str, chunks: list[dict], company: str = "", year: str = "",
                    history: list[str] | None = None, period: str = FY,
-                   focus: str = "") -> list[dict]:
+                   focus: str = "", style: str = "pro") -> list[dict]:
     desc = doc_desc(company, year, period)
-    system = SYSTEM_PROMPT.format(doc_desc=desc)
+    system = system_prompt(desc, style)
     if config.ANSWER_CHAR_BUDGET > 0:
         system += ANSWER_BUDGET_RULE.format(budget=config.ANSWER_CHAR_BUDGET)
     if config.ANSWER_WHY_INLINE:
@@ -109,7 +143,7 @@ def get_client():
 def generate(question: str, chunks: list[dict], client=None,
              company: str = "", year: str = "", usage_out: dict | None = None,
              history: list[str] | None = None, period: str = FY,
-             focus: str = "") -> Iterator[str]:
+             focus: str = "", style: str = "pro") -> Iterator[str]:
     """流式返回回答文本片段。
 
     usage_out 传字典时，会把本次调用的 token 用量填进去（需要 stream_options 才会回传）。
@@ -117,11 +151,12 @@ def generate(question: str, chunks: list[dict], client=None,
 
     history 是最近几轮的**问题**，用来消解追问里的指代。不给回答。
     focus 是规划器的「问题理解」（rag/planner.focus_block）：补全后的问题和要逐一回答的要点。
+    style 是回答风格（resolve_style 的结果）：plain 通俗、pro 专业（原提示词）。
     """
     client = client or get_client()
     stream = client.chat.completions.create(
         model=config.LLM_MODEL,
-        messages=build_messages(question, chunks, company, year, history, period, focus),
+        messages=build_messages(question, chunks, company, year, history, period, focus, style),
         temperature=0.1, stream=True, timeout=config.LLM_TIMEOUT,
         stream_options={"include_usage": True},
     )

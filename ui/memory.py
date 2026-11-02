@@ -89,6 +89,8 @@ def clean_entry(e, known_docs: set[str]) -> dict | None:
     secs = e.get("secs")
     if isinstance(secs, int) and not isinstance(secs, bool) and 0 <= secs <= 3600:
         out["secs"] = secs
+    if e.get("style") in ("plain", "pro"):              # 回答风格：只认两个值
+        out["style"] = e["style"]
     did = e.get("doc_id")
     if isinstance(did, str) and _DOC_ID_RE.match(did) and did in known_docs:
         out["doc_id"] = did
@@ -104,7 +106,7 @@ def pack(history: list[dict]) -> list[dict]:
     out = []
     for e in history[-MAX_TURNS:]:
         item = {k: e[k] for k in ("q", "a", "notice", "kind", "doc_id", "queries", "web_sources",
-                                  "options", "understood")
+                                  "options", "understood", "style")
                 if e.get(k)}
         if isinstance(e.get("secs"), int):
             item["secs"] = e["secs"]

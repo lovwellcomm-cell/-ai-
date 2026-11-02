@@ -34,7 +34,7 @@ from rag.external import answer_with_tools
 from rag.financials import load_or_build as load_financials
 from rag.healthcheck import load_or_build as load_health, wants_health
 from rag import drivers as key_drivers
-from rag.generator import analyze, generate, get_client, make_client
+from rag.generator import analyze, generate, get_client, make_client, resolve_style
 from rag import planner, reviewer
 from rag.history import load_older, merge, older_year, wants_trend
 from rag.industry import RETRIEVAL_QUERY as INDUSTRY_QUERY, industry_brief, wants_industry
@@ -513,6 +513,7 @@ result = chat_surface(
         reports=payload.report_menu(docs.values(), meta),
         persist=persist,
         restore_wanted=not st.session_state.get("restored"),
+        style_switch=config.ANSWER_STYLE != "pro",
     ),
     key="chat",
 )
@@ -822,7 +823,7 @@ def advance_turn() -> None:
                      + reviewer.feedback_block(target.get("review_last")))
             return "".join(generate(q, hits, client=client, company=company,
                                     year=year, history=history, period=period_of(meta),
-                                    focus=focus))
+                                    focus=focus, style=target.get("style", "pro")))
 
         def _rev(q, answer, hits, *, client):
             return reviewer.review(q, answer, hits, client=client, plan=target.get("plan"))
@@ -882,8 +883,11 @@ if getattr(result, "new_chat", None):
     st.session_state["chat_warn"] = ""
     st.rerun()
 
-def start_question(text: str) -> None:
-    """开始一轮提问：聊天框里发的、开屏页「这样问」带过来的都走这里，计次规则一样。"""
+def start_question(text: str, style: str | None = None) -> None:
+    """开始一轮提问：聊天框里发的、开屏页「这样问」带过来的都走这里，计次规则一样。
+
+    style 是界面上「通俗 / 专业」的选择（浏览器传来，不可信）：resolve_style 只认两个值，
+    回滚开关 ANSWER_STYLE=pro 时一律按专业版。"""
     if text:
         count_it = config.PUBLIC_DEMO and not user_key
         if count_it:
@@ -904,6 +908,7 @@ def start_question(text: str) -> None:
             "doc_id": doc_id, "q": text,
             "status": "resolving" if config.AUTO_IMPORT_ENABLED else "retrieving",
             "counted": count_it,
+            "style": resolve_style(style),
             # 读秒：界面显示「已思考 n 秒」，完成后记成这一轮的用时（ui/turn.py:history_entry）
             "started": time.time(),
             # 行业动态走另一条路：联网检索成文，不做年报回答 + 扩展；
@@ -917,7 +922,8 @@ def start_question(text: str) -> None:
 
 if result.ask and not busy:
     asked = result.ask.get("text", "") if isinstance(result.ask, dict) else ""
-    start_question(asked.strip())
+    style = result.ask.get("style") if isinstance(result.ask, dict) else None
+    start_question(asked.strip(), style if isinstance(style, str) else None)
 
 # 开屏页「这样问」带过来的问题：进入助手后的第一次运行就发出去（一次性）
 _pending_ask = st.session_state.pop("pending_ask", "")

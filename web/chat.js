@@ -148,6 +148,37 @@ function localState(key) {
   return s;
 }
 
+// 回答风格（通俗 / 专业）：只是这位访客的个人偏好，记在浏览器里；存不了就用服务器给的默认值
+const STYLE_KEY = "arb.style.v1";
+const STYLE_TIP = {
+  plain: "通俗：先给结论，再说这些数字意味着什么；术语可以悬停看解释",
+  pro: "专业：完整口径和原值，适合熟悉财报的读者",
+};
+// 通俗版回答里模型照写的固定短语（rag/generator.PLAIN_RULE_8），显示成小标签
+// 自己带一对括号的整个换掉；嵌在别的括号里（「（-4.35%，据片段数字计算）」）只换短语和它前面的逗号，
+// 外层括号留着，否则括号不成对
+const MARK_RE = /[（(]据片段(数字计算|数据推断)[）)]|[，,、；]?\s*据片段(数字计算|数据推断)/g;
+const MARK_TIP = {
+  数字计算: "这个数是按年报里的数字算出来的，年报没有直接写",
+  数据推断: "这是从年报数字的结构看出来的，年报没有直接这样说",
+};
+// 扩展分析接在首轮回答后面的固定标题（rag/generator.EXTENSION_HEADING）；通俗版把它收起来
+const EXT_SPLIT = "\n\n**扩展分析**\n";
+// 术语表（ui/glossary.py 下发）→ { by: 写法 → 词条, re: 所有写法从长到短的正则 }。
+// 只在词表变了时重建；别名从长到短，「扣除非经常性损益后…净利润」不会被「…净利润」先截走。
+let GLOSS = { src: null, by: new Map(), re: null };
+function glossary(list) {
+  if (GLOSS.src === list) return GLOSS;
+  const by = new Map();
+  (Array.isArray(list) ? list : []).forEach((g) => (g.a || []).forEach((a) => { if (a) by.set(a, g); }));
+  const re = by.size
+    ? new RegExp([...by.keys()].sort((x, y) => y.length - x.length)
+      .map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g")
+    : null;
+  GLOSS = { src: list, by: by, re: re };
+  return GLOSS;
+}
+
 // 回答正文里的 Markdown 表格：表格行与「|---|---|」分隔行（见 appendProse）
 const TABLE_LINE = /^\s*\|.*\|\s*$/;
 const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
@@ -450,6 +481,32 @@ export default function (component) {
     renderDrawer();
   }
 
+  /* ---------------- 回答风格 ---------------- */
+  const styleSeg = q("#styleSeg");
+  const readStyle = () => {
+    let v = null;
+    try { v = localStorage.getItem(STYLE_KEY); } catch (e) { /* 读不了就用默认 */ }
+    return d.styleSwitch && (v === "plain" || v === "pro") ? v : (d.styleDefault || "pro");
+  };
+  let curStyle = readStyle();
+  const paintStyle = () => {
+    styleSeg.querySelectorAll("button").forEach((b) => {
+      b.setAttribute("aria-pressed", b.dataset.v === curStyle ? "true" : "false");
+      b.title = STYLE_TIP[b.dataset.v] || "";
+    });
+  };
+  styleSeg.hidden = !d.styleSwitch;
+  styleSeg.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => {
+      curStyle = b.dataset.v;
+      try { localStorage.setItem(STYLE_KEY, curStyle); } catch (e) { /* 存不了就只在这次有效 */ }
+      paintStyle();
+    };
+  });
+  paintStyle();
+  // 所有提问（输入框、推荐问题、反问选项、卡片按钮）都从这里发出，带上当前风格
+  const ask = (text) => setTriggerValue("ask", { text: text, style: curStyle });
+
   function submit() {
     if (busy) return;
     const text = input.value.trim();
@@ -458,7 +515,7 @@ export default function (component) {
     input.style.height = "auto";
     s.draft = "";
     setSend();
-    setTriggerValue("ask", { text: text });
+    ask(text);
   }
 
   /* ============================================================
@@ -491,7 +548,7 @@ export default function (component) {
         b.type = "button";
         b.appendChild(mk("span", "toc-q-t", x.text));
         b.appendChild(mk("em", null, x.what));
-        b.onclick = () => { if (!busy) setTriggerValue("ask", { text: x.text }); };
+        b.onclick = () => { if (!busy) ask(x.text); };
         qs.appendChild(b);
       });
       row.appendChild(qs);
@@ -571,7 +628,7 @@ export default function (component) {
     // 用户不必等第二次模型调用跑完才看到东西。
     if (m.status === "resolving" || m.status === "retrieving" || m.status === "history" || m.status === "generating" || m.status === "reviewing" || m.status === "analyzing" || m.status === "searching") {
       WEB_LIST = m.webSources || [];
-      if (m.text) appendProse(body, m.text, (m.sources || []).length);
+      if (m.text) appendAnswer(body, m, idx);
       const th = mk("div", "thinking");
       th.appendChild(mk("i", "spin"));
       th.appendChild(mk("span", null, m.statusText || "检索相关片段…"));
@@ -594,7 +651,7 @@ export default function (component) {
     }
 
     WEB_LIST = m.webSources || [];
-    appendProse(body, m.text, (m.sources || []).length, m.tableCheck);
+    appendAnswer(body, m, idx);
     if (m.review && m.review.verdict === "fail") {
       const box = mk("div", "review-fail");
       box.appendChild(mk("div", "review-fail-t", "复核未通过" + (m.review.rounds ? "（已重答 1 次）" : "") + "：" + (m.review.note || "部分内容未能核实")));
@@ -612,7 +669,7 @@ export default function (component) {
         const b = mk("button", "clarify-opt", o);
         b.type = "button";
         b.disabled = !live;
-        b.onclick = () => { if (!d.busy) setTriggerValue("ask", { text: o }); };
+        b.onclick = () => { if (!d.busy) ask(o); };
         box.appendChild(b);
       });
       const other = mk("button", "clarify-opt other", "其他（自己输入）");
@@ -634,11 +691,11 @@ export default function (component) {
   }
 
   /* 把 **粗体** 和 [n] 引用渲染成节点。全程 textContent，不碰 innerHTML。 */
-  function renderRich(container, text, nSources) {
+  function renderRich(container, text, nSources, ctx) {
     const re = /\*\*([^*]+)\*\*|\[([\d,，、\s]+)\]|\[网\s*(\d+)\]/g;
     let last = 0, m;
     while ((m = re.exec(text)) !== null) {
-      if (m.index > last) container.appendChild(document.createTextNode(text.slice(last, m.index)));
+      if (m.index > last) emitText(container, text.slice(last, m.index), ctx);
       if (m[1] != null) {
         container.appendChild(mk("strong", null, m[1]));
       } else if (m[3] != null) {
@@ -677,7 +734,102 @@ export default function (component) {
       }
       last = m.index + m[0].length;
     }
-    if (last < text.length) container.appendChild(document.createTextNode(text.slice(last)));
+    if (last < text.length) emitText(container, text.slice(last), ctx);
+  }
+
+  /* ---------------- 通俗版：术语解释、「算」标签、收起「为什么会这样」 ----------------
+     ctx 只在通俗版回答里有：{ seen: 已解释过的术语, lead: 下一段是不是第一段 }。
+     专业版传 undefined，渲染和改版前一模一样。
+     词表、说明框都按需取（glossary() / termBox()）：这几个函数在渲染路径里先被调用，
+     写成函数体里的 const 会撞暂时性死区（理由同 TABLE_LINE）。 */
+  function emitText(container, str, ctx) {
+    if (!ctx) { container.appendChild(document.createTextNode(str)); return; }
+    let last = 0, m;
+    MARK_RE.lastIndex = 0;
+    while ((m = MARK_RE.exec(str)) !== null) {
+      if (m.index > last) emitTerms(container, str.slice(last, m.index), ctx);
+      const kind = m[1] || m[2];
+      const b = mk("span", "calc-mark", kind === "数字计算" ? "算" : "推断");
+      b.title = MARK_TIP[kind];
+      container.appendChild(b);
+      last = m.index + m[0].length;
+    }
+    if (last < str.length) emitTerms(container, str.slice(last), ctx);
+  }
+
+  /* 每个术语只在第一次出现时加虚线（整条回答算一次）。 */
+  function emitTerms(container, str, ctx) {
+    const { by, re } = glossary(d.glossary);
+    if (!re) { container.appendChild(document.createTextNode(str)); return; }
+    let last = 0, m;
+    re.lastIndex = 0;
+    while ((m = re.exec(str)) !== null) {
+      const g = by.get(m[0]);
+      if (!g || ctx.seen.has(g.t)) continue;
+      ctx.seen.add(g.t);
+      if (m.index > last) container.appendChild(document.createTextNode(str.slice(last, m.index)));
+      const t = mk("span", "term", m[0]);
+      t.tabIndex = 0;
+      t.setAttribute("role", "button");
+      t.setAttribute("aria-label", m[0] + "：" + g.d);
+      t.onmouseenter = t.onfocus = () => showTerm(t, g);
+      t.onmouseleave = t.onblur = hideTerm;
+      t.onclick = (e) => { e.stopPropagation(); showTerm(t, g); };
+      container.appendChild(t);
+      last = m.index + m[0].length;
+    }
+    if (last < str.length) container.appendChild(document.createTextNode(str.slice(last)));
+  }
+
+  /* 术语说明是一个浮在最上层的框（position: fixed），不挂在术语里面：
+     表格外层可以横向滚动（overflow-x: auto），挂在里面会被裁掉。 */
+  function termBox() {
+    let box = q(".term-pop");
+    if (!box) {
+      box = mk("div", "term-pop");
+      box.setAttribute("role", "tooltip");
+      root.appendChild(box);
+    }
+    return box;
+  }
+  function showTerm(el, g) {
+    const termPop = termBox();
+    clear(termPop);
+    termPop.appendChild(mk("b", null, g.t));
+    termPop.appendChild(mk("span", "term-pop-d", g.d));
+    termPop.appendChild(mk("span", "term-pop-w", g.w));
+    termPop.classList.add("show");
+    const r = el.getBoundingClientRect();
+    const w = termPop.offsetWidth, h = termPop.offsetHeight;
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
+    const below = r.bottom + 8 + h < window.innerHeight;
+    termPop.style.left = left + "px";
+    termPop.style.top = (below ? r.bottom + 8 : r.top - 8 - h) + "px";
+  }
+  function hideTerm() { termBox().classList.remove("show"); }
+
+  /* 一条回答的正文。专业版（和改版前的旧回答）原样走 appendProse；
+     通俗版：第一段加重（结论）、术语解释、「算」标签，扩展分析收进「为什么会这样」。 */
+  function appendAnswer(body, m, idx) {
+    const n = (m.sources || []).length;
+    if (m.style !== "plain") return appendProse(body, m.text, n, m.tableCheck);
+    const ctx = { seen: new Set(), lead: true };
+    const text = String(m.text || "");
+    const cut = text.indexOf(EXT_SPLIT);
+    const prose = appendProse(body, cut < 0 ? text : text.slice(0, cut), n, m.tableCheck, ctx);
+    prose.classList.add("plain");
+    if (cut < 0) return prose;
+    const why = mk("details", "why");
+    const key = "why:" + (d.docId || "") + "|" + idx;
+    why.open = s.srcOpen.has(key);
+    why.ontoggle = () => { if (why.open) s.srcOpen.add(key); else s.srcOpen.delete(key); };
+    const sum = mk("summary");
+    sum.appendChild(mk("span", "why-t", "为什么会这样"));
+    sum.appendChild(mk("span", "why-s", "年报里的原因说明和结构变化"));
+    why.appendChild(sum);
+    appendProse(why, text.slice(cut + EXT_SPLIT.length), n, null, ctx);
+    prose.appendChild(why);
+    return prose;
   }
 
   /** 把一段回答正文按空行拆成段落渲染。生成完成和「扩展分析中」两条路径共用。 */
@@ -686,20 +838,38 @@ export default function (component) {
      check 是后端对表格的逐格核对（rag/fidelity.py:unverified_in_tables）。
      TABLE_LINE / TABLE_SEP 定义在模块顶层：组件函数体是从上往下执行的，渲染发生在这里之前，
      写在这里的 const 会撞上暂时性死区（实测：整条助手消息渲染失败）。 */
-  function appendProse(body, text, nSources, check) {
+  function appendProse(body, text, nSources, check, ctx) {
     const prose = mk("div", "prose");
     const bad = (check && check.unverified) || [];
     let lines = [], inTable = false, nTables = 0;
     const flush = () => {
       if (!lines.length) return;
       if (inTable) {
-        prose.appendChild(buildMdTable(lines, nSources, bad));
+        prose.appendChild(buildMdTable(lines, nSources, bad, ctx));
         nTables += 1;
       } else {
         lines.join("\n").split(/\n{2,}/).forEach((para) => {
           if (!para.trim()) return;
+          if (ctx) {
+            // 通俗版：段落第一行只有一个粗体词的是小标题（「这意味着什么」「需要留意」），
+            // 模型常把它和下面的要点写成同一段，所以拆出来单独成一行
+            para = para.replace(/^\s*\n/, "");
+            const hm = para.match(/^\s*\*\*([^*\n]+)\*\*\s*(?:\n|$)/);
+            if (hm) {
+              const h = mk("p", "prose-h");
+              h.appendChild(mk("strong", null, hm[1]));
+              prose.appendChild(h);
+              para = para.slice(hm[0].length);
+              ctx.lead = false;
+              if (!para.trim()) return;
+            }
+          }
           const p = mk("p");
-          renderRich(p, para, nSources);
+          if (ctx) {
+            if (ctx.lead) p.className = "lead";   // 第一段是结论
+            ctx.lead = false;
+          }
+          renderRich(p, para, nSources, ctx);
           prose.appendChild(p);
         });
       }
@@ -729,7 +899,7 @@ export default function (component) {
     return new RegExp("(^|[^\\d.])" + esc).test(cell);
   }
 
-  function buildMdTable(rows, nSources, bad) {
+  function buildMdTable(rows, nSources, bad, ctx) {
     const wrap = mk("div", "md-tbl-wrap");
     const table = mk("table", "md-tbl");
     const split = (ln) => ln.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
@@ -747,7 +917,7 @@ export default function (component) {
       const tr = mk("tr");
       split(ln).forEach((c, i) => {
         const td = mk("td", i === 0 ? "rowname" : null);
-        renderRich(td, c, nSources);
+        renderRich(td, c, nSources, ctx);
         // 行名列不核对（后端也跳过了它）；其余单元格里含未核对数字的，虚线标出
         if (i > 0 && bad.some((b) => hasNumber(c, b))) {
           td.classList.add("unv");
@@ -813,6 +983,8 @@ export default function (component) {
     const tips = [
       cited && { id: "cite", after: body.querySelector(".prose"), b: "点编号看原文。",
                  t: "右侧会打开引用的那一段，再点「查看原页」就是 PDF 那一页。" },
+      body.querySelector(".prose .term") && { id: "term", after: body.querySelector(".prose"), b: "带虚线的词可以悬停看解释",
+                 t: "（手机点一下）；「算」表示这个数是按年报数字算出来的。输入框下方能切换「通俗 / 专业」。" },
       m.review && m.review.verdict && { id: "review", after: body.querySelector(".msg-meta"), b: "鼠标移到复核标签上",
                  t: "（手机点一下），看复核检查了什么：要点有没有答到、数字能不能在原文找到。" },
       card && { id: "card", after: card, b: "点任意一行展开：",
@@ -1441,7 +1613,7 @@ export default function (component) {
       ind.title = "联网查原材料价格、行业格局、同行进展（单独成段，未经报告核验）";
       ind.onclick = () => {
         ind.disabled = true;
-        setTriggerValue("ask", { text: company + "所处行业的最新动态：原材料价格、竞争格局、同行进展" });
+        ask(company + "所处行业的最新动态：原材料价格、竞争格局、同行进展");
       };
       acts.appendChild(ind);
       // 「体检」：同样只挂在最后一条，发的也是一句读得懂的问题（rag/healthcheck.button_question）
@@ -1452,7 +1624,7 @@ export default function (component) {
       hc.title = "审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押等 9 项，红黄绿灯 + 原文页码";
       hc.onclick = () => {
         hc.disabled = true;
-        setTriggerValue("ask", { text: "给" + company + "做个年报体检：审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押" });
+        ask("给" + company + "做个年报体检：审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押");
       };
       acts.appendChild(hc);
       // 「几件大事」：同上，发一句读得懂的问题（rag/drivers.button_question）
@@ -1463,7 +1635,7 @@ export default function (component) {
       kd.title = "从年报里找出最能左右业绩的几个外部因素，配上最新行情和影响估算（首次约一分钟）";
       kd.onclick = () => {
         kd.disabled = true;
-        setTriggerValue("ask", { text: "影响" + company + "的几件大事：哪些因素最能左右业绩、最近有什么变化" });
+        ask("影响" + company + "的几件大事：哪些因素最能左右业绩、最近有什么变化");
       };
       acts.appendChild(kd);
     }
