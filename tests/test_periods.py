@@ -94,12 +94,17 @@ def test_latest_quarter_question():
 # ---------------------------------------------------------------- 「最新财报」
 
 @pytest.mark.parametrize("q", ["最新财报如何", "最新的财报怎么样", "最近一期业绩", "看看最新报告",
-                               "最新一期财务数据", "公司最近的业绩怎么样"])
+                               "最新一期财务数据", "公司最近的业绩怎么样",
+                               # 时间词 + 科目（用户实测：「最新现金流多少」停在了半年报）
+                               "最新现金流多少", "目前负债率高吗", "现在营收怎么样", "最新的毛利率是多少",
+                               "七匹狼最新的经营现金流", "当前财务状况如何"])
 def test_latest_any_report_phrases(q):
     assert periods.wants_latest(q) == "any"
 
 
-@pytest.mark.parametrize("q", ["行业最新动态", "最近行业有什么变化", "营收怎么样", "最新三季报"])
+@pytest.mark.parametrize("q", ["行业最新动态", "最近行业有什么变化", "营收怎么样", "最新三季报",
+                               "最近三年营收趋势", "最近几年利润怎么样", "最近两个季度的收入",
+                               "原材料最新价格"])
 def test_not_latest_report_phrases(q):
     assert periods.wants_latest(q) is None
 
@@ -159,3 +164,16 @@ def test_explicit_year_beats_latest():
 def test_latest_annual_picks_annual_only():
     out = qplan("最新年报怎么样")
     assert out["action"] == "switch" and out["doc"]["doc_id"] == "fy25"
+
+
+def test_latest_cash_flow_on_half_year_report_moves_to_newest(  ):
+    """停在 2026 半年报上问「最新现金流多少」（2026-11-03）：三季报已过截止日，要换到三季报。"""
+    from ui.turn import plan_resolution, with_period
+    tgt = with_period({"company": "", "year": None, "multiple": False}, "最新现金流多少", date(2026, 11, 3))
+    docs = [{"doc_id": "h1", "company": "精达股份", "year": "2026", "period": "H1"},
+            {"doc_id": "q3", "company": "精达股份", "year": "2026", "period": "Q3"}]
+    plan = plan_resolution(tgt, current_company="精达股份", current_year="2026", current_period="H1", docs=docs)
+    assert plan["action"] == "switch" and plan["doc"]["doc_id"] == "q3"
+    # 本地没有三季报：去巨潮导入
+    plan = plan_resolution(tgt, current_company="精达股份", current_year="2026", current_period="H1", docs=docs[:1])
+    assert plan["action"] == "import" and (plan["year"], plan["period"]) == (2026, "Q3")

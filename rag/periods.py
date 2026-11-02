@@ -40,6 +40,14 @@ _GENERIC_Q_RE = re.compile(r"季报|季度报告")
 _LATEST_RE = re.compile(
     r"(最新|最近)\s*(一[期份]|的)?\s*(财报|报告|定期报告|财务报告|财务报表|报表|业绩|财务数据|一期|一份)")
 _LATEST_FY_RE = re.compile(r"(最新|最近)\s*(一[期份]|的)?\s*(年报|年度报告)")
+# 「最新现金流多少」「目前负债率高吗」「现在营收怎么样」：时间词 + 财务科目，同样是要最新一期的数。
+# 用户实测：停在半年报上问「最新现金流多少」，回答还停在半年报（三季报早已披露）。
+# 「最近三年」「最近几个季度」问的是趋势，不算。
+_NOW_RE = re.compile(r"(最新|最近|目前|当前|现在|眼下)(?!\s*[一二两三四五六七八九十几\d]+\s*(年|个?季度|期))")
+_NOW_ITEM_RE = re.compile(r"营收|营业收入|收入|利润|净利|盈利|毛利|现金流|负债|资产|ROE|净资产收益率|"
+                          r"每股收益|费用|存货|应收|分红|经营(情况|状况)|财务(状况|数据)?",
+                          re.IGNORECASE)
+_NOW_SPAN = 12          # 时间词之后多少个字以内出现科目才算
 _END_MONTH = {Q1: 3, H1: 6, Q3: 9, FY: 12}
 _REL_YEAR_RE = re.compile(
     r"(今年|去年|前年)的?\s*(?=第?[一二三四]季度|[一三]季报|半年|中报|上半年|前三季度|全年|年报|年度报告)")
@@ -78,6 +86,8 @@ def wants_latest(question: str) -> str | None:
     if _LATEST_FY_RE.search(q):
         return FY
     if _LATEST_RE.search(q):
+        return "any"
+    if any(_NOW_ITEM_RE.search(q, m.end(), m.end() + _NOW_SPAN) for m in _NOW_RE.finditer(q)):
         return "any"
     return None
 
