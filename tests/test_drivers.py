@@ -236,3 +236,126 @@ def test_market_code_must_match_what_the_driver_says():
 
 def test_every_market_code_has_match_words():
     assert set(dr.MARKET_WORDS) == set(dr.MARKETS)
+
+
+# ---------------------------------------------------------------- 第 4 步：暴露度金额与估算
+
+AMOUNT_PAGE = FILLER + _pages(RISK, COST)     # 第 7 页「单位：万元」，原材料 313,620.68
+
+
+def test_exposure_text_may_mention_verified_amount():
+    # 实测模型常把金额也写进说明：只要金额本身核对过，就不该把整条暴露度删掉
+    ex = {"page": 7, "text": "原材料 313,620.68 万元，占成本 98.02%", "value": "98.02",
+          "amount": {"value": "313,620.68", "unit": "万元"}}
+    stats = {}
+    out = dr.verify([_raw(exposure=ex)], AMOUNT_PAGE, stats=stats)
+    assert out[0]["exposure"]["amount"] == {"value": "313,620.68", "unit": "万元", "yuan": 3136206800.0}
+    assert stats == {}
+
+
+def test_amount_unit_must_match_page_declaration():
+    # 这一页声明的是「单位：万元」，模型说成「元」差一万倍 —— 金额不要，暴露度的百分比照留
+    ex = {"page": 7, "text": "原材料占成本 98.02%", "value": "98.02",
+          "amount": {"value": "313,620.68", "unit": "元"}}
+    out = dr.verify([_raw(exposure=ex)], AMOUNT_PAGE)
+    assert out[0]["exposure"]["value"] == "98.02" and "amount" not in out[0]["exposure"]
+
+
+def test_dropped_exposure_counted():
+    stats = {}
+    ex = {"page": 7, "text": "原材料占成本 50%", "value": "50%"}
+    dr.verify([_raw(exposure=ex)], AMOUNT_PAGE, stats=stats)
+    assert stats["exposure_dropped"] == 1 and stats["dropped"][0]["why"] == "数字不在该页"
+
+
+def test_short_numbers_need_whole_number_match():
+    # 「3」不能因为页面上有「313,620.68」就算找到；「1.71」作为完整的数在第 7 页
+    assert not dr._has_number(dr._spaced("原材料 313,620.68 98.02"), "3")
+    assert dr._has_number(dr._spaced("308,342.72 98.27 1.71"), "1.71")
+    assert dr._has_number(dr._spaced("占比 98.02%"), "98.02")
+    # PDF 把一个数拆开：「1,613,888. 96」接回去
+    assert dr._has_number(dr._spaced("漆包线 原材料\n1,613,888. 96\n95.45"), "1,613,888.96")
+    # 长数字跨行拆开（「2,029,856.2」换行「6」）：去空白后能找到
+    assert dr._number_in(dr._spaced("2,029,856.2\n6"), dr._squash("2,029,856.2\n6"), "2,029,856.26")
+
+
+FIN = {"years": ["2025"], "items": {
+    "revenue": {"values": {"2025": 2.467e10}}, "np_parent": {"values": {"2025": 5.99e8}},
+    "total_assets": {"values": {"2025": 1.45e10}}}}
+
+
+def _driver(kind, now, yuan, name="原材料价格"):
+    return {"type": kind, "name": name, "now": now, "news": [],
+            "exposure": {"amount": {"yuan": yuan}} if yuan else None}
+
+
+def test_estimate_cost_rise_hurts_profit():
+    e = dr.estimate(_driver("成本", {"name": "铜", "change_pct": 1.74}, 1.6138889600e10), FIN)
+    assert e["status"] == "ok"
+    assert e["amount"] == round(-1.6138889600e10 * 0.0174, 2)
+    assert e["share"] == round(e["amount"] / 5.99e8 * 100, 1)       # 约 −46.9%
+    assert e["formula"].startswith("−这项成本 161.39 亿元 × 铜 +1.74%")
+    assert "不能转嫁" in e["assume"] and "上限" in e["assume"]
+
+
+def test_estimate_price_fall_and_sensitivity_attached():
+    e = dr.estimate(_driver("售价", {"name": "碳酸锂", "change_pct": -34.52}, 5.69e9), FIN)
+    assert e["status"] == "ok" and e["amount"] < 0 and e["share_of"] == "归母净利润"
+    assert e["sensitivity"]["amount"] == round(5.69e9 * 0.10, 2)
+
+
+def test_rate_unchanged_gives_sensitivity_per_10bp():
+    fin = {"years": ["2025"], "items": {"total_assets": {"values": {"2025": 5.8e11}},
+                                        "np_parent": {"values": {"2025": 3.45e10}}}}   # 长江电力的量级
+    e = dr.estimate(_driver("利率", {"name": "5年期以上LPR", "change_bp": 0}, 2.34159e11), fin)
+    assert e["status"] == "sensitivity" and e["why"] == "近 3 个月没有变化"
+    assert e["sensitivity"]["amount"] == round(-2.34159e11 * 0.001, 2)        # 每上升 10bp 约少 2.34 亿
+    assert e["sensitivity"]["text"].startswith("利率每上升 10 个基点，利润约减少 2.34 亿元")
+
+
+def test_no_official_data_still_gives_sensitivity():
+    # 牧原：生猪是大商所品种，没有官方数据；但收入金额核对过，敏感度照样能给
+    d = _driver("售价", None, 1.4020717687234e11)
+    d["news"] = ["2026-10-27 猪价下跌[网1]"]
+    fin = {"years": ["2025"], "items": {"revenue": {"values": {"2025": 1.44e11}},
+                                        "np_parent": {"values": {"2025": 1.5487e10}}}}
+    e = dr.estimate(d, fin)
+    assert e["status"] == "sensitivity" and "联网信息只作参考" in e["why"]
+    assert e["sensitivity"]["share"] == round(1.4020717687234e10 / 1.5487e10 * 100, 1)   # 约 90.5%
+
+
+def test_fx_share_is_of_revenue_not_profit():
+    e = dr.estimate(_driver("汇率", {"name": "美元兑人民币中间价", "change_pct": -1.11}, 2.0e10), FIN)
+    assert e["share_of"] == "营业收入"
+    assert e["share"] == round(-2.0e10 * 0.0111 / 2.467e10 * 100, 1)
+
+
+def test_default_market_for_rate_and_fx():
+    assert dr.default_market("利率", "长期借款主要为浮动利率") == "LPR5Y"
+    assert dr.default_market("利率", "银行借款利率上升") == "LPR1Y"
+    assert dr.default_market("汇率", "欧元结算") == "EUR"
+    assert dr.default_market("汇率", "人民币兑外币汇率") == "USD"
+    assert dr.default_market("成本", "铜价") == ""
+
+
+def test_estimate_refuses_without_amount_or_sane_scale():
+    assert "没有找到这项收入" in dr.estimate(
+        {"type": "售价", "name": "生猪价格", "now": None, "news": ["x"]}, FIN)["why"]
+    assert "没有找到" in dr.estimate(_driver("成本", {"name": "铜", "change_pct": 1.0}, None), FIN)["why"]
+    # 成本比全年营收还大：多半是单位读错，不算
+    assert "对不上" in dr.estimate(_driver("成本", {"name": "铜", "change_pct": 1.0}, 3e10), FIN)["why"]
+    assert dr.estimate({"type": "政策", "now": None}, FIN)["status"] == "none"
+
+
+def test_sensitivity_wording():
+    d = _driver("成本", {"name": "铜", "change_pct": 1.74}, 1.6e10)
+    d["name"] = "铜价"
+    assert dr.estimate(d, FIN)["sensitivity"]["text"].startswith("铜价格每上升 10%，利润约减少 16.00 亿元")
+    fx = _driver("汇率", {"name": "美元兑人民币中间价", "change_pct": -1.11}, 2.0e10)
+    assert dr.estimate(fx, FIN)["sensitivity"]["text"].startswith("外币每升值 10%（人民币贬值），境外收入折算约增加")
+
+
+def test_concentration_mistyped_as_cost_not_estimated():
+    d = _driver("成本", None, 1.1e10)
+    d["name"] = "供应商集中（供应商1）"
+    assert dr.estimate(d, FIN)["status"] == "none"

@@ -78,7 +78,10 @@ def main() -> None:
             hit += ok
             row.append(("✓ " if ok else "✗ ") + label + ("" if not match or ok else f"（代码 {match['market'] or '空'}）"))
         exposures = sum(1 for d in found if d["exposure"])
-        lines.append(f"| {name} | {secs}s | {len(found)}/{(out or {}).get('proposed', 0)} | {exposures} | {'；'.join(row)} |")
+        amounts = sum(1 for d in found if (d["exposure"] or {}).get("amount"))
+        dropped = ((out or {}).get("stats") or {}).get("exposure_dropped", 0)
+        lines.append(f"| {name} | {secs}s | {len(found)}/{(out or {}).get('proposed', 0)} | "
+                     f"{exposures}（金额 {amounts}，删 {dropped}） | {'；'.join(row)} |")
         detail.append(f"### {name}\n" + "\n".join(
             f"- [{d['type']}] **{d['name']}** `{d['market'] or '-'}` {d['how']}"
             f"（第 {d['evidence'][0]['page']} 页「{d['evidence'][0]['quote']}」"
@@ -88,7 +91,7 @@ def main() -> None:
     head = [f"# 几件大事评测 {args.tag}", "",
             f"**关键因素命中 {hit}/{total} = {hit / total * 100:.0f}%**，样本 {len(results)} 份，"
             f"用时中位数 {secs[len(secs) // 2]} 秒、最长 {secs[-1]} 秒", "",
-            "| 公司 | 用时 | 留下/模型提出 | 有暴露度 | 关键因素 |", "|---|---|---|---|---|"]
+            "| 公司 | 用时 | 留下/模型提出 | 有暴露度（带金额，核对删掉） | 关键因素 |", "|---|---|---|---|---|"]
     text = "\n".join(head + lines + [""] + detail)
     OUT.mkdir(exist_ok=True)
     (OUT / f"drivers-{args.tag}.md").write_text(text, encoding="utf-8")

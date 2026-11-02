@@ -28,7 +28,8 @@ from .periods import FY, Q3, detect
 
 # 2：加入季报/半年报（period 字段）。老缓存版本不符，第一次用到时自动重抽。
 # 3：三行科目、括号负数、万科的别名 —— 以前漏抽的扣非净利润能补上。
-FIN_VERSION = 3
+# 4：追溯调整后的「调整后 / 调整前」5–6 列格式（长江电力）。
+FIN_VERSION = 4
 FIN_FILE = "financials.json"
 
 UNIT_SCALE = {"亿元": 1e8, "万元": 1e4, "千元": 1e3, "元": 1.0}
@@ -93,11 +94,27 @@ def _match_label(buffer: list[str], head: str) -> str | None:
     return None
 
 
+def _restated(vals: list[float]) -> list[float] | None:
+    """上年数据追溯调整过时，上年（和前年）拆成「调整后、调整前」两列：一行 5 个或 6 个数。
+    两家的列序还不一样（长江电力「调整后 调整前」，蓝色光标「调整前 调整后」），
+    所以两种都试，用披露的增减比例复算，对得上的那种才算：[本年, 上年, 增减%, 前年]。"""
+    if len(vals) == 5:
+        cands = [[vals[0], vals[1], vals[3], vals[4]], [vals[0], vals[2], vals[3], vals[4]]]
+    elif len(vals) == 6:
+        cands = [[vals[0], vals[1], vals[3], vals[4]], [vals[0], vals[2], vals[3], vals[5]]]
+    else:
+        return None
+    ok = [c for c in cands if verify(c)]
+    # 调整前后数字相同（长江电力就是）两种都对：取哪个都一样
+    return ok[0] if ok and all(c[1] == ok[0][1] for c in ok) else None
+
+
 def parse_rows(lines: list[str]) -> dict[str, list[float]]:
     """逐行扫描，返回 {科目键: [本年, 上年, 增减%, 前年]}（原始单位，未换算）。
 
-    只认**恰好 4 个数**的行：本表的列序固定为本年、上年、增减、前年。
-    少一个数（比如「不适用」）就无法确定列的归属，直接跳过，而不是去猜。
+    认**恰好 4 个数**的行：本表的列序固定为本年、上年、增减、前年。
+    5–6 个数的行是追溯调整后的格式，交给 _restated 用复算决定列序。
+    数字个数不对（比如「不适用」）就无法确定列的归属，直接跳过，而不是去猜。
     """
     rows: dict[str, list[float]] = {}
     buffer: list[str] = []
@@ -106,11 +123,13 @@ def parse_rows(lines: list[str]) -> dict[str, list[float]]:
         if not ln:
             continue
         nums = _NUM_RE.findall(ln)
-        if len(nums) == 4:
+        vals = [_to_float(n) for n in nums] if len(nums) == 4 else (
+            _restated([_to_float(n) for n in nums]) if len(nums) in (5, 6) else None)
+        if vals:
             head = ln[: ln.find(nums[0])].strip()
             key = _match_label(buffer, head)
             if key and key not in rows:
-                rows[key] = [_to_float(n) for n in nums]
+                rows[key] = vals
             buffer = []
             continue
         if nums or _YEAR_RE.search(ln):

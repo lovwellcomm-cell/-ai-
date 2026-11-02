@@ -211,6 +211,41 @@ VANKE = """
 """
 
 
+# 长江电力 2025：上年追溯调整，上年拆成「调整后 调整前」两列，一行 5 个数
+CJDL = """
+(一) 主要会计数据
+单位：元 币种：人民币
+主要会计数据 2025年
+2024年
+本期比上年
+同期增减
+(%)
+2023年
+调整后 调整前
+营业收入 86,241,940,222.20 84,491,870,566.52 84,491,870,566.52 2.07 78,143,535,736.10
+利润总额 41,739,840,157.92 38,862,377,699.64 38,862,377,699.64 7.40 32,424,047,365.38
+归属于上市公司股
+东的净利润
+34,502,809,176.39 32,496,172,808.65 32,496,172,808.65 6.17 27,244,616,815.27
+"""
+
+
+def test_restated_five_column_rows():
+    it = _extract(CJDL)["items"]
+    assert it["revenue"]["values"]["2024"] == pytest.approx(84_491_870_566.52)
+    assert it["revenue"]["values"]["2023"] == pytest.approx(78_143_535_736.10)
+    assert it["np_parent"]["values"]["2025"] == pytest.approx(34_502_809_176.39)
+
+
+def test_restated_picks_the_column_that_reconciles():
+    # 调整后 100、调整前 90，披露增减 10%（按调整后算）：只能取调整后
+    assert financials._restated([110.0, 100.0, 90.0, 10.0, 80.0]) == [110.0, 100.0, 10.0, 80.0]
+    # 调整前在前（蓝色光标的列序）：取第二列
+    assert financials._restated([110.0, 90.0, 100.0, 10.0, 70.0, 80.0]) == [110.0, 100.0, 10.0, 80.0]
+    # 两种都对不上：不猜
+    assert financials._restated([110.0, 90.0, 95.0, 10.0, 80.0]) is None
+
+
 def test_three_line_label():
     it = _extract(HENGRUI)["items"]
     assert it["np_deducted"]["values"]["2025"] == pytest.approx(7_413_405_567.05)

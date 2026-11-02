@@ -24,7 +24,8 @@ from datetime import date
 from . import config, market
 from .periods import FY
 
-DRIVERS_VERSION = 1
+# 2：暴露度带金额（第 4 步估算的基数），行情代码须与因素对得上
+DRIVERS_VERSION = 2
 DRIVERS_FILE = "drivers.json"
 MAX_DRIVERS = 5
 
@@ -188,8 +189,14 @@ PROMPT = """你是帮散户读年报的分析助手。下面是一份 A 股定�
   只写原文支持的内容，不要自己推测；句子里出现的数字必须是原文里原样出现的数字
 - evidence：1–2 条原文引用，每条 {{"page": 页码, "quote": "逐字照抄原文，不超过 40 字"}}。必须一字不差地照抄
 - exposure：原文里能说明这个因素影响有多大的数字，例如成本占比、收入占比、敏感性分析金额。
-  写成 {{"page": 页码, "text": "一句话，例如：直接材料占风电业务成本的 70.53%", "value": "原文里的那个数字，逐字照抄"}}。
-  原文没有这样的数字就填 null，绝对不要自己计算或估算
+  写成 {{"page": 页码, "text": "一句话，例如：直接材料占风电业务成本的 70.53%", "value": "原文里的那个数字，逐字照抄",
+  "amount": {{"value": "金额，逐字照抄", "unit": "元 / 万元 / 亿元"}} 或 null}}。
+  amount 是同一页原文里与这个因素直接对应的金额：成本类填这项成本的金额，售价类填这个产品的营业收入，
+  汇率类填境外（国外、外销）营业收入，利率类填浮动利率借款或有息负债的余额；单位照抄那张表的单位。
+  能对上行情代码（market 不为空）的成本类、售价类因素，exposure 和 amount 一定要填：
+  到【成本构成】里找这种原材料（或直接材料、原材料）那一行的金额，到【主营业务构成】里找对应产品那一行的营业收入；
+  同一种原材料分几个产品列了几行时，填金额最大的那一行，text 里写清楚是哪个产品的。
+  原文没有这样的数字就填 null，绝对不要自己计算或估算（包括不要把几行加起来）
 - market：如果这个因素对应下面某个可观察的行情，填它的代码；对应不上就填空字符串
   {markets}
 
@@ -249,6 +256,40 @@ def _squash(text: str) -> str:
     return t.translate(str.maketrans("（）：；，", "():;,"))
 
 
+def _spaced(text: str) -> str:
+    """数字比对用：空白压成一个空格（表格里相邻的两个数不能粘在一起），
+    但 PDF 把一个数拆开的「1,613,888. 96」要接回去（小数点或千分位后面跟空格再跟数字）。"""
+    t = re.sub(r"\s+", " ", text or "")
+    t = re.sub(r"(?<=\d[.,]) (?=\d)", "", t)
+    return t.translate(str.maketrans("（）：；，", "():;,"))
+
+
+def _has_number(text: str, num: str) -> bool:
+    """num 作为一个完整的数出现在 text（_spaced 过的）里：前后不能紧挨数字 / 小数点 / 千分位。
+    子串匹配不行 ——「3」在任何一页都找得到（「313,620.68」里就有）。"""
+    n = re.sub(r"\s+", "", num or "")
+    return bool(n) and re.search(r"(?<![\d.,])" + re.escape(n) + r"(?![\d]|[.,]\d)", text) is not None
+
+
+def _number_in(spaced: str, flat: str, num: str) -> bool:
+    """先按完整的数找；6 位以上的长数字再允许在去空白的文字里直接找
+    （精达成本表把「2,029,856.26」拆成「2,029,856.2」换行「6」，长数字偶然撞上的可能可以忽略）。"""
+    if _has_number(spaced, num):
+        return True
+    n = _squash(num)
+    return len(re.sub(r"\D", "", n)) >= 6 and n in flat
+
+
+def _page_has_number(pages: tuple[list[str], list[str]], page: int, num: str,
+                     spread: int = 1) -> int | None:
+    """pages = (去空白的页面文字, _spaced 过的页面文字)。"""
+    flat, spaced = pages
+    for p in [page] + [page + d for k in range(1, spread + 1) for d in (-k, k)]:
+        if 1 <= p <= len(flat) and _number_in(spaced[p - 1], flat[p - 1], num):
+            return p
+    return None
+
+
 def _page_has(flat: list[str], page: int, needle: str, spread: int = 1) -> int | None:
     """needle 在第 page 页（允许前后 spread 页，引用可能跨页）里出现，返回实际所在页码。"""
     n = _squash(needle)
@@ -263,24 +304,68 @@ def _page_has(flat: list[str], page: int, needle: str, spread: int = 1) -> int |
 _CLAUSE_RE = re.compile(r"(?<=[，；。,;])")
 
 
-def _numbers_ok(text: str, pool: str) -> bool:
-    return all(_squash(x) in pool for x in _NUM_RE.findall(text))
+def _numbers_ok(text: str, pool: tuple[str, str]) -> bool:
+    return all(_number_in(pool[1], pool[0], x) for x in _NUM_RE.findall(text))
 
 
-def verified_how(how: str, pool: str) -> str:
+def verified_how(how: str, pool: tuple[str, str]) -> str:
     """说明里的数字必须在给模型看的原文里出现过。按分句检查，带着找不到的数字的分句删掉。
     实测：长江电力那条写了「影响净利润约 6,780.03 万元」，而暴露度一栏是空的 —— 这种数不能放过。"""
     kept = [c for c in _CLAUSE_RE.split(how) if c and _numbers_ok(c, pool)]
     return "".join(kept).strip("，；,; ")
 
 
-def verify(raw: list, pages_lines: list[list[str]], sections: dict | None = None) -> list[dict]:
+UNIT_SCALE = {"元": 1.0, "千元": 1e3, "万元": 1e4, "亿元": 1e8}
+_AMOUNT_RE = re.compile(r"^-?\d[\d,]*(?:\.\d+)?$")
+_UNIT_DECL_RE = re.compile(r"单位:(亿元|万元|千元|元)")          # 在 _squash 过的文字上找
+
+
+def _verified_amount(raw, pages: tuple[list[str], list[str]], page: int) -> dict | None:
+    """暴露度里的金额 → {"value": 原文写法, "unit", "yuan": 换算成元}。
+    金额必须逐字出现在那一页；单位只认元 / 千元 / 万元 / 亿元，而且不是「元」时那一页上要能看到这个单位。"""
+    if not isinstance(raw, dict):
+        return None
+    value, unit = str(raw.get("value") or "").strip(), str(raw.get("unit") or "").strip()
+    if unit not in UNIT_SCALE or not _AMOUNT_RE.match(value):
+        return None
+    flat = pages[0]
+    if not _page_has_number(pages, page, value, spread=0):
+        return None
+    if unit != "元" and not _page_has(flat, page, unit, spread=0):
+        return None
+    # 同一页可能有几张表、单位不同；模型报的单位必须是这一页声明过的单位之一（报错差一万倍）
+    declared = set(_UNIT_DECL_RE.findall(flat[page - 1])) if 1 <= page <= len(flat) else set()
+    if declared and unit not in declared:
+        return None
+    yuan = float(value.replace(",", "")) * UNIT_SCALE[unit]
+    return {"value": value, "unit": unit, "yuan": yuan} if yuan > 0 else None
+
+
+def default_market(kind, said: str) -> str:
+    """利率、汇率因素的行情代码由程序定，不靠模型（实测同一份长江电力，有一轮模型就没填利率代码）：
+    利率提到长期 / 5 年用 5 年期 LPR，否则 1 年期；汇率按提到的币种，都没提就用美元。"""
+    if kind == "利率":
+        return "LPR5Y" if re.search(r"长期|5\s*年|五年", said) else "LPR1Y"
+    if kind == "汇率":
+        for code, words in (("USD", ("美元",)), ("EUR", ("欧元",)), ("HKD", ("港元", "港币")),
+                            ("JPY", ("日元",))):
+            if any(w in said for w in words):
+                return code
+        return "USD"
+    return ""
+
+
+def verify(raw: list, pages_lines: list[list[str]], sections: dict | None = None,
+           stats: dict | None = None) -> list[dict]:
     """模型的输出 → 核对过的因素。引用找不到的删掉；一条引用都不剩的因素不要；
     暴露度的数字必须在那一页原文里出现，否则只删暴露度；说明里的数字要在给模型的原文里出现；
     行情代码必须在白名单里。"""
     flat = [_squash("".join(lines)) for lines in pages_lines]
-    pages = sorted({p for v in (sections or {}).values() for p, _ in v})
-    pool = "".join(flat[p - 1] for p in pages if 1 <= p <= len(flat)) if pages else "".join(flat)
+    spaced = [_spaced(" ".join(lines)) for lines in pages_lines]
+    both = (flat, spaced)
+    used = sorted({p for v in (sections or {}).values() for p, _ in v if 1 <= p <= len(flat)})
+    used = used or list(range(1, len(flat) + 1))
+    pool = ("".join(flat[p - 1] for p in used), " | ".join(spaced[p - 1] for p in used))
     out = []
     for d in raw or []:
         if not isinstance(d, dict) or not str(d.get("name") or "").strip():
@@ -305,14 +390,27 @@ def verify(raw: list, pages_lines: list[list[str]], sections: dict | None = None
                 page = 0
             value, text = str(ex.get("value") or "").strip(), str(ex.get("text") or "").strip()
             nums = _NUM_RE.findall(value)
-            # 暴露度的每个数字都要在原文那一页找到；说明文字里出现的数字也必须是这些数
-            if nums and text and all(_page_has(flat, page, x, spread=0) for x in nums) \
-                    and set(_NUM_RE.findall(text)) <= set(nums):
+            amount = _verified_amount(ex.get("amount"), both, page) if page else None
+            # 暴露度的每个数字都要在原文那一页找到；说明文字里的每个数字也要在那一页（或相邻页）找到。
+            # 原来要求说明里只能出现 value 本身的数字，实测误删一大片：模型会写
+            # 「锂化合物及衍生品营业收入 5,696,809,013.84 元，占营业收入 55.06%」—— 55.06% 也是原文里的数
+            if nums and text and all(_page_has_number(both, page, x, spread=0) for x in nums) \
+                    and all(_page_has_number(both, page, x) for x in _NUM_RE.findall(text)):
                 exposure = {"page": page, "text": text[:80], "value": value[:30]}
+                if amount is not None:
+                    exposure["amount"] = amount
+            elif stats is not None:
+                stats["exposure_dropped"] = stats.get("exposure_dropped", 0) + 1
+                why = ("没有数字" if not nums or not text else
+                       "数字不在该页" if not all(_page_has_number(both, page, x, spread=0) for x in nums) else
+                       "说明里的数字找不到出处")
+                stats.setdefault("dropped", []).append({"why": why, "exposure": ex})
         market = str(d.get("market") or "").strip()
         said = str(d["name"]) + str(d.get("how") or "") + "".join(e["quote"] for e in evidence)
         if market not in MARKETS or not any(w in said for w in MARKET_WORDS.get(market, ())):
             market = ""
+        if not market:
+            market = default_market(d.get("type"), said)
         out.append({
             "type": d.get("type") if d.get("type") in TYPES else "其他",
             "name": str(d["name"]).strip()[:30],
@@ -336,9 +434,11 @@ def build_from_lines(pages_lines: list[list[str]], *, client, company: str = "",
     raw = ask_model(sections, client=client, company=company, year=year)
     if raw is None:
         return None
+    stats: dict = {}
+    found = verify(raw, pages_lines, sections, stats)
     return {"version": DRIVERS_VERSION, "period": period,
             "sections": {k: [p for p, _ in v] for k, v in sections.items()},
-            "drivers": verify(raw, pages_lines, sections), "proposed": len(raw)}
+            "drivers": found, "proposed": len(raw), "stats": stats}
 
 
 def load_or_build(doc_id: str, *, client) -> dict | None:
@@ -511,4 +611,108 @@ def load_latest(doc_id: str, found: dict, *, client, api_key: str = "", company:
         path.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
     except OSError:
         pass
+    return out
+
+
+# ---------------------------------------------------------------- 第 4 步：估算影响
+#
+# 基数金额必须来自年报原文核对过的数字（第 2 步 exposure.amount）。公式固定、由程序算，模型不参与：
+#   成本：−（这项成本 × 涨幅）       假设用量不变、涨价完全不能转嫁
+#   售价：  这个产品的收入 × 涨跌幅   假设销量不变
+#   汇率：  境外收入 × 中间价变动     只算收入折算，没扣外币成本和套期保值 → 折算成占营业收入，不折算成利润
+#   利率：−（借款余额 × 利率变动）   假设全部是浮动利率、余额不变
+# 有官方行情（第 3 步）时按「最近 3 个月的变化持续一整年」算，是上限、税前口径；
+# 没有官方行情（大商所品种、联网信息只作参考）或近 3 个月没变时，给敏感度：每变动 10% / 10 个基点影响多少。
+# 实测：牧原生猪收入 1,402 亿，猪价没有官方数据，但「每变动 10% 影响 140 亿」本身就很说明问题。
+
+def _fin(fin: dict | None, key: str) -> float | None:
+    try:
+        return float(fin["items"][key]["values"][fin["years"][0]])
+    except (TypeError, KeyError, ValueError, IndexError):
+        return None
+
+
+def _yi(v: float) -> str:
+    a = abs(v)
+    return f"{v / 1e8:,.2f} 亿元" if a >= 1e8 else f"{v / 1e4:,.2f} 万元" if a >= 1e4 else f"{v:,.2f} 元"
+
+
+BASE_NAMES = {"成本": "这项成本", "售价": "这项收入", "汇率": "境外收入", "利率": "借款余额"}
+ASSUME = {
+    "成本": "假设用量不变、涨价完全不能转嫁给客户，未考虑套期保值和库存",
+    "售价": "假设销量不变，未考虑成本同步变化",
+    "汇率": "只算境外收入折算成人民币的变化，未扣除外币成本和套期保值",
+    "利率": "假设这部分借款全部按浮动利率计息、余额不变",
+}
+
+
+SENS_STEP = {"成本": ("10%", 0.10), "售价": ("10%", 0.10), "汇率": ("10%", 0.10),
+             "利率": ("10 个基点", 0.001)}
+_PRICE_RE = re.compile(r"价|成本|费")
+
+
+def _sens_text(kind: str, d: dict, label: str, per: float) -> str:
+    """敏感度的一句话：铜价每上升 10%，利润约减少 16.14 亿元。"""
+    if kind == "利率":
+        head = f"利率每上升 {label}"
+    elif kind == "汇率":
+        head = f"外币每升值 {label}（人民币贬值）"
+    else:
+        name = (d.get("now") or {}).get("name") or (MARKETS.get(d.get("market") or "", ("",))[0])
+        head = f"{name}价格每上升 {label}" if name else f"价格每上升 {label}"
+    what = "境外收入折算" if kind == "汇率" else ("利润" if per < 0 else "收入")
+    return f"{head}，{what}约{'减少' if per < 0 else '增加'} {_yi(abs(per))}"
+
+
+def estimate(d: dict, fin: dict | None) -> dict:
+    """一个因素 →
+      {"status": "ok", …}           有官方行情：按近 3 个月的实际变化估算，另附敏感度
+      {"status": "sensitivity", …}  有基数没有可用的变化：只给「每变动 10% / 10 个基点」的敏感度
+      {"status": "none", "why"}     算不了，说明原因
+    共有字段：share_of（「归母净利润」或「营业收入」）、sensitivity、assume。"""
+    kind, now = d.get("type"), d.get("now") or {}
+    # 成本 / 售价类要真是在说价格：实测立讯「供应商集中（供应商 1）」被归成成本类，
+    # 算出「价格每上升 10% 利润少 113.85 亿」—— 话说不通，不算
+    if kind not in ASSUME or (kind in ("成本", "售价") and not _PRICE_RE.search(d.get("name") or "")):
+        return {"status": "none", "why": "这类因素没有可以直接套用的公式，只能看文字描述"}
+    base = (((d.get("exposure") or {}).get("amount")) or {}).get("yuan")
+    if not base:
+        return {"status": "none", "why": f"年报里没有找到{BASE_NAMES[kind]}的金额"}
+    revenue, assets = _fin(fin, "revenue"), _fin(fin, "total_assets")
+    cap = assets if kind == "利率" else revenue
+    if cap and base > cap * 1.05:
+        # 量级对不上（多半是单位读错），宁可不算
+        return {"status": "none", "why": "金额口径和报表对不上，不作估算"}
+    sign = -1 if kind in ("成本", "利率") else 1
+    # 汇率只算到收入折算：外币成本、套期保值会抵掉一部分，折成「占利润」会夸大
+    if kind == "汇率":
+        share_of, denom = "营业收入", revenue
+    else:
+        np_ = _fin(fin, "np_parent")
+        share_of, denom = "归母净利润", (np_ if np_ and np_ > 0 else None)
+
+    def share(v: float) -> float | None:
+        return round(v / denom * 100, 1) if denom else None
+
+    label, step = SENS_STEP[kind]
+    per = sign * base * step
+    out = {"share_of": share_of, "assume": ASSUME[kind] + "；税前口径，是上限",
+           "sensitivity": {"step": label, "amount": round(per, 2), "share": share(per),
+                           "text": _sens_text(kind, d, label, per)}}
+    change = None
+    if kind == "利率" and now.get("change_bp"):
+        impact = -base * now["change_bp"] / 10000
+        change = f"{now['name']} {now['change_bp']:+d}bp"
+    elif kind != "利率" and now.get("change_pct"):
+        impact = sign * base * now["change_pct"] / 100
+        change = f"{now['name']} {now['change_pct']:+.2f}%"
+    if change is None:
+        out["status"] = "sensitivity"
+        out["why"] = ("近 3 个月没有变化" if now else
+                      "没有官方行情数据（联网信息只作参考、不参与计算）" if d.get("news") else
+                      "没有可以计算的最新数据")
+        return out
+    out.update(status="ok", amount=round(impact, 2), share=share(impact),
+               formula=f"{'−' if sign < 0 else ''}{BASE_NAMES[kind]} {_yi(base)} × {change} ≈ {_yi(impact)}")
+    out["assume"] += "；按最近 3 个月的变化持续一整年估算"
     return out
