@@ -60,6 +60,10 @@ PROMPT = """你是上市公司定期报告（年报、季报）问答助手的�
   否则填 {{"question": "", "options": []}}。
 - reply：intent 为 out_of_scope 时，用一句话礼貌说明这里只能回答定期报告里的内容，可以举一个能问的例子；否则填空字符串。
 
+对话历史里的「已核对的数据」是前几轮从某份报告里核对过的数字，回答环节能直接引用。
+问题要拿新报告和这些数据对比时（"结合最新季报对比一下"），year/period 填**还没有数据**的那份报告，
+intent 按问题本身填（不要因为要多份报告就填 trend 或 clarify）；restated 里写清楚两份报告各是哪份。
+
 只输出 JSON：
 {{"restated": "", "intent": "report", "company": "", "multiple": false, "year": null, "period": null,
 "card": false, "subquestions": [], "queries": [], "clarify": {{"question": "", "options": []}}, "reply": ""}}"""
@@ -82,6 +86,8 @@ def _context(question: str, history: list, current: dict, docs: list[dict], toda
                 hist.append(f"用户：{h['q']}")
             if h.get("gist"):
                 hist.append(f"助手（结论摘要）：{h['gist']}")
+            if h.get("facts"):
+                hist.append(f"已核对的数据（会自动带给回答环节）：{h['facts']}")
         elif h:
             hist.append(f"用户：{h}")
     if hist:

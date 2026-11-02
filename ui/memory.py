@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 
+from rag.notes import sources_line
 from ui.card import CARD_KEYS
 
 MAX_TURNS = 12            # 每家公司在浏览器里最多留几轮
@@ -28,6 +29,8 @@ _WEB_STR = {"title": 200, "url": 600, "site": 80, "date": 20}
 # 卡片、表格核对这些是程序算好的展示数据：结构复杂，原样带回，只限制总体大小
 _OPAQUE = CARD_KEYS + ("tableCheck", "review")
 _OPAQUE_MAX = 6000
+MAX_NOTES = 12            # 每轮最多几条事实笔记（rag/notes.MAX_PER_TURN）
+NOTE_TEXT_LIMIT = 300
 # 「几件大事」每个因素带原文引用、最新动态、估算，5 个因素实测约 7–9 千字：超了会在刷新后悄悄消失
 _OPAQUE_MAX_BY_KEY = {"drivers": 16000}
 
@@ -36,7 +39,7 @@ def _trim(v, limit: int) -> str:
     return v[:limit] if isinstance(v, str) else ""
 
 
-def _clean_hit(h) -> dict | None:
+def _clean_hit(h, known_docs: set[str] | None = None) -> dict | None:
     if not isinstance(h, dict):
         return None
     out = {k: _trim(h.get(k), n) for k, n in _HIT_STR.items()}
@@ -45,7 +48,25 @@ def _clean_hit(h) -> dict | None:
         out["page_end"] = max(out["page_start"], int(h.get("page_end") or out["page_start"]))
     except (TypeError, ValueError):
         return None
+    # 事实笔记片段（rag/notes.as_hits）：来自别的报告，翻原页靠它的 doc_id
+    did = h.get("doc_id")
+    if (h.get("note") is True and isinstance(did, str) and _DOC_ID_RE.match(did)
+            and (known_docs is None or did in known_docs)):
+        out.update(note=True, doc_id=did, note_src=_trim(h.get("note_src"), 40))
     return out if out["text"] else None
+
+
+def _clean_note(n, known_docs: set[str]) -> dict | None:
+    """一条事实笔记：报告必须是本地有的，页码是正整数，正文限长。"""
+    if not isinstance(n, dict):
+        return None
+    doc, p = n.get("doc"), n.get("p")
+    if not (isinstance(doc, str) and _DOC_ID_RE.match(doc) and doc in known_docs):
+        return None
+    if not isinstance(p, int) or isinstance(p, bool) or not 1 <= p <= 5000:
+        return None
+    src, text = _trim(n.get("src"), 40), _trim(n.get("t"), NOTE_TEXT_LIMIT)
+    return {"doc": doc, "src": src, "p": p, "t": text} if src and text else None
 
 
 def _clean_web(w) -> dict | None:
@@ -77,7 +98,7 @@ def clean_entry(e, known_docs: set[str]) -> dict | None:
             out.pop(k)
     if out.get("kind") not in (None, *_KINDS):
         out.pop("kind")
-    hits = [h for h in (_clean_hit(x) for x in (e.get("hits") or [])[:12]) if h]
+    hits = [h for h in (_clean_hit(x, known_docs) for x in (e.get("hits") or [])[:16]) if h]
     out["hits"] = hits
     out["queries"] = [q[:200] for q in (e.get("queries") or [])[:6] if isinstance(q, str)]
     web = [w for w in (_clean_web(x) for x in (e.get("web_sources") or [])[:10]) if w]
@@ -91,6 +112,11 @@ def clean_entry(e, known_docs: set[str]) -> dict | None:
         out["secs"] = secs
     if e.get("style") in ("plain", "pro"):              # 回答风格：只认两个值
         out["style"] = e["style"]
+    # 事实笔记（rag/notes.py）：浏览器送回来的，逐条校验
+    raw_notes = e.get("notes") if isinstance(e.get("notes"), list) else []
+    notes = [n for n in (_clean_note(x, known_docs) for x in raw_notes[:MAX_NOTES]) if n]
+    if notes:
+        out["notes"] = notes
     did = e.get("doc_id")
     if isinstance(did, str) and _DOC_ID_RE.match(did) and did in known_docs:
         out["doc_id"] = did
@@ -106,12 +132,13 @@ def pack(history: list[dict]) -> list[dict]:
     out = []
     for e in history[-MAX_TURNS:]:
         item = {k: e[k] for k in ("q", "a", "notice", "kind", "doc_id", "queries", "web_sources",
-                                  "options", "understood", "style")
+                                  "options", "understood", "style", "notes")
                 if e.get(k)}
         if isinstance(e.get("secs"), int):
             item["secs"] = e["secs"]
         item["hits"] = [{k: h.get(k) for k in ("text", "section", "subsection",
-                                                "page_start", "page_end")}
+                                                "page_start", "page_end", "note", "doc_id", "note_src")
+                         if k in h}
                         for h in (e.get("hits") or [])]
         for k in _OPAQUE:
             if e.get(k):
@@ -189,6 +216,10 @@ def recent_context(history: list[dict], n: int) -> list[dict]:
             g = answer_gist(e.get("a", ""))
             if g:
                 item["gist"] = g
+        # 这一轮记下了哪些报告的哪些数据（只有报告名和科目名）：规划器据此知道哪些不用再查
+        facts = sources_line(e)
+        if facts:
+            item["facts"] = facts
         if item["q"]:
             out.append(item)
     return out

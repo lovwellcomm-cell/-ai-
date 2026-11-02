@@ -67,6 +67,16 @@ ANSWER_WHY_RULE = """
 10. 结论之后用 2 句话说明为什么会这样：片段里有原因表述就引原话并标 [编号]；没有就明说“年报未披露具体原因”，不要猜测。"""
 
 
+# 事实笔记（rag/notes.py）：片段里有前几轮从**别的报告**核对过的数字时才加。
+# 第 1 条说「片段都来自同一份年报」，这里给出例外，并要求写明出处报告、提醒口径差异。
+NOTES_RULE = """
+11. 标着“前几轮已核对的数据”的片段来自同一公司的另一份报告（片段标题写明了是哪份），里面的数字已经核对过，可以像其他片段一样用 [编号] 引用。问题需要跨报告对比时用它们；引用时在正文或表格里写明是哪份报告的数（如“2025 年报”“2026 三季报”）。口径不同（全年 vs 前三季度累计、年末 vs 季末）时要说明，不要把不同口径的数直接相减或算增长率。问题用不到这些数据时忽略它们。"""
+
+
+def has_notes(chunks: list[dict]) -> bool:
+    return any(c.get("note") for c in chunks or [])
+
+
 def format_context(chunks: list[dict]) -> str:
     parts = []
     for n, c in enumerate(chunks, start=1):
@@ -120,6 +130,8 @@ def build_messages(question: str, chunks: list[dict], company: str = "", year: s
         system += ANSWER_BUDGET_RULE.format(budget=config.ANSWER_CHAR_BUDGET)
     if config.ANSWER_WHY_INLINE:
         system += ANSWER_WHY_RULE
+    if has_notes(chunks):
+        system += NOTES_RULE
     user = (f"【年报片段】\n{format_context(chunks)}\n\n"
             f"{_history_block(history)}"
             f"{focus}"

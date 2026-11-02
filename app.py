@@ -37,6 +37,7 @@ from rag import drivers as key_drivers
 from rag.generator import analyze, generate, get_client, make_client, resolve_style
 from rag import planner, reviewer
 from rag.history import load_older, merge, older_year, wants_trend
+from rag import notes as fact_notes
 from rag.industry import RETRIEVAL_QUERY as INDUSTRY_QUERY, industry_brief, wants_industry
 from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensure_demo,
                          is_current, list_documents, load_index)
@@ -770,8 +771,13 @@ def advance_turn() -> None:
         target["rewrite"] = diag.get("rewrite", "unused")
         if diag.get("rewrite") == "fallback":
             target["rewrite_error"] = diag.get("rewrite_error", "")
+        # 事实笔记：前几轮在别的报告里核对过的数字，接在检索片段后面编号（rag/notes.py）。
+        # 行业动态的片段只用来给联网检索定方向，不带
+        if target.get("kind") != "industry":
+            hits = hits + fact_notes.as_hits(history, doc_id)
         target["hits"] = hits
         target["queries"] = queries
+        target["src_label"] = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}".strip()
         # 问到营收、利润、现金流这类方向时，附上程序抽取的指标卡。
         # 抽取失败只记在回合上 —— 卡片是锦上添花，不能拖垮回答本身。
         target["status"] = "generating"
@@ -790,6 +796,8 @@ def advance_turn() -> None:
                 target["card_error"] = f"{type(e).__name__}: {e}"
             if card:
                 target.update(card)
+                # 卡片上的数字记成笔记：只用这份报告自己的 fin（六年趋势拼进来的往年数据页码不在这份里）
+                target["fin_notes"] = fact_notes.from_financials(fin, doc_id, target["src_label"])
                 # 问趋势时再抽一份往年年报，把卡片拉长到六年（单独一轮，好显示状态文案）
                 if (fin.get("period") or FY) == FY and want_trend:
                     target["status"] = "history"
@@ -989,6 +997,9 @@ elif result.open_page and isinstance(result.open_page, dict):
     # 原页要从**这条回答依据的那份年报**里渲染：同一段对话可能跨年度，
     # 用户问完 2025 再在侧边栏切到 2024，最后一条回答的引用仍然是 2025 年报的页码。
     source_doc = last.get("doc_id") or doc_id
+    # 事实笔记片段来自别的报告，自带 doc_id
+    if hits and 1 <= n <= len(hits) and hits[n - 1].get("doc_id"):
+        source_doc = hits[n - 1]["doc_id"]
     if hits and 1 <= n <= len(hits) and source_doc in docs:
         try:
             st.session_state["page"] = {

@@ -19,6 +19,7 @@ from rag.fidelity import unverified_in_tables
 from rag.generator import join_answer, should_analyze
 from rag.drivers import brief as drivers_brief
 from rag.healthcheck import brief as health_brief, compact as compact_health
+from rag import notes as fact_notes
 from rag.reviewer import decide, summary
 from rag.periods import (FY, RANK, latest_quarter, latest_report, latest_year, next_report,
                          period_end, period_in, period_of, relative_year, wants_latest,
@@ -120,6 +121,16 @@ def history_entry(turn: dict, answer: str) -> dict:
     check = unverified_in_tables(answer, turn.get("hits") or [])
     if check:
         entry["tableCheck"] = check
+    # 事实笔记（rag/notes.py）：这一轮核对过的数字，带出处，后面几轮换了报告也能引用。
+    # 只有年报回答才记（体检、几件大事、行业动态、反问没有核对过的表格）
+    if not turn.get("kind"):
+        found = fact_notes.merge(
+            turn.get("fin_notes") or [],
+            fact_notes.from_answer(answer, turn.get("hits") or [],
+                                   (check or {}).get("unverified") or [],
+                                   turn.get("doc_id", ""), turn.get("src_label", "")))
+        if found:
+            entry["notes"] = found
     return entry
 
 

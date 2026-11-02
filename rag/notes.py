@@ -1,0 +1,180 @@
+"""事实笔记：把前几轮核对过的数字带进这一轮（跨报告回答第一期）。
+
+用户的例子：先问「近三年发展态势如何」（依据 2025 年报），再问「结合最新季报对比一下」→ 这一轮换到
+三季报上答，年报的数字一个也看不到，只能说「年报中未找到」。一轮只检索一份报告，而用户要的是上下文联动。
+
+做法：每轮结束时从两处抽笔记，**只记核对过的数字**，每条带 doc_id + 页码：
+  · 指标卡用的主要会计数据（rag/financials.py 程序抽取、按披露增减复算过）；
+  · 回答表格里逐格核对通过的行（rag/fidelity.unverified_in_tables 没标出的单元格）。
+不加模型调用。下一轮把同一段对话最近 3 轮里**来自别的报告**的笔记，按「报告 + 页码」合并成最多 4 个
+额外片段，接在检索片段后面编号。这样引用 [n]、逐格核对、复核、来源列表、翻原页都照常工作 ——
+片段自带 doc_id，翻原页时翻的是那份报告。
+
+笔记里的数字在下一轮又会被核对、再被抽成笔记：出处沿用它原来那份报告的页码，不会变成「前几轮」。
+"""
+from __future__ import annotations
+
+import re
+
+from .fidelity import (_CITE_RE, _SEPARATOR_RE, _TABLE_LINE_RE, _found, _hits_index,
+                       _split_row, extract_numbers)
+from .financials import BALANCE_KEYS
+from .periods import FY, SPAN
+
+NOTE_TURNS = 3            # 最近几轮的笔记带进下一轮（用户 2026-11-03 定）
+MAX_PER_TURN = 12         # 每轮最多记几条（一条 = 表格一行 / 一个科目）
+MAX_NOTE_HITS = 4         # 带进下一轮的额外片段最多几个（每个 = 一份报告的一页）
+NOTE_SECTION = "前几轮已核对的数据"
+TEXT_LIMIT = 300
+
+_CITE_NUM_RE = re.compile(r"\[([\d,，、\s]+)\]")
+_BOLD_RE = re.compile(r"\*\*")
+
+
+def _amount(v: float) -> str:
+    return f"{v / 1e8:,.2f} 亿元" if abs(v) >= 1e8 else f"{v / 1e4:,.2f} 万元"
+
+
+def from_financials(fin: dict | None, doc_id: str, src: str) -> list[dict]:
+    """主要会计数据 → 每个科目一条笔记。fin 必须是这份报告自己的（不能是拼了往年年报的六年数据）。"""
+    if not fin or not fin.get("page") or not doc_id:
+        return []
+    period = fin.get("period") or FY
+    years = fin.get("years") or []
+
+    def col(key: str, y: str, i: int) -> str:
+        if period == FY:
+            return f"{y} 年"
+        if key in BALANCE_KEYS:
+            return f"{y} 年{SPAN[period]}末" if i == 0 else f"{y} 年末"
+        return f"{y} 年{SPAN[period]}"
+
+    out = []
+    for key, item in (fin.get("items") or {}).items():
+        vals = item.get("values") or {}
+        cells = [f"{col(key, y, i)} {_amount(vals[y])}" for i, y in enumerate(years) if y in vals]
+        if not cells:
+            continue
+        if item.get("change") is not None:
+            cells.append(f"本期比上年同期增减 {item['change']:+.2f}%")
+        out.append({"doc": doc_id, "src": src, "p": int(fin["page"]),
+                    "t": f"{item.get('label', key)}：{'；'.join(cells)}"[:TEXT_LIMIT]})
+    return out
+
+
+def _source_hit(numbers: list[dict], cited: list[int], hits: list[dict]) -> dict | None:
+    """这一行的数字出自哪个片段：先看这一行引用的片段，再看全部片段；要能在片段里**原样**找到金额。"""
+    order = [hits[n - 1] for n in cited if 1 <= n <= len(hits)]
+    order += [h for h in hits if h not in order]
+    amounts = [n for n in numbers if n["kind"] == "amount"]
+    for h in order:
+        index = _hits_index([h])
+        if any(_found(n["value"], n["dec"], n.get("scale", 1.0), index) for n in amounts):
+            return h
+    # 整行只有百分比（毛利率、占比）：只认这一行自己引用的片段
+    if not amounts and cited and 1 <= cited[0] <= len(hits):
+        return hits[cited[0] - 1]
+    return None
+
+
+def from_answer(answer: str, hits: list[dict], unverified: list[str], doc_id: str,
+                src: str) -> list[dict]:
+    """回答里的 Markdown 表格 → 每行一条笔记，丢掉逐格核对没通过的单元格。
+
+    出处取这一行数字所在的片段：本轮检索的片段 → 这份报告（doc_id）；
+    带进来的笔记片段 → 沿用它自己的报告和页码。
+    """
+    out: list[dict] = []
+    block: list[str] = []
+    bad = [u for u in unverified or [] if u]
+
+    def flush():
+        if len(block) < 3 or not _SEPARATOR_RE.match(block[1]):
+            block.clear()
+            return
+        head = _split_row(block[0])
+        for line in block[2:]:
+            cols = _split_row(line)
+            if len(cols) < 2:
+                continue
+            label = _BOLD_RE.sub("", cols[0]).strip()
+            cited = [int(x) for m in _CITE_NUM_RE.finditer(line)
+                     for x in re.split(r"[,，、\s]+", m.group(1)) if x.isdigit()]
+            cells, numbers = [], []
+            for j, cell in enumerate(cols[1:], start=1):
+                h = head[j] if j < len(head) else ""
+                text = _CITE_RE.sub("", cell).replace("**", "").strip()
+                if not text or "来源" in h or any(b in cell for b in bad):
+                    continue
+                nums = [n for n in extract_numbers(text) if n["kind"] != "year"]
+                if not nums:
+                    continue
+                numbers += nums
+                cells.append(f"{_BOLD_RE.sub('', h).strip()} {text}".strip())
+            if not label or not cells:
+                continue
+            hit = _source_hit(numbers, cited, hits)
+            if hit is None:
+                continue
+            out.append({"doc": hit.get("doc_id") or doc_id,
+                        "src": hit.get("note_src") or src,
+                        "p": int(hit.get("page_start") or 0),
+                        "t": f"{label}：{'；'.join(cells)}"[:TEXT_LIMIT]})
+        block.clear()
+
+    for line in (answer or "").splitlines():
+        if _TABLE_LINE_RE.match(line):
+            block.append(line)
+        else:
+            flush()
+    flush()
+    return [n for n in out if n["doc"] and n["p"] > 0]
+
+
+def merge(*groups: list[dict]) -> list[dict]:
+    """去重（同一报告同一页同一句）并截到 MAX_PER_TURN 条。"""
+    seen, out = set(), []
+    for n in (x for g in groups for x in g or []):
+        key = (n["doc"], n["p"], n["t"])
+        if key not in seen:
+            seen.add(key)
+            out.append(n)
+    return out[:MAX_PER_TURN]
+
+
+def as_hits(history: list[dict], current_doc: str, turns: int = NOTE_TURNS) -> list[dict]:
+    """最近几轮里来自**别的报告**的笔记 → 额外片段（同一报告同一页合成一个）。
+
+    当前报告自己的数字不带：检索本来就在这份报告里找，再带一遍只是重复。
+    越新的轮次越靠前：片段有上限时先留最近的。
+    """
+    pages: dict[tuple[str, int], dict] = {}
+    for e in reversed(history[-turns:] if turns > 0 else []):
+        for n in e.get("notes") or []:
+            if n.get("doc") == current_doc:
+                continue
+            key = (n["doc"], n["p"])
+            if key not in pages:
+                if len(pages) >= MAX_NOTE_HITS:
+                    continue
+                pages[key] = {"doc_id": n["doc"], "note_src": n["src"], "lines": [],
+                              "section": f"{NOTE_SECTION} · {n['src']}", "subsection": "",
+                              "page_start": n["p"], "page_end": n["p"]}
+            if n["t"] not in pages[key]["lines"]:
+                pages[key]["lines"].append(n["t"])
+    hits = []
+    for h in pages.values():
+        lines = h.pop("lines")
+        hits.append(dict(h, text="\n".join(lines), note=True))
+    return hits
+
+
+def sources_line(entry: dict) -> str:
+    """规划器看的一句话：这一轮记下了哪些报告的哪些数据（只列报告和科目名，不带数字）。"""
+    by_src: dict[str, list[str]] = {}
+    for n in entry.get("notes") or []:
+        name = n["t"].split("：", 1)[0]
+        items = by_src.setdefault(n["src"], [])
+        if name not in items:
+            items.append(name)
+    return "；".join(f"{src}（{'、'.join(items[:6])}）" for src, items in by_src.items())
