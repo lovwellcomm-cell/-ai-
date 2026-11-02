@@ -201,12 +201,13 @@ def list_reports(code: str, org_id: str, year: int, period: str = FY) -> list[di
         "sortName": "", "sortType": "", "isHLtitle": "true",
     }
     data = _post_form(ANNOUNCEMENT_URL, form, config.REPORT_SEARCH_TIMEOUT) or {}
-    want = f"{year}年{TITLE[period]}"
+    # 「第」可有可无：七匹狼的三季报标题是「2026年三季度报告」，不是「2026年第三季度报告」
+    want = re.compile(f"{year}年" + TITLE[period].replace("第", "第?"))
     out = []
     for a in data.get("announcements") or []:
         title = str(a.get("announcementTitle") or "").strip()
         compact = re.sub(r"\s+", "", title)
-        if want not in compact:
+        if not want.search(compact):
             continue
         # 「正文」是深交所旧格式里的季报简版，和「摘要」一样不完整
         if any(x in compact for x in ("摘要", "英文", "已取消", "正文")):

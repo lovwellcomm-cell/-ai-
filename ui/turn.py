@@ -16,8 +16,9 @@ from rag.company import normalize, same_company
 from rag.external import join_external, should_search
 from rag.fidelity import unverified_in_tables
 from rag.generator import join_answer, should_analyze
-from rag.periods import (FY, RANK, latest_quarter, latest_year, period_in, period_of,
-                         relative_year, wants_latest_quarter)
+from rag.periods import (FY, RANK, latest_quarter, latest_report, latest_year, next_report,
+                         period_end, period_in, period_of, relative_year, wants_latest,
+                         wants_latest_quarter)
 from ui.card import CARD_KEYS
 
 
@@ -109,6 +110,8 @@ def with_period(target: dict, question: str, today: date | None = None) -> dict:
     期用规则从问题里认，不交给模型：「前三季度」「上半年」「Q1」这些说法是封闭的，
     规则比模型稳，也省一次调用。「去年三季度」里的相对年份顺带换算（模型不换算相对年份）；
     「最新季报」没说哪一季 → 已过披露截止日的最近一期。
+    「最新财报」→ 四种报告里已过截止日的最近一期，标上 latest；下一期如果报告期已经结束、
+    只是还没到截止日（不少公司提前披露），一并记在 newer 里，导入时先试它。
     """
     out = dict(target)
     period = period_in(question)
@@ -118,6 +121,14 @@ def with_period(target: dict, question: str, today: date | None = None) -> dict:
     if period is None and wants_latest_quarter(question):
         latest_y, period = latest_quarter(today)
         year = year if year is not None else latest_y
+    latest = wants_latest(question) if period is None and year is None else None
+    if latest:
+        today = today or date.today()
+        year, period = (latest_year(FY, today), FY) if latest == FY else latest_report(today)
+        newer = (year + 1, FY) if latest == FY else next_report(year, period)
+        out["latest"] = latest
+        if period_end(*newer) < today:
+            out["newer"] = list(newer)
     out["year"] = year
     out["period"] = period
     return out
@@ -148,11 +159,14 @@ def plan_resolution(target: dict, *, current_company: str = "", current_year: st
     same_period = period is None or period == current_period
     if not company:
         # 「那2024年呢？」「一季度呢？」没有公司名，但年份或期变了 —— 按当前公司理解。
-        if current_company and not (same_year and same_period):
+        # 「最新财报」也按当前公司理解：当前就是那一期时，本地仍可能有更新的一份。
+        if current_company and (target.get("latest") or not (same_year and same_period)):
             company = current_company
         else:
             return {"action": "current"}
     here = same_company(company, current_company)
+    if target.get("latest"):
+        return _plan_latest(target, company, here, current_year, current_period, docs)
     if here and same_year and same_period:
         return {"action": "current"}
     if here and year is None and str(current_year).isdigit():
@@ -175,6 +189,33 @@ def plan_resolution(target: dict, *, current_company: str = "", current_year: st
                                               bool(d.get("demo"))))
         return {"action": "switch", "doc": best}
     return {"action": "import", "company": company, "year": year, "period": period or FY}
+
+
+def _plan_latest(target: dict, company: str, here: bool, current_year: str,
+                 current_period: str, docs) -> dict:
+    """「最新财报」：本地这家公司报告期不早于 target 那一期的，取最新一份；没有就去巨潮。
+
+    本地可能有比「已过截止日」更新的报告（提前披露、之前导入过），那份也算最新。
+    """
+    floor = (int(target["year"]), RANK[target["period"]])
+
+    def key(d):
+        return (int(d["year"]), RANK[period_of(d)])
+
+    fresh = [d for d in docs
+             if same_company(d.get("company", ""), company)
+             and str(d.get("year", "")).isdigit() and key(d) >= floor
+             and (target["latest"] != FY or period_of(d) == FY)]
+    if fresh:
+        best = max(fresh, key=lambda d: (key(d), bool(d.get("demo"))))
+        if here and str(best["year"]) == str(current_year) and period_of(best) == current_period:
+            return {"action": "current"}
+        return {"action": "switch", "doc": best}
+    plan = {"action": "import", "company": company, "year": target["year"],
+            "period": target["period"]}
+    if target.get("newer"):
+        plan["newer"] = list(target["newer"])
+    return plan
 
 
 def adopt_turn(turn: dict | None, doc_id: str):

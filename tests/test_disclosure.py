@@ -222,6 +222,18 @@ def test_list_annual_reports_filters_summaries_and_builds_url(monkeypatch):
     assert form["category"] == "category_ndbg_szsh"
 
 
+def test_quarter_title_without_di(monkeypatch):
+    """七匹狼的三季报标题是「2026年三季度报告」（没有「第」），之前因此找不到。"""
+    payload = {"announcements": [
+        {"announcementTitle": "七匹狼关于2026年1-9月计提资产减值准备的公告",
+         "adjunctUrl": "finalpage/2026-10-30/1.PDF"},
+        {"announcementTitle": "2026年三季度报告", "adjunctUrl": "finalpage/2026-10-30/2.PDF"},
+    ]}
+    mock_posts(monkeypatch, [payload])
+    out = disclosure.list_reports("002029", "gssz0002029", 2026, "Q3")
+    assert [r["url"][-6:] for r in out] == ["/2.PDF"]
+
+
 def test_find_report_walks_back_to_the_latest_available_year(monkeypatch):
     monkeypatch.setattr(disclosure, "_current_year", lambda: 2026)
     report = {"announcementTitle": "七匹狼2024年年度报告",

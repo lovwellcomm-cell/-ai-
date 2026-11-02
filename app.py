@@ -26,7 +26,7 @@ from rag import config
 from rag.chunker import chunk_pages
 from rag.company import extract_target
 try:
-    from rag.disclosure import download_pdf, ensure_report, source_site
+    from rag.disclosure import ReportNotFound, download_pdf, ensure_report, source_site
 except Exception as _import_error:          # 部署环境里的 import 失败要能被看见
     st.error(f"模块导入失败：{type(_import_error).__name__}: {_import_error}"
              f"（源码戳 {SOURCE_STAMP}，重载于 {os.environ.get('ARB_RELOAD_AT', '未重载')}）")
@@ -593,8 +593,17 @@ def advance_turn() -> None:
                              "请切换到已有文档，或手动上传/粘贴链接。")
                 st.rerun()
             try:
-                data, fname, info = ensure_report(plan["company"], plan["year"],
-                                                  plan["period"])
+                # 「最新财报」：下一期如果报告期已结束，先试它（可能提前披露了），没有再用已过截止日的那期
+                attempts = ([tuple(plan["newer"])] if plan.get("newer") else []) \
+                    + [(plan["year"], plan["period"])]
+                for i, (want_year, want_period) in enumerate(attempts):
+                    try:
+                        data, fname, info = ensure_report(plan["company"], want_year, want_period)
+                        plan = dict(plan, year=want_year, period=want_period)
+                        break
+                    except ReportNotFound:
+                        if i == len(attempts) - 1:
+                            raise
                 auto_company = info.get("company") or plan["company"]
                 auto_year = str(info.get("year") or "")
                 label = f"{auto_company} {report_label(auto_year, plan['period'])}".strip()

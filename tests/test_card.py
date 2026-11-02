@@ -101,6 +101,7 @@ def test_missing_items_are_left_out_and_empty_data_gives_no_card():
     "这家公司经营情况怎么样",
     "经营活动现金流为什么大幅增加",
     "近三年业绩趋势",
+    "七匹狼最新财报如何？",
 ])
 def test_wants_card_for_financial_questions(q):
     assert wants_card(q)

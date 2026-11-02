@@ -89,3 +89,73 @@ def test_other_company_stale_local_quarter_is_not_reused():
 def test_latest_quarter_question():
     tgt = with_period({"company": "", "year": None, "multiple": False}, "最新季报怎么样", TODAY)
     assert tgt["period"] == "Q3" and tgt["year"] == 2026
+
+
+# ---------------------------------------------------------------- 「最新财报」
+
+@pytest.mark.parametrize("q", ["最新财报如何", "最新的财报怎么样", "最近一期业绩", "看看最新报告",
+                               "最新一期财务数据", "公司最近的业绩怎么样"])
+def test_latest_any_report_phrases(q):
+    assert periods.wants_latest(q) == "any"
+
+
+@pytest.mark.parametrize("q", ["行业最新动态", "最近行业有什么变化", "营收怎么样", "最新三季报"])
+def test_not_latest_report_phrases(q):
+    assert periods.wants_latest(q) is None
+
+
+def test_latest_annual_phrase():
+    assert periods.wants_latest("最新年报里营收多少") == "FY"
+
+
+def test_latest_report_by_period_end():
+    assert periods.latest_report(date(2026, 11, 2)) == (2026, "Q3")
+    # 2025 年报和 2026 一季报都刚过截止日：报告期更晚的一季报才是最新
+    assert periods.latest_report(date(2026, 5, 1)) == (2026, "Q1")
+    assert periods.latest_report(date(2026, 4, 15)) == (2025, "Q3")
+
+
+def test_latest_on_annual_doc_switches_to_local_newest():
+    """用户实际遇到的：在精达 2025 年报上问「最新财报如何」，本地有 2026 三季报 → 切过去。"""
+    out = qplan("最新财报如何", cur_year="2025", cur_period="FY")
+    assert out["action"] == "switch" and out["doc"]["doc_id"] == "q3"
+
+
+def test_latest_when_already_on_it_stays():
+    assert qplan("最新财报如何") == {"action": "current"}
+
+
+def test_latest_imports_when_local_is_stale():
+    out = qplan("茅台最新财报", company="茅台")
+    assert out == {"action": "import", "company": "茅台", "year": 2026, "period": "Q3"}
+
+
+def test_latest_tries_early_disclosure_first():
+    """10 月中旬：三季度已结束但没到截止日，先试 2026 三季报，没有再用半年报。"""
+    tgt = with_period({"company": "茅台", "year": None, "multiple": False}, "最新财报",
+                      date(2026, 10, 15))
+    assert (tgt["year"], tgt["period"], tgt["newer"]) == (2026, "H1", [2026, "Q3"])
+    out = plan_resolution(tgt, current_company="精达股份", current_year="2026",
+                          current_period="Q3", docs=QDOCS, today=date(2026, 10, 15))
+    assert out == {"action": "import", "company": "茅台", "year": 2026, "period": "H1",
+                   "newer": [2026, "Q3"]}
+    # 11 月初：年报的报告期还没结束，不白查一次
+    assert "newer" not in with_period({"company": "", "year": None}, "最新财报", TODAY)
+
+
+def test_latest_local_early_copy_counts():
+    """本地已经有提前披露的那份（比已过截止日的更新），它就是最新。"""
+    tgt = with_period({"company": "", "year": None}, "最新财报", date(2026, 10, 15))
+    out = plan_resolution(tgt, current_company="精达股份", current_year="2025",
+                          current_period="FY", docs=QDOCS, today=date(2026, 10, 15))
+    assert out["action"] == "switch" and out["doc"]["doc_id"] == "q3"
+
+
+def test_explicit_year_beats_latest():
+    tgt = with_period({"company": "", "year": 2024, "multiple": False}, "2024年最新财报", TODAY)
+    assert "latest" not in tgt
+
+
+def test_latest_annual_picks_annual_only():
+    out = qplan("最新年报怎么样")
+    assert out["action"] == "switch" and out["doc"]["doc_id"] == "fy25"

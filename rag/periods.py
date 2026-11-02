@@ -34,7 +34,13 @@ _PATTERNS = (
     (Q1, r"第?一季度|一季报|[Qq]1|1\s*[-–—~～至到]\s*3\s*月"),
     (FY, r"第?四季度|[Qq]4|全年|\d{4}\s*年?\s*(?:年报|年度报告|年度)|(?:今年|去年|前年)的?(?:年报|年度报告)"),
 )
-_GENERIC_Q_RE = re.compile(r"季报|季度报告|最新一期|最近一期")
+_GENERIC_Q_RE = re.compile(r"季报|季度报告")
+# 「最新财报怎么样」「最近一期业绩」：没说哪一期，四种报告里取最新披露的那份。
+# 只认「最新/最近 + 报告类名词」：「行业最新动态」「最近行业有什么变化」不是在要报告。
+_LATEST_RE = re.compile(
+    r"(最新|最近)\s*(一[期份]|的)?\s*(财报|报告|定期报告|财务报告|财务报表|报表|业绩|财务数据|一期|一份)")
+_LATEST_FY_RE = re.compile(r"(最新|最近)\s*(一[期份]|的)?\s*(年报|年度报告)")
+_END_MONTH = {Q1: 3, H1: 6, Q3: 9, FY: 12}
 _REL_YEAR_RE = re.compile(
     r"(今年|去年|前年)的?\s*(?=第?[一二三四]季度|[一三]季报|半年|中报|上半年|前三季度|全年|年报|年度报告)")
 _REL = {"今年": 0, "去年": 1, "前年": 2}
@@ -59,8 +65,21 @@ def period_in(question: str) -> str | None:
 
 
 def wants_latest_quarter(question: str) -> bool:
-    """「最新季报」「最近一期」：没说哪一季，取已经披露的最近一期季报。"""
+    """「最新季报」：没说哪一季，取已经披露的最近一期季报。"""
     return bool(_GENERIC_Q_RE.search(question or "")) and period_in(question) is None
+
+
+def wants_latest(question: str) -> str | None:
+    """「最新财报」→ "any"（四种报告都算）；「最新年报」→ FY；没这么问 → None。
+    明确说了哪一期（「最新三季报」）的交给 period_in，这里不管。"""
+    q = question or ""
+    if period_in(q) is not None:
+        return None
+    if _LATEST_FY_RE.search(q):
+        return FY
+    if _LATEST_RE.search(q):
+        return "any"
+    return None
 
 
 def relative_year(question: str, today: date | None = None) -> int | None:
@@ -94,6 +113,26 @@ def latest_quarter(today: date | None = None) -> tuple[int, str]:
     best = max(((latest_year(p, today), p) for p in (Q1, H1, Q3)),
                key=lambda t: (t[0], RANK[t[1]]))
     return best
+
+
+def latest_report(today: date | None = None) -> tuple[int, str]:
+    """已经过了截止日的最近一期报告（四种都算），按报告期末的先后比：
+    2026-05-01 时 2025 年报和 2026 一季报都刚过截止日，取报告期更晚的一季报。"""
+    today = today or date.today()
+    return max(((latest_year(p, today), p) for p in PERIODS),
+               key=lambda t: (t[0], RANK[t[1]]))
+
+
+def period_end(year: int, period: str) -> date:
+    month = _END_MONTH[period]
+    return date(year, month, 31 if month in (3, 12) else 30)
+
+
+def next_report(year: int, period: str) -> tuple[int, str]:
+    """紧接着的下一期：三季报之后是同年年报，年报之后是次年一季报。"""
+    order = (Q1, H1, Q3, FY)
+    i = order.index(period)
+    return (year + 1, Q1) if period == FY else (year, order[i + 1])
 
 
 def report_label(year: str | int, period: str) -> str:
