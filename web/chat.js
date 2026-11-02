@@ -28,6 +28,9 @@ const ICONS = {
   doc: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
 };
 
+// 第一次用到时的小提示：看过哪几个记在浏览器里（addCoach）
+const TIP_KEY = "arb.tips.v1";
+
 // 复核标签的说明：复核员实际做的三件事（rag/reviewer.py 的 PROMPT），三种状态共用
 const REVIEW_DOES = "回答生成后，由另一个模型对照检索到的原文片段复核：要点有没有答到、数字和说法能否在原文找到、"
   + "有没有原文里明明有却说「未找到」。";
@@ -109,15 +112,21 @@ function syncStore(d, setTriggerValue) {
   writeStore(obj);
 }
 
-const HERO_SUGS = [
-  { key: "rev",    tag: "财务摘要",   text: "营业收入和归母净利润分别是多少？" },
-  { key: "margin", tag: "经营分析",   text: "毛利率同比变化的原因是什么？" },
-  { key: "health", tag: "年报体检",   text: "给这家公司做个年报体检" },
-  { key: "kd",     tag: "几件大事",   text: "影响这家公司业绩的几件大事" },
-  { key: "risk",   tag: "客户与风险", text: "前五大客户与供应商集中度如何？" },
-  { key: "rd",     tag: "研发投入",   text: "研发投入的金额与资本化比例？" },
-  // 教用户用“自动找年报”：点了会去巨潮导入七匹狼，再基于它的年报回答
-  { key: "switch", tag: "换家公司",   text: "七匹狼利润率变化如何？" },
+/* 首页的推荐问题排成年报开头的「目录」：左边是用途，点线引到示例问题，右边小字是回答会带什么。
+   「换一家」那两句教用户用「自动找年报」：点了会去巨潮导入七匹狼，再基于它的报告回答。 */
+const HERO_TOC = [
+  { k: "查一个数", sub: "营收、利润、现金流，带出处", qs: [
+    { text: "营业收入和归母净利润分别是多少？", what: "指标卡" },
+    { text: "毛利率同比变化的原因是什么？", what: "原文 + 分析" }] },
+  { k: "看隐患", sub: "散户最容易漏看的小字", qs: [
+    { text: "给这家公司做个年报体检", what: "9 项红黄绿灯" },
+    { text: "前五大客户与供应商集中度如何？", what: "原文" }] },
+  { k: "看外面", sub: "行情和行业的新变化", qs: [
+    { text: "影响这家公司业绩的几件大事", what: "行情 + 估算" },
+    { text: "所处行业的最新动态", what: "联网" }] },
+  { k: "换一家", sub: "自动从巨潮资讯导入", qs: [
+    { text: "七匹狼利润率变化如何？", what: "导入年报" },
+    { text: "七匹狼三季度利润怎么样？", what: "换季报" }] },
 ];
 
 /* 拼进 innerHTML 的动态字符串一律先转义。
@@ -470,16 +479,25 @@ export default function (component) {
     head.appendChild(p);
     hero.appendChild(head);
 
-    const sugs = mk("div", "sugs");
-    HERO_SUGS.forEach((x) => {
-      const b = mk("button", "sug");
-      b.type = "button";
-      b.appendChild(mk("span", "sug-tag", x.tag));
-      b.appendChild(mk("span", "sug-text", x.text));
-      b.onclick = () => { if (!busy) setTriggerValue("ask", { text: x.text }); };
-      sugs.appendChild(b);
+    const toc = mk("div", "toc");
+    HERO_TOC.forEach((g) => {
+      const row = mk("div", "toc-row");
+      const k = mk("div", "toc-k", g.k);
+      k.appendChild(mk("small", null, g.sub));
+      row.appendChild(k);
+      const qs = mk("div", "toc-qs");
+      g.qs.forEach((x) => {
+        const b = mk("button", "toc-q");
+        b.type = "button";
+        b.appendChild(mk("span", "toc-q-t", x.text));
+        b.appendChild(mk("em", null, x.what));
+        b.onclick = () => { if (!busy) setTriggerValue("ask", { text: x.text }); };
+        qs.appendChild(b);
+      });
+      row.appendChild(qs);
+      toc.appendChild(row);
     });
-    hero.appendChild(sugs);
+    hero.appendChild(toc);
 
     if (d.heroFoot) {
       const f = mk("div", "hero-foot");
@@ -610,6 +628,7 @@ export default function (component) {
     if (m.queries && m.queries.length) body.appendChild(buildTrace(m));
     if (m.sources && m.sources.length) body.appendChild(buildSources(m, idx));
     if (m.webSources && m.webSources.length) body.appendChild(buildWebSources(m, idx));
+    addCoach(m, idx, body);
     body.appendChild(buildActions(m, idx));
     return wrap;
   }
@@ -778,6 +797,43 @@ export default function (component) {
     if (m.table && m.table.rows && m.table.rows.length) body.appendChild(buildTable(m.table));
     card.appendChild(body);
     return card;
+  }
+
+  /* 第一次用到时的小提示：只挂在最后一条回答上，一次一个，按 引用编号 → 复核标签 → 卡片 的顺序轮流；
+     点「知道了」记进浏览器（读写都包 try：隐私模式下存不了就当没看过，不影响别的）。 */
+  function seenTips() {
+    try { return new Set(JSON.parse(localStorage.getItem(TIP_KEY) || "[]")); } catch (e) { return new Set(); }
+  }
+
+  function addCoach(m, idx, body) {
+    if (idx !== (d.messages || []).length - 1 || m.status !== "done") return;
+    const seen = seenTips();
+    const cited = (m.sources || []).some((x) => x.cited) && body.querySelector(".prose .cite");
+    const card = body.querySelector(".hc, .kd");
+    const tips = [
+      cited && { id: "cite", after: body.querySelector(".prose"), b: "点编号看原文。",
+                 t: "右侧会打开引用的那一段，再点「查看原页」就是 PDF 那一页。" },
+      m.review && m.review.verdict && { id: "review", after: body.querySelector(".msg-meta"), b: "鼠标移到复核标签上",
+                 t: "（手机点一下），看复核检查了什么：要点有没有答到、数字能不能在原文找到。" },
+      card && { id: "card", after: card, b: "点任意一行展开：",
+                t: "判断标准、原文页码都在里面，还能直接在卡片里翻到那一页。" },
+    ].filter((x) => x && x.after && !seen.has(x.id));
+    const tip = tips[0];
+    if (!tip) return;
+    const box = mk("div", "coach");
+    box.setAttribute("role", "note");
+    box.appendChild(mk("b", null, tip.b));
+    box.appendChild(document.createTextNode(tip.t));
+    const ok = mk("button", "coach-ok", "知道了");
+    ok.type = "button";
+    ok.onclick = () => {
+      const s2 = seenTips();
+      s2.add(tip.id);
+      try { localStorage.setItem(TIP_KEY, JSON.stringify([...s2])); } catch (e) { /* 存不了就算了 */ }
+      box.remove();
+    };
+    box.appendChild(ok);
+    tip.after.after(box);
   }
 
   /* 复核标签 + 悬停说明。可以聚焦（tabindex），手机上点一下也能弹出；全程 textContent。 */

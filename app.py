@@ -332,6 +332,10 @@ if (not st.session_state.get("entered")
     landing = landing_surface({"theme": _theme})
     if getattr(landing, "enter", None):
         st.session_state["entered"] = True
+        # 「这样问」：进入助手后直接发出那句话。数据来自浏览器，只收短字符串，照常走提问计次
+        _ask = landing.enter.get("ask") if isinstance(landing.enter, dict) else None
+        if isinstance(_ask, str) and 0 < len(_ask.strip()) <= 60:
+            st.session_state["pending_ask"] = _ask.strip()
         st.query_params["chat"] = "1"
         st.rerun()
     st.stop()
@@ -878,9 +882,8 @@ if getattr(result, "new_chat", None):
     st.session_state["chat_warn"] = ""
     st.rerun()
 
-if result.ask and not busy:
-    asked = result.ask.get("text", "") if isinstance(result.ask, dict) else ""
-    text = asked.strip()
+def start_question(text: str) -> None:
+    """开始一轮提问：聊天框里发的、开屏页「这样问」带过来的都走这里，计次规则一样。"""
     if text:
         count_it = config.PUBLIC_DEMO and not user_key
         if count_it:
@@ -910,6 +913,16 @@ if result.ask and not busy:
                else {"kind": "health"} if wants_health(text) else {}),
         }
         st.rerun()
+
+
+if result.ask and not busy:
+    asked = result.ask.get("text", "") if isinstance(result.ask, dict) else ""
+    start_question(asked.strip())
+
+# 开屏页「这样问」带过来的问题：进入助手后的第一次运行就发出去（一次性）
+_pending_ask = st.session_state.pop("pending_ask", "")
+if _pending_ask and not busy:
+    start_question(_pending_ask)
 
 # 刷新后浏览器送回来的对话存档。数据由访客控制：ui/memory.unpack 只收白名单字段，
 # 文档 id 必须是服务器上真有的。只填空着的对话，不覆盖这次会话里已经有的。

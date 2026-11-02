@@ -230,6 +230,53 @@ function startLoop(canvas, root) {
   LOOP.raf = requestAnimationFrame(tick);
 }
 
+/* 「怎么用」：批注 ↔ 荧光笔。进入视野时荧光笔依次划过一次（减少动画时直接显示）；
+   悬停 / 聚焦 / 点按一条批注，左边对应位置加深，桌面端再画一条引线。点按会固定住，再点一次放开。 */
+const USE = { pinned: null, observer: null };
+
+function wireUse(root) {
+  const sheet = root.querySelector(".lp-sheet");
+  const leader = root.querySelector(".lp-leader");
+  if (!sheet || !leader) return;
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce || !("IntersectionObserver" in window)) {
+    sheet.classList.add("drawn");
+  } else if (!sheet.classList.contains("drawn")) {
+    if (USE.observer) USE.observer.disconnect();
+    USE.observer = new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) { sheet.classList.add("drawn"); USE.observer.disconnect(); }
+    }, { threshold: 0.35 });
+    USE.observer.observe(sheet);
+  }
+  const marks = [...sheet.querySelectorAll(".lp-mark")];
+  const notes = [...root.querySelectorAll(".lp-note")];
+  const path = leader.querySelector("path");
+  const dot = leader.querySelector("circle");
+  const wrap = leader.parentElement;
+  const light = (note) => {
+    const k = note && note.getAttribute("data-k");
+    notes.forEach((n) => n.classList.toggle("on", n === note));
+    marks.forEach((m) => m.classList.toggle("on", m.getAttribute("data-k") === k));
+    const target = marks.find((m) => m.getAttribute("data-k") === k);
+    if (!note || !target || window.innerWidth <= 760) { leader.classList.remove("on"); return; }
+    const w = wrap.getBoundingClientRect(), t = target.getBoundingClientRect(), n = note.getBoundingClientRect();
+    leader.setAttribute("width", Math.round(n.left - w.left + 10));
+    leader.setAttribute("height", Math.round(Math.max(w.height, n.bottom - w.top)));
+    const x1 = t.right - w.left + 4, y1 = t.top + t.height / 2 - w.top;
+    const x2 = n.left - w.left - 6, y2 = n.top + 30 - w.top;
+    path.setAttribute("d", `M${x1},${y1} C${x1 + 50},${y1} ${x2 - 50},${y2} ${x2},${y2}`);
+    dot.setAttribute("cx", x1);
+    dot.setAttribute("cy", y1);
+    leader.classList.add("on");
+  };
+  notes.forEach((n) => {
+    n.onmouseenter = () => light(n);
+    n.onmouseleave = () => light(USE.pinned);
+    n.onfocus = () => light(n);
+    n.onclick = () => { USE.pinned = USE.pinned === n ? null : n; light(USE.pinned || n); };
+  });
+}
+
 export default function (component) {
   const { parentElement, data, setTriggerValue } = component;
   const d = data && typeof data === "object" ? data : {};
@@ -241,10 +288,13 @@ export default function (component) {
   LOOP.colors = palette(theme);
   LOOP.tags = [...root.querySelectorAll(".lp-dt")];
 
+  // 「开始聊天」只进入助手；「这样问」进入助手并直接发出 data-ask 那句话（app.py 当成一次普通提问）
   root.querySelectorAll("[data-enter]").forEach((b) => {
-    b.onclick = () => {
+    b.onclick = (e) => {
+      e.stopPropagation();
       b.disabled = true;
-      setTriggerValue("enter", { at: Date.now() });
+      const ask = b.getAttribute("data-ask");
+      setTriggerValue("enter", ask ? { at: Date.now(), ask: ask } : { at: Date.now() });
     };
   });
   root.querySelectorAll("[data-scroll]").forEach((b) => {
@@ -266,14 +316,7 @@ export default function (component) {
   } : null;
   root.onpointerleave = () => { LOOP.mouse.on = false; };
 
-  // 卖点卡片：一团金色柔光跟着光标走（位置写进卡片自己的 --mx / --my，CSS 画光）
-  root.querySelectorAll(".lp-card").forEach((card) => {
-    card.onpointermove = fine ? (e) => {
-      const r = card.getBoundingClientRect();
-      card.style.setProperty("--mx", (e.clientX - r.left).toFixed(0) + "px");
-      card.style.setProperty("--my", (e.clientY - r.top).toFixed(0) + "px");
-    } : null;
-  });
+  wireUse(root);
 
   if (canvas && LOOP.canvas !== canvas) startLoop(canvas, root);
   else if (canvas && !LOOP.raf) draw(canvas, 8);   // 减少动画模式下换了主题，重画一次静止帧

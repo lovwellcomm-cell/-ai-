@@ -20,7 +20,7 @@
       <span>年报 AI 研究助手</span>
     </div>
     <nav class="lp-links">
-      <button class="lp-link" type="button" data-scroll="how">它怎么工作</button>
+      <button class="lp-link" type="button" data-scroll="how">怎么用</button>
       <button class="lp-btn lp-btn-sm" type="button" data-enter>开始聊天</button>
     </nav>
   </header>
@@ -32,7 +32,7 @@
       <p class="lp-sub">问一句话，助手去巨潮下载原文、检索相关章节再作答。每处论断都标着引用，点开就能翻到 PDF 原页核对；营收、利润这些关键数字由程序抽取并复算。</p>
       <div class="lp-cta">
         <button class="lp-btn" type="button" data-enter>开始聊天<span aria-hidden="true">→</span></button>
-        <button class="lp-btn lp-btn-ghost" type="button" data-scroll="how">看看它怎么工作</button>
+        <button class="lp-btn lp-btn-ghost" type="button" data-scroll="how">看看怎么用</button>
       </div>
       <p class="lp-fine">免费试用，不用注册 · 仅供研究学习，不构成投资建议</p>
     </section>
@@ -46,37 +46,77 @@
       <figcaption>真实回答截图 · 精达股份 2025 年报</figcaption>
     </figure>
 
+    <!--
+      怎么用：一页批注过的年报。左边是年报原文节选（宋体、冷白纸面，数字全部取自精达股份 2025 年报
+      第 7、16、17、28 页，页脚如实标注是节选）；右边是页边批注，每条是一句可以直接问的话。
+      悬停 / 聚焦 / 点按批注，左边对应位置加深并画引线（landing.js）；进入视野时荧光笔依次划过一次。
+      「这样问」= 进入聊天并直接发出这句话（data-ask）。
+    -->
     <section class="lp-how" id="how">
-      <p class="lp-kicker">它怎么工作</p>
-      <h2 class="lp-h2">不靠模型记忆，只看原文</h2>
-      <ol class="lp-steps">
-        <li><span class="lp-num">01</span><b>你提问</b><span>“七匹狼利润率变化如何？”“那三季度呢？”</span></li>
-        <li><span class="lp-num">02</span><b>找原文</b><span>自动从巨潮导入报告，向量与关键词两路检索相关段落</span></li>
-        <li><span class="lp-num">03</span><b>带引用作答</b><span>每句标注出处，数字逐格核对，查不到的会标出来</span></li>
-      </ol>
-
-      <div class="lp-grid">
-        <article class="lp-card">
-          <p class="lp-tag">有出处</p>
-          <h3>每句话都能翻回原页</h3>
-          <p>回答里的 [1] [2] 点开就是原文片段，再点一下翻到 PDF 原页，章节和页码一起给你。</p>
-        </article>
-        <article class="lp-card">
-          <p class="lp-tag">数字核对</p>
-          <h3>关键数字由程序复算</h3>
-          <p>主要会计数据表用代码抽取，再拿公司披露的增减比例复算；回答里的表格逐格核对，找不到出处的数字虚线标出。</p>
-        </article>
-        <article class="lp-card">
-          <p class="lp-tag">年报 · 季报</p>
-          <h3>问“三季度”就换季报</h3>
-          <p>年报、一季报、半年报、三季报都能查，同一家公司的不同年份和报告期共用一段对话，随时切换。</p>
-        </article>
-        <article class="lp-card">
-          <p class="lp-tag">行业动态</p>
-          <h3>一键看行业最新变化</h3>
-          <p>原材料价格、行业格局、同行进展联网检索，每条带日期和网页来源，单独成块、标明未经报告核验。</p>
-        </article>
+      <div class="lp-use-head">
+        <h2 class="lp-h2">像划重点一样读年报</h2>
+        <p class="lp-sub">不用翻两百页。问一句话，助手在原文里替你划出关键的那几行，每个数字都能翻回 PDF 原页核对。</p>
       </div>
+
+      <div class="lp-use">
+        <div class="lp-sheet-wrap">
+          <article class="lp-sheet" aria-label="精达股份 2025 年年度报告节选，第 7、16、17、28 页">
+            <div class="lp-sheet-run"><span>铜陵精达特种电磁线股份有限公司</span><span>2025 年年度报告</span></div>
+            <h4>（4）成本分析表</h4>
+            <p class="lp-unit">单位：万元　币种：人民币</p>
+            <table>
+              <thead><tr><th>分产品</th><th>成本构成项目</th><th>本期金额</th><th>占总成本比例（%）</th></tr></thead>
+              <tbody>
+                <tr><td>漆包线</td><td><span class="lp-mark" data-k="drivers" style="--i:1">原材料</span></td><td class="n"><span class="lp-mark" data-k="drivers" style="--i:1">1,613,888.96</span></td><td class="n"><span class="lp-mark" data-k="drivers" style="--i:1">95.45</span></td></tr>
+                <tr><td>漆包线</td><td>能源</td><td class="n">26,540.12</td><td class="n">1.57</td></tr>
+                <tr><td>汽车、电子线</td><td>原材料</td><td class="n">313,620.68</td><td class="n">98.02</td></tr>
+              </tbody>
+            </table>
+            <h4>（7）主要销售客户及主要供应商情况</h4>
+            <p><span class="lp-mark" data-k="health" style="--i:2">前五名客户销售额 238,841.38 万元，占年度销售总额 9.69%</span>；其中前五名客户销售额中关联方销售额 0 万元。</p>
+            <h4>（四）可能面对的风险</h4>
+            <p>……<span class="lp-mark red" data-k="drivers" style="--i:3">铜、铝等大宗商品价格受国际供需、货币政策、地缘事件等多重因素影响</span>……</p>
+            <h4>主要会计数据</h4>
+            <p class="lp-unit">单位：元　币种：人民币</p>
+            <table>
+              <thead><tr><th>主要会计数据</th><th>2025 年</th><th>2024 年</th><th>增减（%）</th></tr></thead>
+              <tbody><tr><td>营业收入</td><td class="n"><span class="lp-mark" data-k="ask" style="--i:0">24,673,670,269.16</span><span class="lp-cite">3</span></td><td class="n">22,322,579,930.98</td><td class="n">10.53</td></tr></tbody>
+            </table>
+            <div class="lp-sheet-page">节选自精达股份 2025 年报第 7、16、17、28 页</div>
+          </article>
+          <svg class="lp-leader" aria-hidden="true"><path d=""/><circle r="3"/></svg>
+        </div>
+
+        <ul class="lp-notes">
+          <li class="lp-note" data-k="ask" tabindex="0">
+            <span class="lp-note-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M5 5h14v10H9l-4 4V5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></span>
+            <q>精达去年营收多少？比前年多了多少？</q>
+            <p class="lp-note-what">直接问。回答里的数字后面都有编号，点开就是原文那一段，再点一下翻到 PDF 原页。营收、利润这些关键数字由程序从报表里抽出来复算过。</p>
+            <button class="lp-try" type="button" data-enter data-ask="精达去年营收多少？比前年多了多少？">这样问</button>
+          </li>
+          <li class="lp-note" data-k="health" tabindex="0">
+            <span class="lp-note-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v6c0 4.4 3 8.2 7 9 4-.8 7-4.6 7-9V6l-7-3Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></span>
+            <q>给这家公司做个年报体检</q>
+            <p class="lp-note-what">翻出散户最容易漏看的 9 处小字：审计意见、利润有多少是真赚的、客户集不集中、商誉、大股东质押……每项按公开的规则亮红黄绿灯，标着原文页码。</p>
+            <p class="lp-note-eg"><span class="lp-lights" aria-hidden="true"><i class="g"></i><i class="g"></i><i class="r"></i></span>精达 9 项全绿；七匹狼利润 97% 来自理财等非经常项目，亮红灯</p>
+            <button class="lp-try" type="button" data-enter data-ask="给这家公司做个年报体检">这样问</button>
+          </li>
+          <li class="lp-note" data-k="drivers" tabindex="0">
+            <span class="lp-note-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="m12 3 9 5-9 5-9-5 9-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m3 13 9 5 9-5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+            <q>影响这家公司业绩的几件大事是什么？</q>
+            <p class="lp-note-what">从年报里找出最能左右业绩的外部因素，配上交易所的最新行情，按固定公式算出影响有多大。</p>
+            <p class="lp-note-eg"><span class="lp-chip">铜 ▲1.74%</span>原材料占漆包线成本 95.45%，若持续一年，利润约少 2.81 亿元（上限）</p>
+            <button class="lp-try" type="button" data-enter data-ask="影响这家公司业绩的几件大事">这样问</button>
+          </li>
+          <li class="lp-note" data-k="switch" tabindex="0">
+            <span class="lp-note-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 7h13l-3-3M20 17H7l3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <q>七匹狼三季度利润怎么样？</q>
+            <p class="lp-note-what">问到别的公司、别的年份或某个季度，助手先去巨潮资讯把那份报告找来，再基于它回答。同一家公司的年报和季报共用一段对话。</p>
+            <button class="lp-try" type="button" data-enter data-ask="七匹狼三季度利润怎么样？">这样问</button>
+          </li>
+        </ul>
+      </div>
+      <p class="lp-use-fine">回答下面还有「行业动态」按钮：联网查原材料价格和同行进展，单独成段、写明未经报告核验。</p>
     </section>
 
     <section class="lp-end">

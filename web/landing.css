@@ -250,54 +250,90 @@
   font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); letter-spacing: .03em;
 }
 
-/* ---------- 它怎么工作 ---------- */
+/* ---------- 怎么用：批注过的年报 ----------
+   左边一页年报节选（宋体、PDF 的冷白，不随深浅色变），右边页边批注；荧光笔和引线由 landing.js 驱动。
+   这是全页唯一的一处编排动效：进入视野时荧光笔依次划过；其余都是对悬停 / 点按的回应。 */
 .lp-how {
-  max-width: 1040px; margin: 0 auto;
+  max-width: 1120px; margin: 0 auto;
   padding: 120px max(24px, env(safe-area-inset-right, 0px)) 0 max(24px, env(safe-area-inset-left, 0px));
-  display: flex; flex-direction: column; gap: 22px;
 }
-.lp-kicker { font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em; color: var(--accent); }
 .lp-h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.2; font-weight: 700; text-wrap: balance; }
-.lp-steps {
-  list-style: none; margin: 18px 0 0; padding: 0;
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0;
-  border-top: 1px solid var(--line-2);
-}
-.lp-steps li {
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 22px 24px 4px 0; min-width: 0;
-}
-.lp-steps li + li { padding-left: 24px; border-left: 1px solid var(--line); }
-.lp-num { font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
-.lp-steps b { font-size: 17px; font-weight: 600; }
-.lp-steps li > span:last-child { font-size: 14px; color: var(--ink-2); }
+.lp-use-head { max-width: 640px; display: flex; flex-direction: column; gap: 14px; margin-bottom: 46px; }
+.lp-use { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 56px; align-items: start; }
 
-.lp-grid {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 34px;
+.lp-sheet-wrap { position: sticky; top: 40px; }
+.lp-sheet {
+  --paper: #FBFBF9; --paper-ink: #1C1D1F; --paper-ink-2: #55585D; --paper-rule: #D9DAD6;
+  position: relative;
+  background: var(--paper); color: var(--paper-ink);
+  font-family: 'Songti SC', 'STSong', 'Noto Serif CJK SC', 'Source Han Serif SC', 'SimSun', serif;
+  font-size: 13.5px; line-height: 1.85;
+  padding: 34px 38px 28px; border-radius: 3px;
+  box-shadow: 0 1px 0 rgba(0,0,0,.04), 0 30px 80px -34px rgba(0,0,0,.65);
+  transform: rotate(-.6deg);
 }
-.lp-card {
-  position: relative; display: flex; flex-direction: column; gap: 10px;
-  padding: 26px 26px 28px; border-radius: 18px;
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
-  border: 1px solid var(--line);
-  transition: border-color .3s var(--ease), transform .3s var(--ease);
+.lp-sheet-run { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: var(--paper-ink-2);
+  border-bottom: .5px solid var(--paper-rule); padding-bottom: 6px; margin-bottom: 14px; }
+.lp-sheet h4 { margin: 14px 0 6px; font-size: 13.5px; font-weight: 700; }
+.lp-sheet p { margin: 0 0 8px; text-indent: 2em; }
+.lp-sheet .lp-unit { text-align: right; font-size: 11px; color: var(--paper-ink-2); margin: 0 0 4px; text-indent: 0; }
+.lp-sheet table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-bottom: 10px; }
+.lp-sheet th, .lp-sheet td { border: .5px solid var(--paper-rule); padding: 3px 7px; font-weight: 400; }
+.lp-sheet th { color: var(--paper-ink-2); font-size: 11.5px; text-align: center; }
+.lp-sheet td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.lp-sheet-page { margin-top: 12px; text-align: center; font-size: 11px; color: var(--paper-ink-2); }
+
+/* 荧光笔：半透明色带从左往右涂开，压在字后面 */
+.lp-mark { position: relative; z-index: 0; }
+.lp-mark::before {
+  content: ""; position: absolute; z-index: -1; left: -3px; right: -3px; top: 38%; bottom: 0;
+  background: rgba(240,190,70,.55); border-radius: 2px 6px 3px 5px;
+  transform: scaleX(0); transform-origin: left center;
+  transition: transform .55s var(--ease), background .2s;
 }
-.lp-card:hover { border-color: var(--accent-line); transform: translateY(-2px); }
-/* 跟随光标的金色柔光：位置来自 landing.js 写入的 --mx / --my */
-.lp-card { overflow: hidden; isolation: isolate; }
-.lp-card::before {
-  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background: radial-gradient(340px circle at var(--mx, 50%) var(--my, 50%), var(--spot), transparent 62%);
-  opacity: 0; transition: opacity .35s var(--ease);
+.lp-mark.red::before { background: rgba(217,97,90,.32); }
+.lp-sheet.drawn .lp-mark::before { transform: scaleX(1); transition-delay: calc(var(--i, 0) * 260ms), 0s; }
+.lp-mark.on::before { background: rgba(240,190,70,.95); }
+.lp-mark.red.on::before { background: rgba(217,97,90,.55); }
+/* 页边的引用编号，模仿回答里的 [n] */
+.lp-cite { display: inline-flex; align-items: center; justify-content: center; min-width: 17px; height: 17px; margin-left: 3px;
+  padding: 0 4px; border-radius: 5px; font-family: var(--font-mono); font-size: 10px; line-height: 1; text-indent: 0;
+  color: #8A6608; background: rgba(138,102,8,.12); border: 1px solid rgba(138,102,8,.32); vertical-align: 2px; }
+
+/* 批注和纸面之间的引线：桌面端才画 */
+.lp-leader { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 5; overflow: visible; }
+.lp-leader path { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 3 4; opacity: 0; transition: opacity .2s; }
+.lp-leader circle { fill: var(--accent); opacity: 0; transition: opacity .2s; }
+.lp-leader.on path, .lp-leader.on circle { opacity: .9; }
+
+/* 页边批注：每条是一句可以直接问的话 */
+.lp-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.lp-note {
+  display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: 14px; row-gap: 0;
+  padding: 18px 18px 18px 14px; border-radius: 14px; cursor: pointer;
+  border: 1px solid transparent; transition: background .2s, border-color .2s;
 }
-.lp-card:hover::before { opacity: 1; }
-.lp-tag {
-  align-self: flex-start; padding: 3px 10px; border-radius: 999px;
-  font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .04em;
-  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
-}
-.lp-card h3 { font-size: 19px; line-height: 1.35; font-weight: 600; }
-.lp-card p:last-child { font-size: 14.5px; line-height: 1.75; color: var(--ink-2); }
+.lp-note > :not(.lp-note-ico) { grid-column: 2; }
+.lp-note:hover, .lp-note.on { background: color-mix(in srgb, var(--surface) 88%, transparent); border-color: var(--line); }
+.lp-note:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lp-note-ico { grid-column: 1; grid-row: 1 / span 4; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.lp-note-ico svg { width: 16px; height: 16px; }
+.lp-note q { quotes: "“" "”"; font-size: 17px; font-weight: 600; line-height: 1.45; color: var(--ink); }
+.lp-note-what { margin-top: 6px !important; color: var(--ink-2); font-size: 14px; line-height: 1.7; }
+.lp-note-eg { margin-top: 10px !important; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink-3); }
+.lp-lights { display: inline-flex; gap: 5px; }
+.lp-lights i { width: 9px; height: 9px; border-radius: 50%; }
+.lp-lights .g { background: #4FAE72; }
+.lp-lights .r { background: #D9615A; }
+.lp-chip { font-family: var(--font-mono); font-size: 12px; color: var(--ink); padding: 1px 8px; border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent); border: 1px solid var(--line-2); }
+.lp .lp-try { justify-self: start; margin-top: 12px; padding: 6px 14px; border-radius: 999px; font-size: 13px;
+  color: var(--accent); border: 1px solid var(--accent-line); background: var(--accent-soft);
+  transition: background .2s, color .2s; }
+.lp .lp-try:hover { background: var(--accent); color: var(--accent-ink); }
+.lp .lp-try[disabled] { opacity: .6; cursor: progress; }
+.lp-use-fine { margin-top: 28px; font-size: 12.5px; color: var(--ink-3); }
 
 /* ---------- 收尾 ---------- */
 .lp-end {
@@ -329,12 +365,16 @@
   .lp-frame { padding: 4px; border-radius: 12px; }
   .lp-frame img { border-radius: 9px; }
   .lp-how { padding-top: 84px; }
-  .lp-steps { grid-template-columns: 1fr; }
-  .lp-steps li, .lp-steps li + li { padding: 16px 0; border-left: 0; border-bottom: 1px solid var(--line); }
-  .lp-grid { grid-template-columns: 1fr; }
+  .lp-use { grid-template-columns: 1fr; gap: 28px; }
+  .lp-sheet-wrap { position: static; }
+  .lp-sheet { transform: none; padding: 22px 16px; font-size: 12.5px; }
+  .lp-sheet table { font-size: 11.5px; }
+  .lp-leader { display: none; }
+  .lp-note { padding: 14px 8px; }
   .lp-end { padding-top: 90px; padding-bottom: 80px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .lp-hero > *, .lp-shot, .lp-halo, .lp-floor { animation: none; }
+  .lp-mark::before { transition: none; }
 }
