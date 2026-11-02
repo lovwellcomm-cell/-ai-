@@ -14,6 +14,9 @@
   · 长科目折行：数字单独成行，或科目后半截与数字同行（`利润 86,228,146,421.62 …`）
   · 单位：时代新材这张表是「万元」，而它的报表是「元」——必须按表判断
   · 贵州茅台的「单位：元」被页眉过滤删掉了，所以这里读的是原始页面文本
+  · 恒瑞、牧原、立讯：扣非净利润的科目折成三行（`归属于上市公司股东的` / `扣除非经常性损益的净` / `利润`）
+  · 万科：负数写成 `(88,556,470,495.64)`，扣非写「扣除非经常性损益后归属于上市公司股东的净利润」，
+    总资产写「资产总额」
 """
 from __future__ import annotations
 
@@ -24,7 +27,8 @@ from . import config
 from .periods import FY, Q3, detect
 
 # 2：加入季报/半年报（period 字段）。老缓存版本不符，第一次用到时自动重抽。
-FIN_VERSION = 2
+# 3：三行科目、括号负数、万科的别名 —— 以前漏抽的扣非净利润能补上。
+FIN_VERSION = 3
 FIN_FILE = "financials.json"
 
 UNIT_SCALE = {"亿元": 1e8, "万元": 1e4, "千元": 1e3, "元": 1.0}
@@ -34,18 +38,19 @@ ITEMS: dict[str, tuple[str, ...]] = {
     "revenue": ("营业收入",),
     "total_profit": ("利润总额",),
     "np_parent": ("归属于上市公司股东的净利润",),
-    "np_deducted": ("归属于上市公司股东的扣除非经常性损益的净利润",),
+    "np_deducted": ("归属于上市公司股东的扣除非经常性损益的净利润",
+                    "扣除非经常性损益后归属于上市公司股东的净利润"),
     "ocf": ("经营活动产生的现金流量净额",),
     # 季报写「所有者权益」，年报和半年报写「净资产」
     "equity_parent": ("归属于上市公司股东的净资产", "归属于上市公司股东的所有者权益"),
-    "total_assets": ("总资产",),
+    "total_assets": ("总资产", "资产总额"),
 }
 LABELS = {k: v[0] for k, v in ITEMS.items()}
 FLOW_KEYS = ("revenue", "total_profit", "np_parent", "np_deducted", "ocf")
 BALANCE_KEYS = ("equity_parent", "total_assets")
 _ALIAS = {alias: key for key, aliases in ITEMS.items() for alias in aliases}
 
-_NUM_RE = re.compile(r"-?\d[\d,]*\.\d+%?")
+_NUM_RE = re.compile(r"\(-?\d[\d,]*\.\d+\)|-?\d[\d,]*\.\d+%?")
 _YEAR_RE = re.compile(r"(20\d\d)\s*年")
 _UNIT_DECL_RE = re.compile(r"单位\s*[:：]\s*(亿元|万元|千元|元)")
 _UNIT_IN_LABEL_RE = re.compile(r"[（(](亿元|万元|千元|元)[)）]")
@@ -60,6 +65,8 @@ def _norm(label: str) -> str:
 
 
 def _to_float(raw: str) -> float:
+    if raw.startswith("(") and raw.endswith(")"):
+        return -float(raw[1:-1].replace(",", ""))
     return float(raw.replace(",", "").rstrip("%"))
 
 
@@ -77,8 +84,8 @@ def detect_unit(lines: list[str]) -> str:
 
 
 def _match_label(buffer: list[str], head: str) -> str | None:
-    """科目可能折成两三行。依次试「本行开头」「上一行 + 本行开头」「上两行 + 本行开头」。"""
-    for k in range(0, min(2, len(buffer)) + 1):
+    """科目可能折成两到四行。依次试「本行开头」「上一行 + 本行开头」……最多往上拼三行。"""
+    for k in range(0, min(3, len(buffer)) + 1):
         parts = buffer[len(buffer) - k:] if k else []
         key = _ALIAS.get(_norm("".join(parts) + head))
         if key:
@@ -110,7 +117,7 @@ def parse_rows(lines: list[str]) -> dict[str, list[float]]:
             # 年份表头、或数字个数不对的行：都是边界，前面累积的半截科目作废。
             buffer = []
             continue
-        buffer = (buffer + [ln])[-2:]
+        buffer = (buffer + [ln])[-3:]
     return rows
 
 
