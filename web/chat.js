@@ -104,7 +104,7 @@ const S = new Map();
 function localState(key) {
   let s = S.get(key);
   if (!s) {
-    s = { draft: "", scrollTop: 0, atBottom: true, drawer: false, turnIdx: -1, srcIdx: 0, activeCite: null, collapsed: new Set(), srcOpen: new Set(), msgsSig: null, drawerSig: null, themeOverride: null };
+    s = { draft: "", scrollTop: 0, atBottom: true, drawer: false, turnIdx: -1, srcIdx: 0, activeCite: null, collapsed: new Set(), srcOpen: new Set(), headSig: null, msgSigs: [], drawerSig: null, themeOverride: null };
     S.set(key, s);
   }
   return s;
@@ -244,10 +244,25 @@ export default function (component) {
   /* ---------------- 对话流 ---------------- */
   // 首页文案也跟着文档走：两份年报的对话历史都为空时，只比较 messages 会让
   // 切换文档后的 hero 停留在上一份年报（实测导入茅台后仍显示精达）。
-  const msgsSig = JSON.stringify([d.doc, d.heroEyebrow, d.heroFoot, d.messages || []]);
-  if (s.msgsSig !== msgsSig) {
+  // 逐条比对、只重建变了的那条消息。
+  // 以前是签名一变就清空整个对话流再全部重建：清空的那一刻滚动位置归零、下一帧才恢复，
+  // 检索 → 生成 → 扩展每换一个阶段闪一次，点「查看原页」也闪（原页图片挂在最后一条消息上）。
+  // 消息签名里去掉 page：原页只在右侧抽屉里显示，正文不用它，它变了不该动正文。
+  const ms = d.messages || [];
+  const headSig = JSON.stringify([d.doc, d.heroEyebrow, d.heroFoot, ms.length === 0]);
+  // 「行业动态」按钮只挂在最后一条回答上、生成中不显示：位置和忙闲也算进签名，
+  // 否则发出新问题后，上一条回答不重建，按钮会留在它下面
+  const msgSig = (m, i) => JSON.stringify([Object.assign({}, m, { page: undefined }),
+    i === ms.length - 1 ? (d.busy ? "last-busy" : "last") : ""]);
+  let changed = false;
+  // 重建前是否已经显示着消息（而不是空对话首页）
+  const hadMsgs = !threadInner.classList.contains("empty") && threadInner.children.length > 0;
+  if (s.headSig !== headSig) {
+    // 换了文档、或者在「空对话首页」和「有消息」之间切换：整体重建
     clear(threadInner);
-    const ms = d.messages || [];
+    s.msgSigs = [];
+    s.headSig = headSig;
+    changed = true;
     if (!ms.length) {
       // 新对话：消息序号从头开始，旧的「哪些来源列表展开过」不能带进来
       s.srcOpen.clear();
@@ -255,14 +270,40 @@ export default function (component) {
       threadInner.appendChild(buildHero());
     } else {
       threadInner.classList.remove("empty");
-      ms.forEach((m, i) => threadInner.appendChild(m.role === "user" ? buildUser(m) : buildAi(m, i)));
     }
-    s.msgsSig = msgsSig;
-    // 重建后恢复滚动位置：原本贴在底部就继续贴底
-    requestAnimationFrame(() => {
+  }
+  // 整体重建、而且之前就显示着消息（换文档、切报告期）：这一批不算「新消息」，不播动画。
+  // 从空对话首页进到第一条消息时照常播。
+  const fresh = changed && hadMsgs && ms.length > 0;
+  if (ms.length) {
+    const sigs = s.msgSigs || [];
+    ms.forEach((m, i) => {
+      const sig = msgSig(m, i);
+      if (sigs[i] === sig && threadInner.children[i]) return;
+      const node = m.role === "user" ? buildUser(m) : buildAi(m, i);
+      const old = threadInner.children[i];
+      // 只有真正新出现的消息播入场动画。原地更新（检索 → 生成 → 扩展换阶段）、
+      // 以及换文档后的整体重建都不播 —— 每条消息都重新淡入一遍，看起来就是整页在闪。
+      if (old || fresh) node.classList.add("settled");
+      if (old) threadInner.replaceChild(node, old); else threadInner.appendChild(node);
+      sigs[i] = sig;
+      changed = true;
+    });
+    while (threadInner.children.length > ms.length) {
+      threadInner.removeChild(threadInner.lastChild);
+      changed = true;
+    }
+    sigs.length = ms.length;
+    s.msgSigs = sigs;
+  }
+  if (changed) {
+    // 原本贴在底部就继续贴底。当场设一次（不留一帧空档），图片和字体撑高后下一帧再补一次
+    const stick = () => {
       if (s.atBottom) thread.scrollTop = thread.scrollHeight;
       else thread.scrollTop = Math.min(s.scrollTop, thread.scrollHeight);
-    });
+    };
+    stick();
+    requestAnimationFrame(stick);
   }
   // 正文重建后要把当前选中的引用角标高亮补回来（它是纯前端状态，不在 data 里）
   if (s.activeCite) markCite(s.activeCite);
@@ -888,11 +929,14 @@ export default function (component) {
   function renderDrawer() {
     const body = q("#panelBody");
     const m = sourceMsg();
-    const sig = JSON.stringify([s.drawer, s.turnIdx, s.srcIdx, m ? m.sources : null, m ? m.page : null,
+    const sig = JSON.stringify([s.drawer, s.turnIdx, s.srcIdx, m ? m.sources : null, m && m.page ? [m.page.n, (m.page.png || "").length] : null,
                                 [...s.collapsed]]);
     if (sig === s.drawerSig) return;
     s.drawerSig = sig;
 
+    // 重建前记下抽屉的滚动位置、重建后放回去：点「查看原页」后不该跳回第一条
+    const keepTop = body.scrollTop;
+    requestAnimationFrame(() => { body.scrollTop = keepTop; });
     clear(body);
     if (!m || !m.sources || !m.sources.length) {
       q("#panelCount").textContent = "0 段";

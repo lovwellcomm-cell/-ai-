@@ -242,6 +242,8 @@
 
 /* ---------- 消息 ---------- */
 .msg { display: flex; gap: 12px; animation: rise .34s var(--ease) both; }
+/* 原地更新、整体重建的消息不再播入场动画（见 chat.js「逐条比对」）：否则每次 rerun 整页淡入一次 */
+.msg.settled { animation: none; }
 @keyframes rise { from { opacity: 0; transform: translateY(9px) } to { opacity: 1; transform: none } }
 .msg-user { justify-content: flex-end; }
 .bubble {
