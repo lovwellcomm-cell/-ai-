@@ -24,6 +24,7 @@ from rag.reviewer import decide, summary
 from rag.periods import (FY, RANK, latest_quarter, latest_report, latest_year, next_report,
                          period_end, period_in, period_of, relative_year, wants_latest,
                          wants_latest_quarter)
+from rag.quarters import wants_quarters
 from ui.card import CARD_KEYS
 
 
@@ -159,6 +160,12 @@ def with_period(target: dict, question: str, today: date | None = None) -> dict:
         latest_y, period = latest_quarter(today)
         year = year if year is not None else latest_y
     latest = wants_latest(question) if period is None and year is None else None
+    # 「最近几个季度」「单季走势」：单季序列以最新一期为锚（rag/quarters.py），没说哪年哪期就按「最新财报」找；
+    # quarters 标记让 plan_for 别把它当多年趋势改落年报
+    if wants_quarters(question):
+        out["quarters"] = True
+        if period is None and year is None:
+            latest = latest or "any"
     if latest:
         today = today or date.today()
         year, period = (latest_year(FY, today), FY) if latest == FY else latest_report(today)
@@ -269,6 +276,7 @@ def plan_for(understanding: dict, *, current_company: str = "", current_year: st
     · 反问、超范围：不找报告，返回 {"action": "clarify" | "out_of_scope"}；
     · 趋势：季报里只有本期和上年同期两个数，问多年必须用年报 —— 落在季报上就改找这家公司
       最新的年报（用户实际遇到的：停在三季报上问「近几年发展如何」，回答「年报中未找到」）。
+      点名问季度的（target 带 quarters，见 with_period）不改：单季序列要以最新一期为锚。
     · 几件大事：要用年报里才有的内容（风险章节和成本构成），落在季报上改用最新年报；
       用户明说了哪一期就照他说的。
     · 财报体检：落在季报上**不**换报告 —— app.py 以那之前的年报 9 项为底、季报能判的几项用季报更新
@@ -284,7 +292,8 @@ def plan_for(understanding: dict, *, current_company: str = "", current_year: st
     if intent == "health" and tgt.get("period") == FY and tgt.get("year") is None:
         tgt = dict(tgt, period=None)
     plan = plan_resolution(tgt, **kw)
-    annual_first = intent == "trend" or (intent == "drivers" and not tgt.get("period"))
+    annual_first = ((intent == "trend" and not tgt.get("quarters"))
+                    or (intent == "drivers" and not tgt.get("period")))
     # 跨报告（事实笔记第二期）：年报已经排在「先读」里，主报告就按规划器说的来（多半是最新季报）。
     # 不然「近三年和最新季报比」会被改回年报，和先读的年报撞成同一份，季报一个数都没读到（评测踩过）
     if any(x.get("period") == FY for x in understanding.get("also_read") or []):

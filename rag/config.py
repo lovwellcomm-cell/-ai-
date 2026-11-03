@@ -178,6 +178,8 @@ MAX_UPLOADS_PER_SESSION = int(get("MAX_UPLOADS_PER_SESSION", "2"))
 PRESTEP_BUDGET = int(get("PRESTEP_BUDGET", "50"))
 # 多年趋势：每个会话最多从巨潮下载几份往年年报（只抽表、不建索引；命中缓存不计数）。
 HISTORY_FETCHES_PER_SESSION = int(get("HISTORY_FETCHES_PER_SESSION", "3"))
+# 单季序列（rag/quarters.py）：拼 8 季最多要 5 份报告，不在本地的去巨潮只抽表，单独计数（用户 2026-11-03 定 6 份）。
+QUARTER_FETCHES_PER_SESSION = int(get("QUARTER_FETCHES_PER_SESSION", "6"))
 # 往年年报只读前 30 页抽表，等不了太久：超时就退回三年卡。
 HISTORY_DOWNLOAD_TIMEOUT = float(get("HISTORY_DOWNLOAD_TIMEOUT", "20"))
 UPLOAD_TTL_HOURS = int(get("UPLOAD_TTL_HOURS", "24"))  # 访客上传文档的保留时长

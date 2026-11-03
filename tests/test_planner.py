@@ -104,6 +104,15 @@ def test_trend_on_quarterly_switches_to_annual():
     assert _plan(u) == {"action": "current"}
 
 
+def test_quarter_trend_goes_to_latest_report():
+    """「最近几个季度走势」：单季序列以最新一期为锚 —— 季报上不改落年报，年报上也换到最新的季报
+    （本地实测踩过：停在 2026 三季报上问，被改到 2025 年报，序列停在 25Q4）。"""
+    u = norm("最近几个季度营收和净利润走势如何", intent="trend")
+    assert u["target"]["quarters"] is True
+    assert _plan(u, "2026", "Q3") == {"action": "current"}
+    assert _plan(u) == {"action": "switch", "doc": DOCS[1]}
+
+
 def test_health_on_quarterly_stays_for_merged_check():
     """财报体检（用户 2026-11-03 选的做法）：季报上体检不换报告，app.py 以年报 9 项为底合并。
     「年报体检」没写年份也一样；写了哪一期（「三季报体检」「2025 年报体检」）照他说的。"""

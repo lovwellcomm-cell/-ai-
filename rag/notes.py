@@ -125,7 +125,8 @@ def from_answer(answer: str, hits: list[dict], unverified: list[str], doc_id: st
             if not label or not cells:
                 continue
             hit = _source_hit(numbers, cited, hits)
-            if hit is None:
+            # 单季序列（rag/quarters.as_hit）是程序相减算的，不在原文里：不记成笔记
+            if hit is None or hit.get("derived"):
                 continue
             out.append({"doc": hit.get("doc_id") or doc_id,
                         "src": hit.get("note_src") or src,

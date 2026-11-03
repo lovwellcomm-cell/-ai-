@@ -124,7 +124,7 @@ def tmp_data(tmp_path, monkeypatch):
 
 def test_downloads_once_then_uses_cache(tmp_data, monkeypatch):
     calls = []
-    monkeypatch.setattr(history, "_from_cninfo", lambda c, y: calls.append(y) or _old())
+    monkeypatch.setattr(history, "_from_cninfo", lambda c, y, p="FY": calls.append(y) or _old())
     fin, fetched = load_older("精达股份", 2022, [], now=1000)
     assert fetched and fin["years"][0] == "2022"
     fin2, fetched2 = load_older("精达股份", 2022, [], now=2000)
@@ -135,7 +135,7 @@ def test_downloads_once_then_uses_cache(tmp_data, monkeypatch):
 
 def test_miss_is_cached_for_a_week(tmp_data, monkeypatch):
     calls = []
-    monkeypatch.setattr(history, "_from_cninfo", lambda c, y: calls.append(y))
+    monkeypatch.setattr(history, "_from_cninfo", lambda c, y, p="FY": calls.append(y))
     assert load_older("新上市", 2022, [], now=0) == (None, True)
     assert load_older("新上市", 2022, [], now=3600) == (None, False)
     assert load_older("新上市", 2022, [], now=history.MISS_TTL + 1) == (None, True)
@@ -143,7 +143,7 @@ def test_miss_is_cached_for_a_week(tmp_data, monkeypatch):
 
 
 def test_network_error_not_cached(tmp_data, monkeypatch):
-    def boom(c, y):
+    def boom(c, y, p="FY"):
         raise RuntimeError("下载超时")
     monkeypatch.setattr(history, "_from_cninfo", boom)
     with pytest.raises(RuntimeError):
@@ -152,12 +152,12 @@ def test_network_error_not_cached(tmp_data, monkeypatch):
 
 
 def test_no_fetch_when_session_budget_used(tmp_data, monkeypatch):
-    monkeypatch.setattr(history, "_from_cninfo", lambda c, y: pytest.fail("不该下载"))
+    monkeypatch.setattr(history, "_from_cninfo", lambda c, y, p="FY": pytest.fail("不该下载"))
     assert load_older("精达股份", 2022, [], allow_fetch=False) == (None, False)
 
 
 def test_local_report_preferred(tmp_data, monkeypatch):
-    monkeypatch.setattr(history, "_from_cninfo", lambda c, y: pytest.fail("不该下载"))
+    monkeypatch.setattr(history, "_from_cninfo", lambda c, y, p="FY": pytest.fail("不该下载"))
     monkeypatch.setattr(history, "load_or_build", lambda doc_id: _old())
     docs = [{"doc_id": "a" * 16, "company": "精达股份", "year": "2022"}]
     fin, fetched = load_older("精达", 2022, docs)
@@ -204,7 +204,7 @@ def test_cninfo_fetch_saves_table_page(tmp_data, monkeypatch):
 
     monkeypatch.setattr(disclosure, "find_report", lambda c, y, p: {"url": "https://static.cninfo.com.cn/x.pdf"})
     monkeypatch.setattr(disclosure, "download_pdf", lambda url, timeout: (b"%PDF", {}))
-    monkeypatch.setattr(history, "extract", lambda data, period: _old())
+    monkeypatch.setattr(history, "extract", lambda data, period, year: _old())
     monkeypatch.setattr(pdf_parser, "render_page_png", lambda data, page: f"page{page}".encode())
     fin, fetched = load_older("精达股份", 2022, [], now=0)
     assert fetched and fin["page"] == 6
@@ -216,10 +216,10 @@ def test_cache_without_shot_refetches_once(tmp_data, monkeypatch):
     path = tmp_data / "_history" / "精达_2022.json"
     path.parent.mkdir()
     path.write_text(json.dumps({"version": history.FIN_VERSION, "at": 0, "fin": _old()}), encoding="utf-8")
-    monkeypatch.setattr(history, "_from_cninfo", lambda c, y: pytest.fail("不该下载"))
+    monkeypatch.setattr(history, "_from_cninfo", lambda c, y, p="FY": pytest.fail("不该下载"))
     assert load_older("精达股份", 2022, [], allow_fetch=False) == (_old(), False)
     calls = []
-    monkeypatch.setattr(history, "_from_cninfo", lambda c, y: calls.append(y) or _old())
+    monkeypatch.setattr(history, "_from_cninfo", lambda c, y, p="FY": calls.append(y) or _old())
     assert load_older("精达股份", 2022, [], now=10)[1] is True
     assert load_older("精达股份", 2022, [], now=20)[1] is False and calls == [2022]
 

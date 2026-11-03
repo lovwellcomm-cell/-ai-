@@ -181,7 +181,8 @@ def cross_span(answer: str, hits: list[dict], fact_list: list[dict]) -> list[dic
 
 
 def note_lines(hits: list[dict]) -> list[dict]:
-    """事实笔记片段（rag/notes.as_hits，每行一条笔记）→ 笔记形状，交给 facts()。补充检索的原文片段不算。"""
+    """事实笔记片段（rag/notes.as_hits，每行一条笔记）→ 笔记形状，交给 facts()。补充检索的原文片段、
+    程序推算的单季数（rag/quarters.as_hit）不算。"""
     return [{"src": h.get("note_src") or "", "t": line}
-            for h in hits or [] if h.get("note") and not h.get("extra")
+            for h in hits or [] if h.get("note") and not h.get("extra") and not h.get("derived")
             for line in (h.get("text") or "").splitlines() if line.strip()]

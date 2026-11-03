@@ -37,7 +37,9 @@ from rag import drivers as key_drivers
 from rag.generator import analyze, generate, get_client, make_client, resolve_style
 from rag import caliber, planner, reviewer
 from rag.history import (as_hit as history_hit, attach as attach_history, is_hist_id, load_older,
-                         merge, older_year, page_png as hist_page_png, wants_trend)
+                         load_report, merge, older_year, page_png as hist_page_png, wants_trend)
+from rag.quarters import (as_hit as quarter_hit, attach as attach_quarters, build as build_quarters,
+                          wants_quarters)
 from rag import notes as fact_notes
 from rag.fidelity import unverified_in_tables
 from rag.industry import RETRIEVAL_QUERY as INDUSTRY_QUERY, industry_brief, wants_industry
@@ -978,6 +980,7 @@ def advance_turn() -> None:
         if target.get("kind") != "industry" and not other:
             hits = hits + fact_notes.as_hits(history, doc_id, extra=target.get("step_notes"))
             hits = attach_history(hits, target.get("hist_hit"))
+            hits = attach_quarters(hits, target.get("quarter_hit"))
         target["hits"] = hits
         target["queries"] = queries
         target["src_label"] = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}".strip()
@@ -1001,8 +1004,12 @@ def advance_turn() -> None:
                 target.update(card)
                 # 卡片上的数字记成笔记：只用这份报告自己的 fin（六年趋势拼进来的往年数据页码不在这份里）
                 target["fin_notes"] = fact_notes.from_financials(fin, doc_id, target["src_label"])
-                # 问趋势时再抽一份往年年报，把卡片拉长到六年（单独一轮，好显示状态文案）
-                if (fin.get("period") or FY) == FY and want_trend:
+                # 问趋势时再抽一份往年年报，把卡片拉长到六年（单独一轮，好显示状态文案）；
+                # 季报上问趋势、或点名要季度数据时，改拼最近 8 季的单季序列
+                annual = (fin.get("period") or FY) == FY
+                if wants_quarters(target["q"], previous=recent) or (want_trend and not annual):
+                    target["status"] = "quarters"
+                elif annual and want_trend:
                     target["status"] = "history"
         st.session_state["turn"] = target
         st.rerun()
@@ -1031,6 +1038,31 @@ def advance_turn() -> None:
                     target["hits"] = attach_history(target["hits"], target["hist_hit"])
             except Exception as e:
                 target["history_error"] = f"{type(e).__name__}: {e}"
+        target["status"] = "generating"
+        st.session_state["turn"] = target
+        st.rerun()
+
+    if target["status"] == "quarters":
+        # 单季折线也是锦上添花：失败就留着原来的卡片。缺的季报只抽表，会话额度单独计（rag/quarters.py）
+        fin = get_financials(doc_id, SOURCE_STAMP)
+        company = meta.get("company", "")
+        if fin and fin.get("years") and company:
+            used = st.session_state.get("quarter_fetches", 0)
+            try:
+                series, fetched, errors = build_quarters(
+                    company, int(fin["years"][0]), fin.get("period") or FY, list_documents(None),
+                    budget=max(0, config.QUARTER_FETCHES_PER_SESSION - used), load=load_report)
+                st.session_state["quarter_fetches"] = used + fetched
+                card = build_card(fin, quarters=series)
+                if card:
+                    target.update(card)
+                # 单季数也进回答；存在回合上，复核回退重新检索时还要接上
+                target["quarter_hit"] = quarter_hit(series, doc_id, fin.get("page"), company)
+                target["hits"] = attach_quarters(target["hits"], target["quarter_hit"])
+                if errors:
+                    target["quarters_error"] = "；".join(errors)[:300]
+            except Exception as e:
+                target["quarters_error"] = f"{type(e).__name__}: {e}"
         target["status"] = "generating"
         st.session_state["turn"] = target
         st.rerun()

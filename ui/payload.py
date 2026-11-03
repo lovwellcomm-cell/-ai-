@@ -30,6 +30,7 @@ STATUS_TEXT = {
     # 分步读别的报告；具体是哪一步由回合上的 step_text 覆盖
     "prestep": "正在先读另一份报告…",
     "history": "正在调取往年年报，把趋势拉长到近 6 年…",
+    "quarters": "正在拼最近 8 个季度的单季数据（缺的季报去巨潮只读表）…",
     "reviewing": "正在复核回答…",
     "generating": "正在生成回答…",
     # 首轮回答已经显示出来了，这一步只是追加「为什么」的扩展分析
@@ -100,7 +101,7 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
         if turn.get("kind") == "drivers" and status == "retrieving":
             msg["statusText"] = "正在从年报里找最能左右业绩的几件事…（第一次约半分钟）"
         # 复核没通过、正在回退：说清楚发现了什么、在做什么（旧回答还显示着）
-        if turn.get("retry") and status in ("resolving", "retrieving", "history", "generating"):
+        if turn.get("retry") and status in ("resolving", "retrieving", "history", "quarters", "generating"):
             note = (turn.get("review_last") or {}).get("note") or "回答有遗漏"
             doing = {"retrieve": "正在补充检索后重新回答", "regenerate": "正在重新生成",
                      "replan": "正在重新理解问题"}.get(turn["retry"], "正在重新回答")

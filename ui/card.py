@@ -171,6 +171,21 @@ def _chart(fin: dict, key: str, title: str) -> dict | None:
     return chart
 
 
+def _quarter_chart(q: dict, key: str, title: str) -> dict | None:
+    """单季折线（rag/quarters.series）：悬停里的「同比」是和四个季度前比，不是相邻两季。"""
+    item = (q.get("items") or {}).get(key)
+    if not item:
+        return None
+    vals, labels = item["values"], item["labels"]
+    div, unit = _scale_for(vals)
+    yoy = []
+    for i, cur in enumerate(vals):
+        prev = vals[i - 4] if i >= 4 else None
+        yoy.append("—" if not prev else f"{(cur - prev) / abs(prev) * 100:+.2f}%")
+    return {"title": title, "range": f"{labels[0]}–{labels[-1]}", "unit": unit, "kind": "line",
+            "labels": list(labels), "values": [round(v / div, 2) for v in vals], "yoy": yoy}
+
+
 def _note(fin: dict) -> str:
     period = fin.get("period") or FY
     if period == FY and fin.get("sources"):
@@ -184,11 +199,12 @@ def _note(fin: dict) -> str:
     return " · ".join(x for x in (f"程序抽取 · {SHORT[period]}第 {fin['page']} 页", check, audit) if x)
 
 
-def build_card(fin: dict | None) -> dict | None:
+def build_card(fin: dict | None, quarters: dict | None = None) -> dict | None:
     """返回要合并到回合上的 {kpis, charts, cardTitle, cardNote}；数据不够时返回 None。
 
     年报：近三年。季报 / 半年报：本期与上年同期两根柱子；三季报的金额是「年初至今」（1–9 月），
     另加两张单季（7–9 月）指标卡 —— 投资者看三季报最关心的往往是单季的拐点。
+    quarters（rag/quarters.series，问趋势时才有）：两张图换成最近 8 季的单季折线，指标卡不变。
     """
     if not fin or not fin.get("items"):
         return None
@@ -210,9 +226,17 @@ def build_card(fin: dict | None) -> dict | None:
     span = "" if period == FY else f"（{MONTHS[period]}）"
     charts = [c for c in (_chart(fin, "revenue", "营业收入" + span),
                           _chart(fin, "np_parent", "归母净利润" + span)) if c]
+    qcharts = [c for c in (_quarter_chart(quarters or {}, "revenue", "单季营业收入"),
+                           _quarter_chart(quarters or {}, "np_parent", "单季归母净利润")) if c]
     title = f"主要会计数据 · {fin['years'][0]}"
     if period != FY:
         title += f" {SPAN[period]}"
-    elif any(c.get("kind") == "line" for c in charts):
+    note = _note(fin)
+    if qcharts:
+        charts = qcharts
+        title += f" · 近 {max(len(c['values']) for c in qcharts)} 季单季"
+        note += (f" · 单季据{'、'.join(quarters['sources'])}的累计数相减"
+                 "（第三季度用三季报披露的单季数）")
+    elif period == FY and any(c.get("kind") == "line" for c in charts):
         title += f" · 近 {len(fin['years'])} 年"
-    return {"kpis": kpis, "charts": charts, "cardTitle": title, "cardNote": _note(fin)}
+    return {"kpis": kpis, "charts": charts, "cardTitle": title, "cardNote": note}

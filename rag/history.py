@@ -57,13 +57,14 @@ def older_year(fin: dict) -> int | None:
         return None
 
 
-def _cache_key(company: str, year: int) -> str:
+def _cache_key(company: str, year: int, period: str = FY) -> str:
+    """年报「精达_2022」；季报 / 半年报（rag/quarters.py 拼单季序列用）「精达_2025_Q3」。"""
     key = re.sub(r"[^\w一-鿿]", "_", normalize(company))[:40] or "_"
-    return f"{key}_{year}"
+    return f"{key}_{year}" if period == FY else f"{key}_{year}_{period}"
 
 
-def _cache_path(company: str, year: int):
-    return config.DATA_DIR / HIST_DIR_NAME / f"{_cache_key(company, year)}.json"
+def _cache_path(company: str, year: int, period: str = FY):
+    return config.DATA_DIR / HIST_DIR_NAME / f"{_cache_key(company, year, period)}.json"
 
 
 def _page_path(key: str, page: int):
@@ -85,10 +86,10 @@ def page_png(doc_id: str, page: int) -> bytes | None:
         return None
 
 
-def _read_cache(company: str, year: int, now: float) -> tuple[bool, dict | None]:
-    """返回 (命中与否, 结果)。命中但结果为 None = 确认过没有这份年报。"""
+def _read_cache(company: str, year: int, period: str, now: float) -> tuple[bool, dict | None]:
+    """返回 (命中与否, 结果)。命中但结果为 None = 确认过没有这份报告。"""
     try:
-        cached = json.loads(_cache_path(company, year).read_text(encoding="utf-8"))
+        cached = json.loads(_cache_path(company, year, period).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False, None
     if cached.get("version") != FIN_VERSION:
@@ -102,8 +103,8 @@ def _read_cache(company: str, year: int, now: float) -> tuple[bool, dict | None]
     return False, None
 
 
-def _write_cache(company: str, year: int, fin: dict | None, now: float) -> None:
-    path = _cache_path(company, year)
+def _write_cache(company: str, year: int, period: str, fin: dict | None, now: float) -> None:
+    path = _cache_path(company, year, period)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"version": FIN_VERSION, "company": company, "year": year,
@@ -114,10 +115,10 @@ def _write_cache(company: str, year: int, fin: dict | None, now: float) -> None:
         pass
 
 
-def _from_local(company: str, year: int, docs: list[dict]) -> dict | None:
-    """本地已经有这份年报（之前导入过、或示例文档）就直接读它的表。"""
+def _from_local(company: str, year: int, period: str, docs: list[dict]) -> dict | None:
+    """本地已经有这份报告（之前导入过、或示例文档）就直接读它的表。"""
     for d in docs:
-        if (d.get("period") or FY) != FY or str(d.get("year") or "") != str(year):
+        if (d.get("period") or FY) != period or str(d.get("year") or "") != str(year):
             continue
         if not same_company(d.get("company") or "", company):
             continue
@@ -138,40 +139,48 @@ def _save_page(company: str, year: int, data: bytes, page: int) -> None:
         pass                                   # 截图失败只是翻不了原页，数字照用
 
 
-def _from_cninfo(company: str, year: int) -> dict | None:
-    """巨潮找到那份年报 → 下载 → 只读前 30 页抽表、存下表所在页的截图。找不到公告返回 None，网络错误往外抛。"""
+def _from_cninfo(company: str, year: int, period: str = FY) -> dict | None:
+    """巨潮找到那份报告 → 下载 → 只读前 30 页抽表；年报另存表所在页的截图（季报只画单季折线，不进回答）。
+    找不到公告返回 None，网络错误往外抛。"""
     from .disclosure import ReportNotFound, download_pdf, find_report
 
     try:
-        info = find_report(company, year, FY)
+        info = find_report(company, year, period)
     except ReportNotFound:
         return None
     data, _ = download_pdf(info["url"], timeout=config.HISTORY_DOWNLOAD_TIMEOUT)
-    fin = extract(data, period=FY)
+    fin = extract(data, period=period, year=year)
     if not fin or fin.get("years", [None])[0] != str(year):
         # 表头年份对不上（抽到了别的表、或者公告标题和正文年份不一致）就当没抽到
         return None
-    _save_page(company, year, data, fin["page"])
+    if period == FY:
+        _save_page(company, year, data, fin["page"])
     return dict(fin, source=info["url"])
 
 
-def load_older(company: str, year: int, docs: list[dict], *, allow_fetch: bool = True,
-               now: float | None = None) -> tuple[dict | None, bool]:
-    """取 company 在 year 年度年报里的主要会计数据。
+def load_report(company: str, year: int, period: str, docs: list[dict], *, allow_fetch: bool = True,
+                now: float | None = None) -> tuple[dict | None, bool]:
+    """取 company 在 year 年度 period 那份报告里的主要会计数据。
 
     返回 (fin 或 None, 是否真的从巨潮下载了)。调用方用第二项计会话的下载次数。
     allow_fetch=False 时只看本地和缓存（会话下载次数用完了）。
     """
     now = time.time() if now is None else now
-    local = _from_local(company, year, docs)
+    local = _from_local(company, year, period, docs)
     if local:
         return local, False
-    hit, fin = _read_cache(company, year, now)
+    hit, fin = _read_cache(company, year, period, now)
     if hit or not allow_fetch:
         return fin, False
-    fin = _from_cninfo(company, year)          # 网络错误直接抛给调用方，不写缓存
-    _write_cache(company, year, fin, now)
+    fin = _from_cninfo(company, year, period)  # 网络错误直接抛给调用方，不写缓存
+    _write_cache(company, year, period, fin, now)
     return fin, True
+
+
+def load_older(company: str, year: int, docs: list[dict], *, allow_fetch: bool = True,
+               now: float | None = None) -> tuple[dict | None, bool]:
+    """往年那份年报（拉长到六年用）。"""
+    return load_report(company, year, FY, docs, allow_fetch=allow_fetch, now=now)
 
 
 def _span(years: list[str]) -> str:
