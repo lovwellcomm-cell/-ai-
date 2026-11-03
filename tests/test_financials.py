@@ -450,3 +450,23 @@ def test_load_or_build_caches_failure(tmp_path, monkeypatch):
     assert financials.load_or_build("x") is None
     assert len(calls) == 1
     assert financials.load_or_build("missing") is None
+
+
+def test_load_or_build_does_not_cache_exceptions(tmp_path, monkeypatch):
+    """抽取出异常是偶发错误，不能写成「抽不到」缓存住：下次还要再试。"""
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "source.pdf").write_bytes(b"%PDF-fake")
+    calls = []
+
+    def flaky(data, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("pdfium hiccup")
+        return {"version": financials.FIN_VERSION, "items": {"revenue": {}}}
+
+    monkeypatch.setattr(financials, "extract", flaky)
+    assert financials.load_or_build("x") is None
+    assert not (tmp_path / "x" / financials.FIN_FILE).exists()
+    assert financials.load_or_build("x")["items"] == {"revenue": {}}
+    assert len(calls) == 2

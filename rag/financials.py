@@ -617,7 +617,9 @@ def load_or_build(doc_id: str) -> dict | None:
         fin = extract(pdf.read_bytes(), period=meta.get("period") or FY,
                       year=meta.get("year", ""))
     except Exception:
-        fin = None
+        # 出异常不落盘（和体检、三表速读一样）：偶发错误（比如以前没加锁时并发解析）
+        # 写成「抽不到」会一直缓存到下次升版本，这份报告就再也没有指标卡
+        return None
     try:
         path.write_text(json.dumps(fin or {"version": FIN_VERSION, "items": {}},
                                    ensure_ascii=False, indent=1), encoding="utf-8")
