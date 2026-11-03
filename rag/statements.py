@@ -190,9 +190,11 @@ class _Locator:
     def right_edges(self, page: int, digits: str) -> list[float]:
         if self.pdf is None:
             return []
-        tp = self._pages.get(page)
-        if tp is None:
-            tp = self._pages[page] = self.pdf[page - 1].get_textpage()
+        got = self._pages.get(page)
+        if got is None:
+            pg = self.pdf[page - 1]
+            got = self._pages[page] = (pg, pg.get_textpage())
+        tp = got[1]
         out = []
         searcher = tp.search(digits)
         try:
@@ -204,8 +206,10 @@ class _Locator:
         return out
 
     def close(self):
-        for tp in self._pages.values():
+        # 先关文字层再关页面（文字层挂在页面上）；页面也要在锁里显式关，见 rag/pdf_parser.PDFIUM_LOCK
+        for pg, tp in self._pages.values():
             tp.close()
+            pg.close()
         self._pages.clear()
 
 
@@ -429,16 +433,17 @@ def build_from_lines(pages_lines: list[list[str]], period: str = FY, locator: _L
 
 
 def build(data: bytes, period: str = FY) -> dict:
-    from .pdf_parser import _page_lines, open_pdf
+    from .pdf_parser import PDFIUM_LOCK, _page_lines, open_pdf
 
-    pdf = open_pdf(data)
-    locator = _Locator(pdf)
-    try:
-        pages_lines = [_page_lines(pdf, i) for i in range(len(pdf))]
-        return build_from_lines(pages_lines, period, locator)
-    finally:
-        locator.close()
-        pdf.close()
+    with PDFIUM_LOCK:                      # 定列要边抽边查坐标，整个过程都在锁里
+        pdf = open_pdf(data)
+        locator = _Locator(pdf)
+        try:
+            pages_lines = [_page_lines(pdf, i) for i in range(len(pdf))]
+            return build_from_lines(pages_lines, period, locator)
+        finally:
+            locator.close()
+            pdf.close()
 
 
 def load_or_build(doc_id: str) -> dict | None:

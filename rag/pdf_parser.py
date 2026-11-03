@@ -1,14 +1,21 @@
 """② PDF 文本提取：逐页提取正文，记录页码与所属章节。
 
 使用 pypdfium2（PDFium，Chrome 同款内核）。本机 Smart App Control 会拦截 PyMuPDF 的原生模块。
+
+PDFium 不是线程安全的，而 Streamlit 每个会话一个线程（两个访客同时上传、翻原页），评测脚本也并发跑。
+所以所有 PDFium 调用都拿 PDFIUM_LOCK，页面用完在锁里显式关掉 —— 留给垃圾回收的话，
+会在随便哪个线程里关页面，撞上别的线程正在解析就整个进程崩溃（Windows 0xc000001d）。
 """
 import re
+import threading
 from collections import Counter
 from dataclasses import dataclass, field
 
 import pypdfium2 as pdfium
 
 from .periods import detect as detect_period
+
+PDFIUM_LOCK = threading.RLock()
 
 # A 股年报常见标题：“第一节 重要提示”“第三章 管理层讨论与分析”
 HEADING_RE = re.compile(r"^\s*第[一二三四五六七八九十百零\d]+[节章]\s*\S.{0,30}$")
@@ -46,23 +53,36 @@ def open_pdf(path_or_bytes) -> pdfium.PdfDocument:
 def render_page_png(path_or_bytes, page_no: int, scale: float = 1.5) -> bytes:
     """把第 page_no 页（1 起）渲染成 PNG，用于界面核查原页。"""
     import io
-    doc = open_pdf(path_or_bytes)
-    try:
-        img = doc[page_no - 1].render(scale=scale).to_pil()
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
-    finally:
-        doc.close()
+    with PDFIUM_LOCK:
+        doc = open_pdf(path_or_bytes)
+        try:
+            page = doc[page_no - 1]
+            try:
+                bitmap = page.render(scale=scale)
+                try:
+                    buf = io.BytesIO()
+                    bitmap.to_pil().save(buf, format="PNG")   # to_pil 共用位图内存：关位图前存完
+                    return buf.getvalue()
+                finally:
+                    bitmap.close()
+            finally:
+                page.close()
+        finally:
+            doc.close()
 
 
 def _page_lines(doc: pdfium.PdfDocument, i: int) -> list[str]:
-    """第 i 页（0 起）按 PDFium 的视觉行切开的原始文本。表格同一行的单元格以空格相连。"""
-    tp = doc[i].get_textpage()
+    """第 i 页（0 起）按 PDFium 的视觉行切开的原始文本。表格同一行的单元格以空格相连。
+    调用方要拿着 PDFIUM_LOCK。"""
+    page = doc[i]
     try:
-        return re.split(r"\r\n|\r|\n", tp.get_text_bounded())
+        tp = page.get_textpage()
+        try:
+            return re.split(r"\r\n|\r|\n", tp.get_text_bounded())
+        finally:
+            tp.close()
     finally:
-        tp.close()
+        page.close()
 
 
 def raw_page_lines(path_or_bytes, max_pages: int = 30) -> list[list[str]]:
@@ -71,11 +91,12 @@ def raw_page_lines(path_or_bytes, max_pages: int = 30) -> list[list[str]]:
     结构化抽取要用：`单位：元 币种：人民币` 这种行在有的年报里出现在一半以上的页面上，
     会被 `_repeated_lines` 当成页眉删掉（贵州茅台就是这样），而它恰恰决定了金额的量纲。
     """
-    doc = open_pdf(path_or_bytes)
-    try:
-        return [_page_lines(doc, i) for i in range(min(max_pages, len(doc)))]
-    finally:
-        doc.close()
+    with PDFIUM_LOCK:
+        doc = open_pdf(path_or_bytes)
+        try:
+            return [_page_lines(doc, i) for i in range(min(max_pages, len(doc)))]
+        finally:
+            doc.close()
 
 
 def _repeated_lines(pages_lines: list[list[str]]) -> set[str]:
@@ -154,12 +175,13 @@ def extract_doc_info(pages: list[Page]) -> DocInfo:
 
 
 def parse_pdf(path_or_bytes) -> list[Page]:
-    doc = open_pdf(path_or_bytes)
-    try:
-        raw = [_page_lines(doc, i) for i in range(len(doc))]
-        toc_map = _toc_sections(doc)
-    finally:
-        doc.close()
+    with PDFIUM_LOCK:
+        doc = open_pdf(path_or_bytes)
+        try:
+            raw = [_page_lines(doc, i) for i in range(len(doc))]
+            toc_map = _toc_sections(doc)
+        finally:
+            doc.close()
 
     noise = _repeated_lines(raw)
     pages: list[Page] = []
