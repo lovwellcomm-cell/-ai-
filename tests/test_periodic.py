@@ -105,6 +105,15 @@ def test_q3_rows_without_statement_match_are_dropped():
     assert fin is None                      # 没有归母净利润，整张卡不出
 
 
+def test_q3_statement_row_wrapped_onto_two_lines():
+    """精达 2025 三季报的利润表：归母净利润科目名太长，本期、上年同期金额各占一行。"""
+    wrapped = _lines(JD_Q3_STATEMENTS.replace(
+        "1.归属于母公司股东的净利润（净亏损以“-”号填列） 497,864,679.34 450,880,616.26",
+        "1.归属于母公司股东的净利润（净亏损以“-”号填\n列）\n497,864,679.34\n450,880,616.26"))
+    fin = extract_periodic_from_lines([_lines(JD_Q3_COVER), _lines(JD_Q3_PAGE2), wrapped], "Q3", 2026)
+    assert fin["items"]["np_parent"]["values"]["2025"] == 450880616.26
+
+
 def test_q3_deducted_dropped_when_nonrecurring_total_disagrees():
     page2 = _lines(JD_Q3_PAGE2.replace("16,597,658.32", "26,597,658.32"))
     fin = extract_periodic_from_lines([_lines(JD_Q3_COVER), page2, _lines(JD_Q3_STATEMENTS)],

@@ -29,7 +29,8 @@ from .periods import FY, Q3, detect
 # 2：加入季报/半年报（period 字段）。老缓存版本不符，第一次用到时自动重抽。
 # 3：三行科目、括号负数、万科的别名 —— 以前漏抽的扣非净利润能补上。
 # 4：追溯调整后的「调整后 / 调整前」5–6 列格式（长江电力）。
-FIN_VERSION = 4
+# 5：三季报利润表科目折行、本期和上年同期金额各占一行（精达 2025 三季报以前整张表抽不出）。
+FIN_VERSION = 5
 FIN_FILE = "financials.json"
 
 UNIT_SCALE = {"亿元": 1e8, "万元": 1e4, "千元": 1e3, "元": 1.0}
@@ -328,10 +329,14 @@ def _prior_from_statements(all_lines: list[str], ytd: float, change: float,
     报表的单位可能和主要会计数据表不同（时代新材的表是万元、报表是元），两种都试；
     万元四舍五入到分，换算成元会差几十元，所以按换算后的精度比对。
     表里那一行自己也是「金额 增减」相邻，但拿增减当上年金额复算不可能对得上，不用特意跳过。
+    科目名太长时一行会折开（精达 2025 三季报的归母净利润：本期金额、上年同期金额各占一行），
+    所以本期金额是这一行最后一个数时，再看下一行的第一个数。
     """
     target = ytd * scale
-    for ln in all_lines:
+    for i, ln in enumerate(all_lines):
         vals = _amounts(ln)
+        if vals and i + 1 < len(all_lines):
+            vals = vals + _amounts(all_lines[i + 1])[:1]
         for j in range(len(vals) - 1):
             for s in {1.0, scale}:
                 if abs(vals[j] * s - target) <= 0.006 * scale:
