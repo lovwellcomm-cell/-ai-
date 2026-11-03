@@ -31,7 +31,8 @@ OUT = Path(__file__).resolve().parent.parent / "eval_out"
 TODAY = date(2026, 11, 2)
 D = {"jd25": "2d3dee37263a663e", "jd26q3": "705059e66541f245", "jd26q1": "e7c61d0ee9fdf92a",
      "mt25": "474905deeaf0f875", "mt24": "5299f4940e2ce4e9", "qpl25": "6da0b63132e3f0f6",
-     "qpl24": "f0fd7be994bcc4b1", "qpl26h1": "329e3ba64f8cb0ec", "sd25": "c4b7d146264a84a8"}
+     "qpl24": "f0fd7be994bcc4b1", "qpl26h1": "329e3ba64f8cb0ec", "sd25": "c4b7d146264a84a8",
+     "jd26h1": "287df54da8d255e6", "jd25q3": "ccb04b65494ef2fd", "qpl26q3": "58b83e17d89ae44d"}
 
 CASES = [
     dict(n=1, cur="jd25", q="营业收入和归母净利润分别是多少？", doc="jd25", nums=["246.74", "5.99"]),
@@ -60,6 +61,11 @@ CASES = [
          doc=["qpl26h1", "qpl25"], nums=[], cross=True),
     dict(n=20, cur="jd26q1", q="一季度和三季度的营收分别是多少",
          doc=["jd26q1", "jd26q3"], nums=["234.31"], cross=True),
+    # 第三期。chain：先完整跑一遍前一问（记下笔记），再问这一问 —— 用户最早的原例子
+    dict(n=21, cur="jd25", chain="精达近三年发展态势如何", q="结合最新季报对比一下",
+         doc=["jd26q3", "jd25"], nums=["234.31"], cross=True),
+    # 毛利率变化的原因写在半年报里：复核应要求到半年报补检索（judge 不强求，逐题表里看「补检索」）
+    dict(n=22, cur="jd26q3", q="结合半年报看前三季度毛利率变化", doc=["jd26q3", "jd26h1"], nums=[], cross=True),
 ]
 
 
@@ -89,11 +95,13 @@ def _meta(key: str) -> dict:
     return next(d for d in list_documents(None) if d["doc_id"] == D[key])
 
 
-def run(case: dict, engine: str) -> dict:
+def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
+    """prior：前几轮的历史条目（带事实笔记），链式题（chain）用 —— 和 app.py 的 history 同一个形状。"""
     # plain：新流程，只是回答用通俗版提示词（rag/generator.PLAIN_RULE_8）
     style = "plain" if engine == "plain" else "pro"
     engine = "new" if engine == "plain" else engine
-    from rag import planner, reviewer
+    from rag import caliber, config, planner, reviewer
+    from ui.memory import recent_context
     from rag.company import extract_target
     from rag.generator import analyze, generate, get_client
     from rag.indexer import list_documents, load_index
@@ -108,7 +116,10 @@ def run(case: dict, engine: str) -> dict:
     client = Counting(get_client())
     docs = list_documents(None)
     cur = _meta(case["cur"])
-    history = case.get("history") or []
+    prior = prior or []
+    # 检索侧只用问题；规划器和生成侧用带结论摘要、笔记出处的上下文（和 app.py 一样）
+    history = case.get("history") or [e["q"] for e in prior]
+    ctx = recent_context(prior, config.FOLLOWUP_HISTORY_TURNS) if prior else history
     q = case["q"]
     t0 = time.time()
     kw = dict(current_company=cur.get("company", ""), current_year=cur.get("year", ""),
@@ -116,10 +127,10 @@ def run(case: dict, engine: str) -> dict:
 
     def resolve(hint=""):
         if engine == "new":
-            u = planner.understand(q, client=client, history=history, current=cur, docs=docs,
+            u = planner.understand(q, client=client, history=ctx, current=cur, docs=docs,
                                    today=TODAY, hint=hint)
             if u is None:
-                u = planner.fallback(q, client=client, history=history, current=cur, today=TODAY)
+                u = planner.fallback(q, client=client, history=ctx, current=cur, today=TODAY)
             return u, plan_for(u, **kw)
         tgt = with_period(extract_target(q, client=client, current_company=cur.get("company", "")),
                           q, TODAY)
@@ -151,6 +162,9 @@ def run(case: dict, engine: str) -> dict:
             steps.append((x["year"], x["period"], p2["action"]))
             continue
         sdoc = p2["doc"]["doc_id"]
+        if notes.already_noted(prior, sdoc, x["need"]):
+            steps.append((x["year"], x["period"], "have"))
+            continue
         src = f"{company} {report_label(x['year'], x['period'])}"
         _, c2, e2 = load_index(sdoc)
         r2 = Retriever(c2, e2, company=company, year=str(x["year"]))
@@ -165,8 +179,18 @@ def run(case: dict, engine: str) -> dict:
         step_notes += got_notes
         steps.append((x["year"], x["period"], len(got_notes)))
     n_retrieved = len(hits)
-    hits = hits + notes.as_hits([], meta["doc_id"], extra=step_notes)
+    hits = hits + notes.as_hits(prior, meta["doc_id"], extra=step_notes)
     state = {"turn": {"q": q, "hits": hits, "queries": qs, "status": "generating", "started": t0}}
+    # 分步回答：回退的时间预算按主步骤估（rag/reviewer.decide），和 app.py 先读完才起算一致
+    if (u or {}).get("also_read"):
+        state["turn"]["main_started"] = time.time()
+    src_main = f"{company} {report_label(year, period)}".strip()
+    fin_main = load_fin(meta["doc_id"])
+    others = notes.other_reports(docs, meta, meta["doc_id"])
+    supplemented: list[str] = []
+    # 历史条目里记笔记要的几个字段（ui/turn.history_entry）：链式题的下一问靠它们
+    state["turn"].update(doc_id=meta["doc_id"], src_label=src_main, step_notes=step_notes,
+                         fin_notes=notes.from_financials(fin_main, meta["doc_id"], src_main))
 
     def gen(qq, hh, *, client, company, year, history):
         t = state["turn"]
@@ -180,35 +204,57 @@ def run(case: dict, engine: str) -> dict:
                       diag=diag, history=history, period=period)
         return ext, diag
 
+    def facts_of(hh):
+        return caliber.facts(notes.from_financials(fin_main, meta["doc_id"], src_main) + caliber.note_lines(hh))
+
     def rev(qq, answer, hh, *, client):
-        return reviewer.review(qq, answer, hh, client=client, plan=u)
+        return reviewer.review(qq, answer, hh, client=client, plan=u, facts=facts_of(hh),
+                               reports=list(others))
 
     entry = None
     for _ in range(12):
         new, entry, err = step(state["turn"], gen=gen, ana=ana, client=client, company=company,
-                               year=year, recent=history or None,
+                               year=year, recent=ctx or None,
                                rev=rev if engine == "new" else None)
         if err:
             out.update(error=err)
             break
         if entry is not None:
             break
-        if new["status"] == "retrieving":
+        if new["status"] == "retrieving" and others.get(new.get("retry_report") or ""):
+            # 第三期：去别的报告补检索，和 app.py 的 supplement_hits 一样接原文片段，主报告片段照留
+            sdoc = others[new["retry_report"]]
+            _, c3, e3 = load_index(sdoc)
+            r3 = Retriever(c3, e3, company=company, year=new["retry_report"][:4])
+            found, used = r3.search_with_queries(q, client=client, use_llm=False,
+                                                 queries=new.pop("retry_queries", None) or None)
+            extra = notes.as_supplement(found, sdoc, f"{company} {new['retry_report']}",
+                                        config.RETRY_OTHER_TOP_K)
+            supplemented.append(new["retry_report"])
+            new = dict(new, hits=[h for h in new["hits"] if not h.get("extra")] + extra,
+                       queries=list(dict.fromkeys(list(new.get("queries") or []) + list(used))),
+                       status="generating")
+        elif new["status"] == "retrieving":
             hits, qs = retrieve(new.pop("retry_queries", None))
             n_retrieved = len(hits)
-            hits = hits + notes.as_hits([], meta["doc_id"], extra=step_notes)
+            hits = hits + notes.as_hits(prior, meta["doc_id"], extra=step_notes)
             new = dict(new, hits=hits, queries=qs, status="generating")
         elif new["status"] == "resolving":
             # 复核要求重新理解：评测里不换报告（换了也是本地切换），只重做规划和检索
             u, _ = resolve(new.get("replan_hint", ""))
             hits, qs = retrieve()
             n_retrieved = len(hits)
-            hits = hits + notes.as_hits([], meta["doc_id"], extra=step_notes)
+            hits = hits + notes.as_hits(prior, meta["doc_id"], extra=step_notes)
             new = dict(new, hits=hits, queries=qs, status="generating")
         state["turn"] = new
-    out.update(action=plan["action"], doc=meta["doc_id"], answer=(entry or {}).get("a", ""),
-               hits=state["turn"].get("hits") or [], review=(entry or {}).get("review"),
-               steps=steps, n_retrieved=n_retrieved,
+    final_hits = state["turn"].get("hits") or []
+    answer = (entry or {}).get("a", "")
+    out.update(action=plan["action"], doc=meta["doc_id"], answer=answer,
+               hits=final_hits, review=(entry or {}).get("review"),
+               steps=steps, n_retrieved=n_retrieved, supplemented=supplemented,
+               # 交给用户的回答里还剩几处一定错的跨口径计算（rag/caliber.py）
+               cross_span=sum(c["hard"] for c in caliber.cross_span(answer, final_hits, facts_of(final_hits))),
+               notes=(entry or {}).get("notes") or [], src=src_main,
                secs=round(time.time() - t0, 1), calls=client.calls)
     return out
 
@@ -233,9 +279,11 @@ def judge(case: dict, got: dict) -> dict:
     if case.get("cross"):
         k = got.get("n_retrieved", len(hits))
         cross = any(n > k and hits[n - 1].get("note") for n in cited_numbers(ans, len(hits)))
-    return {"ok": doc_ok and nums_ok and not abstain and not got.get("error") and cross is not False,
+    span = got.get("cross_span") or 0
+    return {"ok": doc_ok and nums_ok and not abstain and not got.get("error") and cross is not False
+            and not span,
             "doc": doc_ok, "nums": nums_ok, "abstain": abstain, "orphan": orphan, "cross": cross,
-            **readability(ans)}
+            "span": span, **readability(ans)}
 
 
 _SENT_END = re.compile(r"(?<=[。！？])")
@@ -273,7 +321,13 @@ def main() -> None:
     def one(job):
         c, e = job
         try:
-            got = run(c, e)
+            prior, this = [], c
+            if c.get("chain"):
+                # 链式题：先完整跑前一问，把它的历史条目（含笔记）带进这一问；当前报告换成前一问用的那份
+                first = run(dict(c, q=c["chain"]), e)
+                prior = [{"q": c["chain"], "a": first.get("answer", ""), "notes": first.get("notes") or []}]
+                this = dict(c, cur=next((k for k, v in D.items() if v == first.get("doc")), c["cur"]))
+            got = run(this, e, prior=prior)
         except Exception as ex:
             got = {"engine": e, "n": c["n"], "error": f"{type(ex).__name__}: {ex}", "secs": 0, "calls": 0}
         return c, e, got, judge(c, got)
@@ -297,6 +351,7 @@ def main() -> None:
         ("关键数字都在", lambda e: f"{len(col(e, lambda r: r[3]['nums']))} / {len(col(e, lambda r: r[3]['nums'] is not None))}"),
         ("误答未找到", lambda e: str(len(col(e, lambda r: r[3]['abstain'])))),
         ("跨报告引用了笔记", lambda e: f"{len(col(e, lambda r: r[3].get('cross')))} / {len(col(e, lambda r: r[3].get('cross') is not None))}"),
+        ("跨口径计算（程序查出，合计）", lambda e: str(sum(r[3].get('span') or 0 for r in col(e, lambda r: True)))),
         ("无出处数字（合计）", lambda e: str(sum(r[3]['orphan'] or 0 for r in col(e, lambda r: True)))),
         ("耗时中位数（秒）", lambda e: str(med([r[2].get('secs', 0) for r in col(e, lambda r: True)]))),
         ("耗时最长（秒）", lambda e: str(max([r[2].get('secs', 0) for r in col(e, lambda r: True)] or [0]))),
@@ -334,6 +389,10 @@ def main() -> None:
                 bits.append("没引用笔记")
             if g.get("steps"):
                 bits.append("先读" + "、".join(f"{y}{p}:{n}" for y, p, n in g["steps"]))
+            if g.get("supplemented"):
+                bits.append("补检索→" + "、".join(g["supplemented"]))
+            if j.get("span"):
+                bits.append(f"跨口径{j['span']}")
             if c.get("behave"):
                 bits.append(str(g.get("action")))
             rv = g.get("review") or {}

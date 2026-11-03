@@ -10,6 +10,10 @@
       编原因   末尾加一句片段里没有的归因
       错年份   把报告年份全换成早两年
       答非所问 换成另一道题的回答
+      跨口径   （只对跨报告题）加一句「前三季度营收较去年全年下降 x%」—— 九个月比十二个月（第三期）
+
+跨报告题：主报告检索片段 + 另一份报告的主要会计数据笔记（rag/notes.as_hits），复核时带上带口径的数
+（rag/caliber.facts），和 app.py 一样。
 """
 from __future__ import annotations
 
@@ -32,7 +36,25 @@ QUESTIONS = [
     (QPL, "毛利率是多少，同比怎么变化？"),
     (QPL, "2025年的利润分配方案是什么？"),
 ]
+JD26Q3, QPL26Q3 = "705059e66541f245", "58b83e17d89ae44d"
+# 跨报告题：(主报告, 笔记来自哪份, 问题)
+CROSS = [
+    (JD26Q3, JD, "对比一下 2025 年报和 2026 三季报的营业收入和归母净利润"),
+    (QPL26Q3, QPL, "七匹狼 2025 年报和 2026 三季报的营收、净利润对比"),
+]
 _AMOUNT_RE = re.compile(r"(\d[\d,]*\.\d{2})(\s*亿元)")
+
+
+def cross_line(fact_list: list[dict]) -> str | None:
+    """跨口径注入：用笔记里的全年营收和主报告的前三季度营收算一个「同比」—— 每个数都有出处，只是口径不同。"""
+    rev = [f for f in fact_list if f["key"] == "revenue"]
+    fy = max((f for f in rev if f["span"] == "FY"), key=lambda f: f["year"] or "", default=None)
+    ytd = max((f for f in rev if f["span"] not in ("FY", "单季")), key=lambda f: f["year"] or "", default=None)
+    if not fy or not ytd:
+        return None
+    pct = (ytd["value"] - fy["value"]) / fy["value"] * 100
+    return (f"\n\n- 前三季度营业收入较 {fy['year']} 年全年{'下降' if pct < 0 else '增长'} "
+            f"{abs(pct):.2f}%，增长明显放缓。")
 
 
 def inject(kind: str, answer: str, other: str, year: str) -> str | None:
@@ -57,28 +79,40 @@ def main() -> None:
     ap.add_argument("--tag", default=datetime.now().strftime("%m%d-%H%M"))
     args = ap.parse_args()
 
-    from rag import planner, reviewer
+    from rag import caliber, notes, planner, reviewer
+    from rag.financials import load_or_build as load_fin
     from rag.generator import generate, get_client
-    from rag.indexer import load_index
+    from rag.indexer import list_documents, load_index
+    from rag.periods import period_of, report_label
     from rag.retriever import Retriever
 
     client = get_client()
+    docs = {d["doc_id"]: d for d in list_documents(None)}
+
+    def label(meta):
+        return f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}".strip()
 
     def answer_one(item):
-        doc_id, q = item
+        doc_id, note_doc, q = item if len(item) == 3 else (item[0], None, item[1])
         meta, chunks, emb = load_index(doc_id)
         r = Retriever(chunks, emb, company=meta.get("company", ""), year=meta.get("year", ""))
         plan = planner.understand(q, client=client, current=meta, docs=[meta])
         hits, _ = r.search_with_queries(q, client=client, use_llm=True,
                                         queries=(plan or {}).get("queries") or None,
                                         restated=(plan or {}).get("restated", ""))
+        main_notes = notes.from_financials(load_fin(doc_id), doc_id, label(meta))
+        if note_doc:
+            got = notes.from_financials(load_fin(note_doc), note_doc, label(docs[note_doc]))
+            hits = hits + notes.as_hits([], doc_id, extra=got)
         text = "".join(generate(q, hits, client=client, company=meta.get("company", ""),
-                                year=meta.get("year", ""), focus=planner.focus_block(plan)))
+                                year=meta.get("year", ""), period=period_of(meta),
+                                focus=planner.focus_block(plan)))
         return {"q": q, "doc": meta["name"], "year": meta.get("year", ""), "plan": plan,
-                "hits": hits, "answer": text}
+                "hits": hits, "answer": text, "cross": bool(note_doc),
+                "facts": caliber.facts(main_notes + caliber.note_lines(hits))}
 
     with ThreadPoolExecutor(6) as pool:
-        goods = list(pool.map(answer_one, QUESTIONS))
+        goods = list(pool.map(answer_one, QUESTIONS + CROSS))
 
     cases = []
     for i, g in enumerate(goods):
@@ -88,9 +122,12 @@ def main() -> None:
             bad = inject(kind, g["answer"], other, g["year"])
             if bad and bad != g["answer"]:
                 cases.append(dict(g, kind=kind, expect="block", text=bad))
+        if g["cross"] and (line := cross_line(g["facts"])):
+            cases.append(dict(g, kind="跨口径", expect="block", text=g["answer"].rstrip() + line))
 
     def review_one(c):
-        res = reviewer.review(c["q"], c["text"], c["hits"], client=client, plan=c["plan"])
+        res = reviewer.review(c["q"], c["text"], c["hits"], client=client, plan=c["plan"],
+                              facts=c["facts"])
         return dict(c, res=res)
 
     with ThreadPoolExecutor(6) as pool:

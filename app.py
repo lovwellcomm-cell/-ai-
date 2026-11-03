@@ -36,7 +36,6 @@ from rag.healthcheck import load_or_build as load_health, wants_health
 from rag import drivers as key_drivers
 from rag.generator import analyze, generate, get_client, make_client, resolve_style
 from rag import caliber, planner, reviewer
-from rag.company import same_company
 from rag.history import load_older, merge, older_year, wants_trend
 from rag import notes as fact_notes
 from rag.fidelity import unverified_in_tables
@@ -45,7 +44,7 @@ from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensur
                          is_current, list_documents, load_index)
 from rag.limits import Quota, check_and_consume
 from rag.pdf_parser import extract_doc_info, parse_pdf, render_page_png
-from rag.periods import FY, RANK, SHORT, period_of, report_label
+from rag.periods import FY, SHORT, period_of, report_label
 from rag.retriever import Retriever
 from ui import payload
 from ui import turn as turn_core
@@ -672,35 +671,19 @@ def run_prestep(target: dict) -> None:
 # 复核器只能从这几份里挑（rag/reviewer.normalize 只认给它看过的名字）：本地已有的同一公司别的报告，新的在前。
 # 不去巨潮下载 —— 回退要快，而且没读过的报告复核器也说不准答案在不在里面。
 
-def other_reports(limit: int = 6) -> dict[str, str]:
-    """{「2026 半年报」: doc_id}：当前公司本地已有的别的报告。"""
-    company = meta.get("company", "")
-    if not company:
-        return {}
-    docs = [d for d in list_documents(visible_ids())
-            if d.get("doc_id") != doc_id and same_company(d.get("company", ""), company)
-            and str(d.get("year", "")).isdigit()]
-    docs.sort(key=lambda d: (int(d["year"]), RANK[period_of(d)]), reverse=True)
-    out: dict[str, str] = {}
-    for d in docs:
-        out.setdefault(report_label(d["year"], period_of(d)), d["doc_id"])
-    return dict(list(out.items())[:limit])
+def other_reports() -> dict[str, str]:
+    """{「2026 半年报」: doc_id}：当前公司本地已有的别的报告（rag/notes.other_reports）。"""
+    return fact_notes.other_reports(list_documents(visible_ids()), meta, doc_id)
 
 
 def supplement_hits(target: dict, sdoc: str, client) -> tuple[list[dict], list[str]]:
-    """在别的报告上用复核给的检索词找，前 RETRY_OTHER_TOP_K 段原文接在上一轮的片段后面。
-
-    片段带上那份报告的 doc_id 和名字（note / note_src，和事实笔记片段一样）：引用、逐格核对、
-    翻原页、记成笔记都照常 —— 翻原页翻的是那份报告。主报告的片段不重找，上一轮的照留。
-    """
+    """在别的报告上用复核给的检索词找，前 RETRY_OTHER_TOP_K 段原文（rag/notes.as_supplement）
+    接在上一轮的片段后面。主报告的片段不重找，上一轮的照留。"""
     src = f"{meta.get('company', '')} {target['retry_report']}".strip()
     _, sret = get_retriever(sdoc, config.INDEX_VERSION, SOURCE_STAMP)
     found, used = sret.search_with_queries(target["q"], client=client, use_llm=False,
                                            queries=target.pop("retry_queries", None) or None)
-    extra = [dict(h, doc_id=sdoc, note=True, extra=True, note_src=src,
-                  section=f"补充检索 · {src}",
-                  subsection=" · ".join(x for x in (h.get("section"), h.get("subsection")) if x))
-             for h in found[:config.RETRY_OTHER_TOP_K]]
+    extra = fact_notes.as_supplement(found, sdoc, src, config.RETRY_OTHER_TOP_K)
     base = [h for h in target.get("hits") or [] if not h.get("extra")]
     queries = list(dict.fromkeys(list(target.get("queries") or []) + list(used)))
     return base + extra, queries

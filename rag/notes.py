@@ -18,8 +18,9 @@ import re
 
 from .fidelity import (_CITE_RE, _PP_RE, _SEPARATOR_RE, _TABLE_LINE_RE, _found, _hits_index,
                        _split_row, extract_numbers)
+from .company import same_company
 from .financials import BALANCE_KEYS
-from .periods import FY, SPAN
+from .periods import FY, RANK, SPAN, period_of, report_label
 
 NOTE_TURNS = 3            # 最近几轮的笔记带进下一轮（用户 2026-11-03 定）
 MAX_PER_TURN = 20         # 每轮最多记几条（一条 = 表格一行 / 一个科目）；分步读两三份报告时要够放
@@ -197,6 +198,32 @@ def as_hits(history: list[dict], current_doc: str, turns: int = NOTE_TURNS,
         lines = h.pop("lines")
         hits.append(dict(h, text="\n".join(lines), note=True))
     return hits
+
+
+def other_reports(docs: list[dict], current: dict, current_id: str, limit: int = 6) -> dict[str, str]:
+    """{「2026 半年报」: doc_id}：同一公司本地已有的别的报告，新的在前 —— 复核器只能从这几份里挑补检索的去处。"""
+    company = current.get("company", "")
+    if not company:
+        return {}
+    mine = [d for d in docs or []
+            if d.get("doc_id") != current_id and same_company(d.get("company", ""), company)
+            and str(d.get("year", "")).isdigit()]
+    mine.sort(key=lambda d: (int(d["year"]), RANK[period_of(d)]), reverse=True)
+    out: dict[str, str] = {}
+    for d in mine:
+        out.setdefault(report_label(d["year"], period_of(d)), d["doc_id"])
+    return dict(list(out.items())[:limit])
+
+
+def as_supplement(found: list[dict], sdoc: str, src: str, k: int) -> list[dict]:
+    """第三期：复核要求去别的报告补检索时，那份报告检索到的前 k 段原文 → 额外片段。
+
+    和笔记片段一样带 doc_id、note、note_src：引用、逐格核对、翻原页、记成笔记都照常；
+    extra 标明是原文不是笔记（rag/caliber.note_lines 不把它当带口径的数）。原来的章节名挪到 subsection。
+    """
+    return [dict(h, doc_id=sdoc, note=True, extra=True, note_src=src, section=f"补充检索 · {src}",
+                 subsection=" · ".join(x for x in (h.get("section"), h.get("subsection")) if x))
+            for h in (found or [])[:k]]
 
 
 def sources_line(entry: dict) -> str:
