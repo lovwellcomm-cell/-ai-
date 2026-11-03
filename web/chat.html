@@ -11,6 +11,11 @@
     <button class="iconbtn menu-only" id="menuBtn" type="button" aria-label="打开文档栏">
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
     </button>
+    <!-- 回开屏页：对话留在这次会话里，再点「开始聊天」还在 -->
+    <button class="iconbtn home-btn" id="homeBtn" type="button" aria-label="回到首页" title="回到首页 · 对话会保留">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1v-8.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      <span class="home-label">首页</span>
+    </button>
     <!-- 当前报告：点开是这家公司已导入的各年度 / 各期报告（内容由 chat.js 构建） -->
     <div class="ctx-wrap">
       <button class="ctx" id="ctxBtn" type="button" aria-haspopup="menu" aria-expanded="false"
@@ -24,6 +29,15 @@
       <div class="ctx-pop" id="ctxPop" role="menu" hidden></div>
     </div>
     <div class="spacer"></div>
+    <!-- 问题目录：这段对话问过的问题，点了跳到那一轮（问过 2 个以上才显示；内容由 chat.js 构建） -->
+    <div class="qnav-wrap" id="qnavWrap" hidden>
+      <button class="iconbtn" id="qnavBtn" type="button" aria-haspopup="menu" aria-expanded="false"
+              aria-controls="qnavPop" title="本段对话问过的问题">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span class="qnav-label">目录</span>
+      </button>
+      <div class="qnav-pop" id="qnavPop" role="menu" hidden></div>
+    </div>
     <button class="iconbtn new-chat" id="newChatBtn" type="button" aria-label="新对话"
             title="新对话 · 也可以直接问别的公司，助手会自动帮你找年报">
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
@@ -51,6 +65,11 @@
         <span id="warnText"></span>
       </div>
 
+      <!-- 往上翻了以后浮出来：回到对话底部（chat.js paintJump 控制显隐） -->
+      <button class="jump" id="jumpBtn" type="button" hidden>
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14m0 0-6-6m6 6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="jumpText">回到底部</span>
+      </button>
       <div class="composer">
         <textarea id="input" rows="1" aria-label="提问"></textarea>
         <div class="cbar">
@@ -78,10 +97,11 @@
 
   <!-- ================= 引用抽屉（绝对定位在组件内，不覆盖左侧原生侧边栏）================= -->
   <div class="scrim" id="scrim" hidden></div>
-  <aside class="panel" id="panel" aria-hidden="true" aria-label="引用来源">
+  <aside class="panel" id="panel" tabindex="-1" aria-hidden="true" aria-label="引用来源">
     <div class="panel-head">
       <h2>引用来源</h2>
       <span class="tag mono" id="panelCount">0 段</span>
+      <span class="panel-keys mono" title="抽屉开着时用键盘左右方向键切换来源">← → 切换</span>
       <div class="spacer"></div>
       <button class="iconbtn" id="panelClose" type="button" aria-label="关闭">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>

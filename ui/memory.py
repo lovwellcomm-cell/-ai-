@@ -122,6 +122,8 @@ def clean_entry(e, known_docs: set[str]) -> dict | None:
         out["secs"] = secs
     if e.get("style") in ("plain", "pro"):              # 回答风格：只认两个值
         out["style"] = e["style"]
+    if e.get("stopped") is True:                       # 用户中途停止的回答：只认 True
+        out["stopped"] = True
     # 事实笔记（rag/notes.py）：浏览器送回来的，逐条校验
     raw_notes = e.get("notes") if isinstance(e.get("notes"), list) else []
     notes = [n for n in (_clean_note(x, known_docs) for x in raw_notes[:MAX_NOTES]) if n]
@@ -164,6 +166,8 @@ def pack(history: list[dict]) -> list[dict]:
                 if e.get(k)}
         if isinstance(e.get("secs"), int):
             item["secs"] = e["secs"]
+        if e.get("stopped") is True:
+            item["stopped"] = True
         item["hits"] = [{k: h.get(k) for k in ("text", "section", "subsection",
                                                 "page_start", "page_end", "note", "doc_id", "note_src")
                          if k in h}

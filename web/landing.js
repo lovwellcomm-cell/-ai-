@@ -409,7 +409,8 @@ export default function (component) {
     THEME.pick = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
     applyTheme(THEME.pick);
     if (canvas && !LOOP.raf) draw(canvas, 8);   // 减少动画模式下没有动画循环，手动重画静止帧
-    if (setStateValue) setStateValue("theme", THEME.pick);
+    // 带时间戳：组件状态里可能还留着上次的同一个值，值不变 Python 的回调不会触发
+    if (setStateValue) setStateValue("theme", { t: THEME.pick, at: Date.now() });
   };
 
   // 「开始聊天」只进入助手；「这样问」进入助手并直接发出 data-ask 那句话（app.py 当成一次普通提问）
@@ -418,6 +419,8 @@ export default function (component) {
       e.stopPropagation();
       b.disabled = true;
       const ask = b.getAttribute("data-ask");
+      // 离开开屏页就把手动选择交还 Python（ui_theme）：聊天页可能再切，从聊天页「首页」回来以服务器给的为准
+      THEME.pick = null;
       setTriggerValue("enter", ask ? { at: Date.now(), ask: ask } : { at: Date.now() });
     };
   });
@@ -426,6 +429,7 @@ export default function (component) {
     b.onclick = (e) => {
       e.stopPropagation();
       b.disabled = true;
+      THEME.pick = null;
       setTriggerValue("go", b.getAttribute("data-go"));
     };
   });

@@ -18,6 +18,8 @@
  */
 
 const ICONS = {
+  send: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 19V5m0 0-6 6m6-6 6 6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg>',
   mark: '<svg class="mark-sm" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="1" y="1" width="22" height="22" rx="7" stroke="currentColor" stroke-opacity=".3" stroke-width="1.3"/><rect x="6" y="13.2" width="3" height="4.8" rx="1.1" fill="currentColor" opacity=".42"/><rect x="10.5" y="10" width="3" height="8" rx="1.1" fill="currentColor" opacity=".68"/><rect x="15" y="6.4" width="3" height="11.6" rx="1.1" fill="currentColor"/></svg>',
   sun: '<circle cx="12" cy="12" r="4.2" stroke="currentColor" stroke-width="1.6"/><path d="M12 2.6v2.2M12 19.2v2.2M4.2 12H2M22 12h-2.2M6.4 6.4 4.9 4.9M19.1 19.1l-1.5-1.5M6.4 17.6l-1.5 1.5M19.1 4.9l-1.5 1.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
   moon: '<path d="M20 13.5A8 8 0 0 1 10.5 4a8 8 0 1 0 9.5 9.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
@@ -146,7 +148,7 @@ const S = new Map();
 function localState(key) {
   let s = S.get(key);
   if (!s) {
-    s = { draft: "", scrollTop: 0, atBottom: true, pinned: false, revealed: null, msgCount: 0, drawer: false, turnIdx: -1, srcIdx: 0, activeCite: null, collapsed: new Set(), srcOpen: new Set(), headSig: null, msgSigs: [], drawerSig: null, themeOverride: null };
+    s = { draft: "", scrollTop: 0, atBottom: true, pinned: false, revealed: null, msgCount: 0, drawer: false, turnIdx: -1, srcIdx: 0, activeCite: null, collapsed: new Set(), srcOpen: new Set(), headSig: null, msgSigs: [], drawerSig: null, themeOverride: null, stopping: false, recall: -1 };
     S.set(key, s);
   }
   return s;
@@ -270,14 +272,15 @@ export default function (component) {
     setPop(false);
   }
   ctxBtn.onclick = (e) => { e.stopPropagation(); setPop(ctxPop.hidden); };
-  // 点下拉以外的地方、按 Esc 收起。监听只挂一次（组件每次渲染都会重跑这个函数）。
-  if (!root._ctxPopBound) {
-    root._ctxPopBound = true;
-    root.addEventListener("click", (e) => {
-      if (!ctxPop.hidden && !e.target.closest(".ctx-wrap")) setPop(false);
-    });
+  // 点下拉 / 引用抽屉以外的地方、按 Esc 收起（root._dismiss，在「抽屉」一节每次渲染更新）。
+  // 监听只挂一次（组件每次渲染都会重跑这个函数），所以真正干活的函数从 root 上取最新的 ——
+  // 旧闭包里的 data 会过期。用捕获阶段：顶栏按钮的 onclick 里有 stopPropagation，冒泡阶段收不到。
+  if (!root._dismissBound) {
+    root._dismissBound = true;
+    root.addEventListener("click", (e) => { if (root._dismiss) root._dismiss(e); }, true);
     root.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !ctxPop.hidden) { setPop(false); ctxBtn.focus(); }
+      if (e.key === "Escape" && root._dismiss) root._dismiss(e);
+      else if (root._drawerKey) root._drawerKey(e);
     });
   }
   q("#docChipText").textContent = doc.name || "";
@@ -287,7 +290,9 @@ export default function (component) {
     input.placeholder = (narrow && d.placeholderShort) ? d.placeholderShort : (d.placeholder || "");
   };
   setPlaceholder();
-  window.onresize = setPlaceholder;
+  window.onresize = () => { setPlaceholder(); paintSplit(); };
+  // 宽屏开抽屉时对话区往左让出抽屉的宽度，边看原文边看回答；窄了就照旧盖在上面
+  function paintSplit() { root.classList.toggle("split", !!s.drawer && root.clientWidth >= 1100); }
 
   const lastAi = (() => {
     const ms = d.messages || [];
@@ -296,6 +301,48 @@ export default function (component) {
   })();
   const srcTotal = lastAi >= 0 ? ((d.messages[lastAi].sources || []).length) : 0;
   q("#srcCnt").textContent = String(srcTotal);
+
+  /* ---------------- 问题目录 ---------------- */
+  const qnavWrap = q("#qnavWrap");
+  const qnavBtn = q("#qnavBtn");
+  const qnavPop = q("#qnavPop");
+  const setQnav = (open) => {
+    qnavPop.hidden = !open;
+    qnavBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    qnavBtn.classList.toggle("on", open);
+  };
+  const userIdx = [];
+  (d.messages || []).forEach((m, i) => { if (m.role === "user" && m.text) userIdx.push(i); });
+  qnavWrap.hidden = userIdx.length < 2;
+  clear(qnavPop);
+  if (userIdx.length >= 2) {
+    const hd = mk("div", "pop-head");
+    hd.appendChild(mk("span", "pop-title", "本段对话"));
+    hd.appendChild(mk("span", "pop-sub", "问过 " + userIdx.length + " 个问题"));
+    qnavPop.appendChild(hd);
+    const list = mk("div", "qnav-list");
+    userIdx.forEach((mi, k) => {
+      const b = mk("button", "qnav-item");
+      b.type = "button";
+      b.setAttribute("role", "menuitem");
+      b.appendChild(mk("span", "qnav-n mono", String(k + 1)));
+      b.appendChild(mk("span", "qnav-q", d.messages[mi].text));
+      b.onclick = () => {
+        setQnav(false);
+        const el = threadInner.children[mi];
+        if (!el) return;
+        s.pinned = true;
+        const top = thread.scrollTop + el.getBoundingClientRect().top - thread.getBoundingClientRect().top - 12;
+        const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        thread.scrollTo({ top: Math.max(0, top), behavior: still ? "auto" : "smooth" });
+      };
+      list.appendChild(b);
+    });
+    qnavPop.appendChild(list);
+  } else {
+    setQnav(false);
+  }
+  qnavBtn.onclick = () => setQnav(qnavPop.hidden);
 
   /* ---------------- 提示条 ---------------- */
   const warn = q("#warn");
@@ -306,13 +353,23 @@ export default function (component) {
   const busy = !!d.busy;
   // 生成期间输入框保持可用：用户可以先把下一条问题写好，只锁发送按钮，
   // 这样既不会两轮并发，也不会让人觉得界面卡死了。
-  const setSend = () => { sendBtn.disabled = busy || input.value.trim().length === 0; };
+  // 生成中发送键变成「停止」：点了以后等服务器那边停下来（一般一秒内），期间不能再点
+  if (!busy) s.stopping = false;
+  sendBtn.classList.toggle("stop", busy);
+  sendBtn.innerHTML = busy ? ICONS.stop : ICONS.send;
+  sendBtn.setAttribute("aria-label", busy ? "停止生成" : "发送");
+  sendBtn.title = busy ? (s.stopping ? "正在停止…" : "停止生成") : "";
+  const setSend = () => {
+    sendBtn.disabled = busy ? s.stopping : input.value.trim().length === 0;
+  };
   input.disabled = false;
   setSend();
   // 生成中不允许开新对话：中途清空会让上一轮的状态没地方落
   q("#newChatBtn").disabled = busy;
   q("#panelNewChat").disabled = busy;
-  q("#hintLeft").textContent = busy ? "正在生成回答，可以先写下一条问题" : (d.hint || "");
+  q("#hintLeft").textContent = busy
+    ? (s.stopping ? "正在停止…" : "正在生成回答，可以先写下一条问题；点 ■ 停止")
+    : (d.hint || "");
 
   /* ---------------- 对话流 ---------------- */
   // 首页文案也跟着文档走：两份年报的对话历史都为空时，只比较 messages 会让
@@ -420,26 +477,81 @@ export default function (component) {
   panel.classList.toggle("open", s.drawer);
   panel.setAttribute("aria-hidden", s.drawer ? "false" : "true");
   scrim.hidden = !s.drawer;
+  paintSplit();
   renderDrawer();
+  paintSentence();
 
   /* ---------------- 事件（每次渲染重新赋值，幂等） ---------------- */
+  // 「回到底部」：往上翻了、下面还有内容时浮在输入框上方
+  const jumpBtn = q("#jumpBtn");
+  const paintJump = () => {
+    const far = thread.scrollHeight - thread.scrollTop - thread.clientHeight > 160;
+    jumpBtn.hidden = !far || !(d.messages || []).length;
+    jumpBtn.classList.toggle("live", busy);
+    q("#jumpText").textContent = busy ? "回答生成中 · 回到底部" : "回到底部";
+  };
   thread.onscroll = () => {
     s.scrollTop = thread.scrollTop;
     s.atBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 40;
+    paintJump();
+  };
+  requestAnimationFrame(paintJump);
+  jumpBtn.onclick = () => {
+    s.pinned = false;
+    s.atBottom = true;
+    const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    thread.scrollTo({ top: thread.scrollHeight, behavior: still ? "auto" : "smooth" });
   };
 
-  input.oninput = () => {
+  const fitInput = () => {
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, 176) + "px";
+  };
+  input.oninput = () => {
+    fitInput();
     s.draft = input.value;
+    s.recall = -1;
     setSend();
+  };
+  // 问过的问题（新的在后），给 ↑ / ↓ 翻用
+  const asked = (d.messages || []).filter((m) => m.role === "user" && m.text).map((m) => m.text);
+  const putInput = (text) => {
+    input.value = text;
+    s.draft = text;
+    fitInput();
+    setSend();
+    input.setSelectionRange(text.length, text.length);
   };
   input.onkeydown = (e) => {
     // 中文输入法组字期间回车是在选词，不能当发送
     if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); return; }
+    // 输入框空着（或正在翻）时 ↑ 调出上一个问题，↓ 往回翻；正常编辑多行文字时不抢方向键
+    const browsing = s.recall >= 0 && input.value === asked[s.recall];
+    if (e.key === "ArrowUp" && !e.shiftKey && asked.length && (input.value === "" || browsing)) {
+      e.preventDefault();
+      s.recall = browsing ? Math.max(0, s.recall - 1) : asked.length - 1;
+      putInput(asked[s.recall]);
+    } else if (e.key === "ArrowDown" && browsing) {
+      e.preventDefault();
+      s.recall = s.recall + 1 < asked.length ? s.recall + 1 : -1;
+      putInput(s.recall >= 0 ? asked[s.recall] : "");
+    }
   };
-  sendBtn.onclick = submit;
+  sendBtn.onclick = () => {
+    if (!busy) { submit(); return; }
+    if (s.stopping) return;
+    s.stopping = true;
+    sendBtn.disabled = true;
+    sendBtn.title = "正在停止…";
+    q("#hintLeft").textContent = "正在停止…";
+    // 还没出回答的那一轮会整轮丢掉：把问题放回输入框（输入框里已经写了下一条就不动）
+    const ms = d.messages || [];
+    const lm = ms[ms.length - 1];
+    const lq = ms[ms.length - 2];
+    if (lm && lm.role === "ai" && !lm.text && lq && lq.role === "user" && !input.value.trim()) putInput(lq.text);
+    setTriggerValue("stop", { at: Date.now() });
+  };
 
   function newChat() {
     if (busy) return;
@@ -456,13 +568,93 @@ export default function (component) {
 
   q("#themeBtn").onclick = () => {
     s.themeOverride = theme === "dark" ? "light" : "dark";
-    setStateValue("theme", s.themeOverride);
+    // 带时间戳：组件状态里可能还留着上次的同一个值（回过首页再切回来），值不变 Python 的回调不会触发
+    setStateValue("theme", { t: s.themeOverride, at: Date.now() });
     root.setAttribute("data-theme", s.themeOverride);
     q("#themeIcon").innerHTML = s.themeOverride === "dark" ? ICONS.sun : ICONS.moon;
   };
-  q("#srcBtn").onclick = () => { s.drawer = !s.drawer; toggleDrawer(); };
+  q("#srcBtn").onclick = () => {
+    s.drawer = !s.drawer;
+    toggleDrawer();
+    if (s.drawer) panel.focus({ preventScroll: true });
+  };
   q("#panelClose").onclick = () => { s.drawer = false; toggleDrawer(); };
+  // 手机上抽屉是底部弹层：按住顶部往下拖超过 80px（或快速一划）就关上，顶上的拖动条不再是摆设。
+  // 断点和 chat.css 的 @media (max-width: 700px) 一致；宽屏抽屉在右侧，不拖。
+  const phead = q(".panel-head");
+  phead.onpointerdown = (e) => {
+    if (!s.drawer || window.innerWidth > 700 || e.target.closest("button")) return;
+    const y0 = e.clientY, t0 = Date.now();
+    let dy = 0;
+    panel.style.transition = "none";
+    try { phead.setPointerCapture(e.pointerId); } catch (err) { /* 拿不到捕获也能拖，只是手指移出去会断 */ }
+    phead.onpointermove = (ev) => {
+      dy = Math.max(0, ev.clientY - y0);
+      panel.style.transform = "translateY(" + dy + "px)";
+    };
+    phead.onpointerup = phead.onpointercancel = () => {
+      phead.onpointermove = phead.onpointerup = phead.onpointercancel = null;
+      panel.style.transition = "";
+      panel.style.transform = "";
+      const fast = dy > 30 && dy / Math.max(1, Date.now() - t0) > 0.5;
+      if (dy > 80 || fast) { s.drawer = false; toggleDrawer(); }
+    };
+  };
   scrim.onclick = () => { s.drawer = false; toggleDrawer(); };
+  // 点别处自动收起：年份下拉点它以外就收；引用抽屉点抽屉、来源按钮、角标和来源条目以外就收
+  // （后三个本来就是开 / 换抽屉内容的）。Esc 先收下拉，再收抽屉。
+  root._dismiss = (e) => {
+    const esc = e.type === "keydown";
+    const t = e.target;
+    if (!ctxPop.hidden && (esc || !t.closest(".ctx-wrap"))) {
+      setPop(false);
+      if (esc) { ctxBtn.focus(); return; }
+    }
+    if (!qnavPop.hidden && (esc || !t.closest(".qnav-wrap"))) {
+      setQnav(false);
+      if (esc) { qnavBtn.focus(); return; }
+    }
+    if (!s.drawer) return;
+    if (!esc) {
+      if (t.closest(".panel, .scrim, #srcBtn, .cite, button.src")) return;
+      // 拖选回答文字（准备复制）松手时也会触发 click，这不算点空白
+      const sel = window.getSelection && window.getSelection();
+      if (sel && !sel.isCollapsed && String(sel).trim()) return;
+    }
+    s.drawer = false;
+    toggleDrawer();
+  };
+  // 抽屉开着时 ← / → 切上一段 / 下一段来源（焦点在输入框里时不抢，留给光标移动）
+  root._drawerKey = (e) => {
+    if (!s.drawer || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.target.closest("textarea, input")) return;
+    const m = sourceMsg();
+    const n = m && m.sources ? m.sources.length : 0;
+    if (!n) return;
+    e.preventDefault();
+    s.srcIdx = (s.srcIdx + (e.key === "ArrowRight" ? 1 : -1) + n) % n;
+    s.activeCite = m.sources[s.srcIdx].n;
+    markCite(s.activeCite);
+    s.drawerSig = null;
+    renderDrawer();
+    // renderDrawer 会在下一帧放回原滚动位置；这一帧排在它后面，再把选中的卡片滚进视野
+    requestAnimationFrame(() => {
+      const card = q("#panelBody").children[s.srcIdx];
+      if (card) card.scrollIntoView({ block: "nearest" });
+    });
+  };
+  const homeBtn = q("#homeBtn");
+  // 生成中不让走：回合靠页面重跑推进，离开会让这一轮停在半路
+  homeBtn.disabled = busy;
+  homeBtn.title = busy ? "回答生成完再回首页" : "回到首页 · 对话会保留";
+  homeBtn.onclick = () => {
+    if (busy) return;
+    homeBtn.disabled = true;
+    // 手动切过的深浅色交给 Python（app.py 带去开屏页）；回来时以服务器给的为准，免得和开屏页上改过的打架
+    s.themeOverride = null;
+    s.drawer = false;
+    setTriggerValue("go", "home");
+  };
   q("#menuBtn").onclick = () => {
     // 主区的 Streamlit header 被 display:none 隐藏了，但里面的展开按钮仍在 DOM 里，
     // 程序化点击照样生效（已实测）。
@@ -482,7 +674,9 @@ export default function (component) {
     panel.classList.toggle("open", s.drawer);
     panel.setAttribute("aria-hidden", s.drawer ? "false" : "true");
     scrim.hidden = !s.drawer;
+    paintSplit();
     renderDrawer();
+    paintSentence();
   }
 
   /* ---------------- 回答风格 ---------------- */
@@ -513,6 +707,7 @@ export default function (component) {
 
   function submit() {
     if (busy) return;
+    s.recall = -1;
     const text = input.value.trim();
     if (!text) return;
     input.value = "";
@@ -601,6 +796,12 @@ export default function (component) {
     }
     // 复核（agent2）：进行中标「复核中」；通过标「已复核 ✓」；没通过标「复核未通过」（问题也列在回答下方）。
     // 三种都在悬停 / 点按时弹出说明：这个标签什么意思、核对了什么、结果如何。复核没跑成（error）不标 —— 不假装复核过。
+    // 用户中途停止：首轮回答留着，后面的扩展分析 / 复核没做
+    if (m.stopped) {
+      const tg = mk("span", "tag stopped-tag", "已停止");
+      tg.title = "你中途停止了生成：这里是已经写出的部分，后续的扩展分析或复核没有做";
+      meta.appendChild(tg);
+    }
     const rv = m.review || {};
     const pts = (rv.points || []).map((p) => ({ text: (p.ok ? "✓ " : "✗ ") + p.point, cls: p.ok ? "ok" : "bad" }));
     const redo = rv.rounds ? [{ text: "复核后已重答过 1 次" }] : [];
@@ -655,6 +856,18 @@ export default function (component) {
     if (m.status === "error") {
       const w = mk("div", "warn");
       w.appendChild(mk("span", null, m.error || "生成失败，请重试。"));
+      // 一键重试：把同一个问题再发一次（照常计次；失败的那次已经退还）
+      const prevQ = (d.messages || [])[idx - 1];
+      if (prevQ && prevQ.role === "user" && prevQ.text) {
+        const again = mk("button", "warn-retry", "重试");
+        again.type = "button";
+        again.onclick = () => {
+          if (d.busy || again.disabled) return;
+          again.disabled = true;
+          ask(prevQ.text);
+        };
+        w.appendChild(again);
+      }
       body.appendChild(w);
       return wrap;
     }
@@ -910,6 +1123,7 @@ export default function (component) {
   }
 
   function buildMdTable(rows, nSources, bad, ctx) {
+    const outer = mk("div", "md-tbl-box");
     const wrap = mk("div", "md-tbl-wrap");
     const table = mk("table", "md-tbl");
     const split = (ln) => ln.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
@@ -939,7 +1153,29 @@ export default function (component) {
     });
     table.appendChild(tbody);
     wrap.appendChild(table);
-    return wrap;
+    outer.appendChild(wrap);
+    // 复制为表格：制表符分隔，直接粘进 Excel / WPS 就是一格一格的；引用角标不带
+    const cp = mk("button", "tbl-copy");
+    cp.type = "button";
+    cp.innerHTML = ICONS.copy;
+    cp.appendChild(mk("span", null, "复制表格"));
+    cp.title = "复制为表格，可直接粘贴到 Excel";
+    cp.onclick = () => {
+      const tsv = [...table.rows].map((tr) => [...tr.cells].map((c) => {
+        const x = c.cloneNode(true);
+        x.querySelectorAll(".cite").forEach((n) => n.remove());
+        return x.textContent.replace(/\s+/g, " ").trim();
+      }).join("\t")).join("\n");
+      const done = () => {
+        cp.querySelector("span").textContent = "已复制";
+        setTimeout(() => { cp.querySelector("span").textContent = "复制表格"; }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(tsv).then(done, () => fallbackCopy(tsv, done));
+      } else fallbackCopy(tsv, done);
+    };
+    outer.appendChild(cp);
+    return outer;
   }
 
   /* ---------------- 数据卡 ---------------- */
@@ -1855,12 +2091,57 @@ export default function (component) {
     s.drawer = true;
     toggleDrawer();
     markCite(n);
+    panel.focus({ preventScroll: true });
   }
 
   function markCite(n) {
     parentElement.querySelectorAll(".cite").forEach((c) => {
       c.classList.toggle("on", c.dataset.n === String(n));
     });
+    paintSentence();
+  }
+
+  /* 抽屉开着时，把正文里引用了当前这段来源的那句话整句淡淡标出来。
+     用 CSS Custom Highlight API：不改 DOM（正文是逐条比对重建的，包 span 会打乱签名），
+     浏览器不支持就只高亮角标，和以前一样。 */
+  function paintSentence() {
+    if (typeof CSS === "undefined" || !CSS.highlights || typeof Highlight === "undefined") return;
+    const ranges = [];
+    if (s.drawer && s.activeCite != null) {
+      parentElement.querySelectorAll('.cite[data-n="' + String(s.activeCite) + '"]').forEach((c) => {
+        const r = sentenceRange(c);
+        if (r) ranges.push(r);
+      });
+    }
+    if (ranges.length) CSS.highlights.set("arb-cited", new Highlight(...ranges));
+    else CSS.highlights.delete("arb-cited");
+  }
+  // 从角标往前找到上一个句末标点（。！？；或换行），到角标为止算这一句；表格里就是整个单元格
+  function sentenceRange(cite) {
+    const block = cite.closest("p, li, td, th") || cite.parentNode;
+    if (!block) return null;
+    const nodes = [];
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (cite.contains(n)) break;
+      if (!(cite.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_PRECEDING)) break;
+      if (n.parentElement && n.parentElement.closest(".cite")) continue;   // 别的角标的数字不算正文
+      nodes.push(n);
+    }
+    const r = document.createRange();
+    r.setStartBefore(block.firstChild || cite);
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const t = nodes[i].nodeValue;
+      let j = -1;
+      for (const ch of "。！？；!?;\n") j = Math.max(j, t.lastIndexOf(ch));
+      if (j < 0) continue;
+      if (j < t.length - 1) r.setStart(nodes[i], j + 1);
+      else if (i + 1 < nodes.length) r.setStart(nodes[i + 1], 0);
+      else r.setStartBefore(cite);
+      break;
+    }
+    r.setEndAfter(cite);
+    return r;
   }
 
   function pageLabel(src) {

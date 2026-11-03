@@ -374,3 +374,42 @@ def test_switching_during_search_keeps_the_first_answer():
 
 def test_no_turn_is_a_no_op():
     assert adopt_turn(None, "d1") == (None, None)
+
+
+# ---------- 停止生成（ui/turn.stop_turn） ----------
+from ui.turn import stop_turn  # noqa: E402
+from ui.payload import ai_message  # noqa: E402
+
+
+def test_stop_before_answer_keeps_nothing():
+    assert stop_turn(None) is None
+    assert stop_turn(dict(TURN)) is None                       # generating：还没出回答
+    assert stop_turn({"q": "x", "status": "resolving"}) is None
+
+
+def test_stop_during_analysis_keeps_first_answer_marked_stopped():
+    entry = stop_turn(dict(TURN, status="analyzing", a=FIRST, started=0))
+    assert entry["a"] == FIRST and entry["q"] == TURN["q"]
+    assert entry["stopped"] is True and entry["analyze"] == "stopped"
+    assert ai_message(entry)["stopped"] is True
+
+
+def test_stop_during_search_marks_web():
+    entry = stop_turn(dict(TURN, status="searching", a=FIRST))
+    assert entry["web"] == "stopped" and entry["analyze"] == ""
+
+
+def test_stop_during_review_drops_unfinished_review():
+    # 复核没跑完：不带复核结论，界面不会标「已复核」
+    entry = stop_turn(dict(TURN, status="reviewing", a=FIRST, review={"verdict": "pass"}))
+    assert "review" not in entry and entry["stopped"] is True
+
+
+def test_stop_tolerates_turn_without_hits():
+    # 体检这类不检索的回合没有 hits / queries 键
+    entry = stop_turn({"q": "体检", "status": "analyzing", "a": "正文", "kind": "health"})
+    assert entry["hits"] == [] and entry["queries"] == [] and entry["kind"] == "health"
+
+
+def test_finished_answer_is_not_marked_stopped():
+    assert "stopped" not in ai_message(history_entry(dict(TURN), FIRST))

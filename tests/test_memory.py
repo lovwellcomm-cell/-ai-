@@ -102,3 +102,11 @@ def test_secs_round_trip_and_rejects_bad_values():
     assert convs["co:精达"][0]["secs"] == 23
     for bad in (-1, 99999, "23", True, 2.5):
         assert "secs" not in clean_entry(dict(ENTRY, secs=bad), KNOWN)
+
+
+def test_stopped_flag_survives_archive_and_only_true_is_accepted():
+    e = {"q": "主要产品", "a": "漆包线 [1]", "hits": [], "queries": [], "stopped": True}
+    assert pack([e])[0]["stopped"] is True
+    assert clean_entry(dict(e), set())["stopped"] is True
+    assert "stopped" not in clean_entry(dict(e, stopped="yes"), set())   # 浏览器送回来的，只认 True
+    assert "stopped" not in pack([dict(e, stopped=False)])[0]

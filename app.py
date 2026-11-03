@@ -343,13 +343,19 @@ def visible_ids():
     return st.session_state.setdefault("my_docs", set()) if config.PUBLIC_DEMO else None
 
 
+def keep_theme(component_key: str) -> None:
+    """开屏页 / 聊天页右上角切深浅色的回调：组件发来 {t, at}，记进两页共用的 ui_theme。"""
+    v = st.session_state.get(component_key, {}).get("theme")
+    t = v.get("t") if isinstance(v, dict) else v
+    if t in ("dark", "light"):
+        st.session_state["ui_theme"] = t
+
+
 def current_theme() -> str:
-    """组件的深浅色：优先用组件内手动切换的结果（聊天页 > 开屏页），否则跟随 Streamlit 主题。"""
-    override = st.session_state.get("chat", {}).get("theme")
-    if override in ("dark", "light"):
-        return override
-    if st.session_state.get("landing_theme") in ("dark", "light"):
-        return st.session_state["landing_theme"]
+    """组件的深浅色：优先用页面上手动切换的结果（开屏页、聊天页谁最后切听谁的），否则跟随 Streamlit 主题。
+    只认 ui_theme 这一个键：组件自己的状态在它不渲染后不一定马上清掉，分开读会互相盖（实测过）。"""
+    if st.session_state.get("ui_theme") in ("dark", "light"):
+        return st.session_state["ui_theme"]
     try:
         return st.context.theme.type or "light"
     except Exception:
@@ -398,11 +404,8 @@ if (not st.session_state.get("entered")
     _bg = "#070809" if _theme == "dark" else "#F6F5F2"
     st.markdown(f"<style>{LANDING_CSS} .stApp {{ background: {_bg}; }}</style>",
                 unsafe_allow_html=True)
-    # 开屏页右上角切的深浅色另存一份：进入助手后开屏页组件不再渲染，它的组件状态会被 Streamlit 清掉
-    def _keep_landing_theme():
-        st.session_state["landing_theme"] = st.session_state.get("landing", {}).get("theme")
-
-    landing = landing_surface({"theme": _theme}, on_theme=_keep_landing_theme)
+    # 开屏页右上角切的深浅色另存一份（ui_theme）：进入助手后开屏页组件不再渲染，它的组件状态会被 Streamlit 清掉
+    landing = landing_surface({"theme": _theme}, on_theme=lambda: keep_theme("landing"))
     # 顶栏「评测」：去评测页（?eval=1）
     if getattr(landing, "go", None) == "eval":
         st.query_params["eval"] = "1"
@@ -595,7 +598,15 @@ result = chat_surface(
         style_switch=config.ANSWER_STYLE != "pro",
     ),
     key="chat",
+    on_theme=lambda: keep_theme("chat"),
 )
+
+# 顶栏「首页」：回开屏页。对话、文档都在 session_state 里，再点「开始聊天」原样回来。
+# 深浅色两页共用 ui_theme（见 current_theme），不用另带。生成中前端按钮是禁用的，这里再挡一次。
+if getattr(result, "go", None) == "home" and not busy:
+    st.session_state["entered"] = False
+    st.query_params.pop("chat", None)
+    st.rerun()
 
 
 def fail(target: dict, msg: str) -> None:
@@ -614,9 +625,12 @@ def refund(target: dict) -> None:
 
 
 def finish_turn(entry: dict) -> None:
-    """把一轮写进历史，并清掉进行中的回合。"""
-    history.append(entry)
+    """把一轮写进历史，并清掉进行中的回合。
+
+    先清回合再写历史：每次读写 st.session_state 都是 Streamlit 的打断点（浏览器发来事件时在这里抛
+    RerunException）。反过来写，打断落在两步之间会留下「已写进历史、回合还在」，下一轮再写一遍。"""
     st.session_state.pop("turn", None)
+    history.append(entry)
     st.session_state["chat_warn"] = ""
 
 
@@ -1140,9 +1154,15 @@ def advance_turn() -> None:
             # 问题理解 + 上一版被复核指出的问题（回退重答时才有）
             focus = (planner.focus_block(target.get("plan"))
                      + reviewer.feedback_block(target.get("review_last")))
-            return "".join(generate(q, hits, client=client, company=company,
-                                    year=year, history=history, period=period_of(meta),
-                                    focus=focus, style=target.get("style", "pro")))
+            parts = []
+            for piece in generate(q, hits, client=client, company=company,
+                                  year=year, history=history, period=period_of(meta),
+                                  focus=focus, style=target.get("style", "pro")):
+                parts.append(piece)
+                # 打断点：浏览器点了「停止生成」等事件时，Streamlit 在读 session_state 时抛 RerunException，
+                # 不用等整段生成完（约 20–40 秒）。回合状态还是 generating，没被别的事件停掉就从头再生成。
+                st.session_state.get("turn")
+            return "".join(parts)
 
         def _rev(q, answer, hits, *, client):
             # 跨口径检查用的带口径的数：主报告的主要会计数据 + 别的报告的事实笔记（rag/caliber.py）
@@ -1209,6 +1229,19 @@ if getattr(result, "new_chat", None):
     st.session_state.pop("page", None)
     st.session_state["chat_warn"] = ""
     st.rerun()
+
+# 停止生成：首轮回答已经出来就留下（标「已停止」），还没出就整轮丢掉、退还额度（前端把问题放回输入框）。
+# 生成循环里有打断点，点下去一般一秒内生效；检索、复核、联网这类整段调用要等当前这一步返回。
+if getattr(result, "stop", None) and busy:
+    pending = st.session_state.get("turn")
+    entry = turn_core.stop_turn(pending)
+    if entry is None and pending:
+        refund(pending)
+    st.session_state.pop("turn", None)
+    if entry is not None:
+        history.append(entry)
+    st.rerun()
+
 
 def start_question(text: str, style: str | None = None) -> None:
     """开始一轮提问：聊天框里发的、开屏页「这样问」带过来的都走这里，计次规则一样。

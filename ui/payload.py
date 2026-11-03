@@ -116,6 +116,9 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
         msg["secs"] = turn["secs"]
     if error:
         msg["error"] = error
+    # 用户中途停止：首轮回答保留，界面标「已停止」
+    if turn.get("stopped"):
+        msg["stopped"] = True
     if page:
         msg["page"] = page
     # 分步记录：完成的条目里叫 steps，进行中的回合里叫 steps_log

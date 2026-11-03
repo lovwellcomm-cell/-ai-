@@ -361,6 +361,28 @@ def adopt_turn(turn: dict | None, doc_id: str):
     return None, ((turn.get("doc_id"), entry) if entry else None)
 
 
+def stop_turn(turn: dict | None) -> dict | None:
+    """用户点了「停止生成」：返回要写进历史的条目，没有就 None（调用方清掉回合、退还额度）。
+
+    首轮回答已经显示出来了（扩展分析 / 外部查询 / 复核阶段，turn 上有 a）：和切换文档时一样
+    把它落进历史，只是后续段标 stopped，条目带 stopped=True 让界面标「已停止」。
+    还没出回答：什么都不留，前端把问题放回输入框，改一改再问。
+    """
+    if not turn or not turn.get("a"):
+        return None
+    status = turn.get("status")
+    mark = {"searching": "web", "analyzing": "analyze"}.get(status)
+    t = dict(turn, hits=turn.get("hits") or [], queries=turn.get("queries") or [])
+    if mark:
+        t[mark] = "stopped"
+    # 复核没跑完（reviewing / 回退重答中）：不带复核结论，界面就不会标「已复核」
+    if status == "reviewing" or t.get("retry"):
+        t.pop("review", None)
+    entry = history_entry(t, turn["a"])
+    entry["stopped"] = True
+    return entry
+
+
 def answered_hits(hits: list[dict] | None, review: dict | None, limit: int) -> list[dict]:
     """补检索时留下哪些旧片段：按要点分别检索取的、复核说已经答到的那几个要点的片段（最多 limit 段）。
 
