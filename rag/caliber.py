@@ -13,7 +13,12 @@
   · 差额凑得上、同一年 → 可能是合法的推算（全年减前三季度 = 第四季度单季），只作线索交给复核模型。
 
 时点数（总资产、净资产，「年末」「季末」）不查：期末对期末本来就能比。
-只认同一科目：不限科目的话，几百对数字里总能碰巧凑出一个百分比。
+
+误报靠三道限制压住（端到端评测里踩过：19.75% 是报告原样写的单季同比，却正好等于
+「2024 全年 5.62 → 2025 前三季度 4.51」的降幅；4.98 亿元是主要会计数据原数，却正好等于两个数之差）：
+  · 片段和笔记里原样出现过的数不查 —— 表格里的百分数常常不带 %，按数字本身比；
+  · 只配同一科目、年份相差不超过一年的两个数；
+  · 回答里这个数所在的那一行要提到这个科目（营收、净利润…）。
 """
 from __future__ import annotations
 
@@ -36,6 +41,11 @@ _FLOW_RE = re.compile(r"收入|利润|收益|成本|费用|现金流")
 _YEAR_RE = re.compile(r"(?<![\d.,])(20\d\d)(?![\d.,])")
 _LABEL_UNIT_RE = re.compile(r"[（(][^）)]*[)）]")
 _SPAN_NAME = {FY: "全年", Q1: "一季度", H1: "上半年", Q3: "前三季度", "单季": "单季"}
+_TOKEN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+# 回答里提到这个科目的说法（主要会计数据的科目；别的科目用笔记里的科目名本身）
+_MENTION = {"revenue": re.compile(r"营业收入|营收"), "total_profit": re.compile(r"利润总额"),
+            "np_parent": re.compile(r"归母净利|归属于上市公司股东的净利|净利润"),
+            "np_deducted": re.compile(r"扣非|扣除非经常性损益"), "ocf": re.compile(r"现金流")}
 
 
 def _src_period(src: str) -> str | None:
@@ -81,7 +91,8 @@ def facts(notes: list[dict]) -> list[dict]:
                 continue
             y = (m.group(1) if (m := _YEAR_RE.search(seg)) else src_year)
             out.append({"key": _label_key(label), "label": label.strip(), "src": src, "year": y,
-                        "span": span, "value": amounts[0]["value"], "text": amounts[0]["text"]})
+                        "span": span, "value": amounts[0]["value"], "text": amounts[0]["text"],
+                        "note": n.get("t") or ""})
     return out
 
 
@@ -90,19 +101,39 @@ def _desc(f: dict) -> str:
     return f"{f['src']}：{f['label']} {year}{_SPAN_NAME.get(f['span'], '')} {f['text']}".strip()
 
 
-def _answer_numbers(answer: str) -> list[dict]:
-    """回答里的百分比和带单位的金额；表格里的裸数字按表头单位补全（rag/fidelity.table_cells）。"""
+def _answer_numbers(answer: str) -> list[tuple[dict, str]]:
+    """回答里的百分比和带单位的金额，连同它所在的那一行；表格里的裸数字按表头单位补全
+    （rag/fidelity.table_cells），所在行取第一处含这个单元格的行。"""
+    lines = (answer or "").splitlines()
     seen, out = set(), []
-    texts = [answer or ""] + [check for check, _ in table_cells(answer)]
-    for t in texts:
-        for x in extract_numbers(t):
-            if x["kind"] == "year" or (x["kind"] == "amount" and not x["unit"]):
-                continue
-            k = (x["kind"], x["text"])
-            if k not in seen:
-                seen.add(k)
-                out.append(x)
+
+    def add(x, line):
+        if x["kind"] == "year" or (x["kind"] == "amount" and not x["unit"]):
+            return
+        k = (x["kind"], x["text"], line)
+        if k not in seen:
+            seen.add(k)
+            out.append((x, line))
+
+    for line in lines:
+        for x in extract_numbers(line):
+            add(x, line)
+    for check, raw in table_cells(answer):
+        line = next((ln for ln in lines if raw and raw in ln), "")
+        for x in extract_numbers(check):
+            add(x, line)
     return out
+
+
+def _mentions(f: dict, line: str) -> bool:
+    rx = _MENTION.get(f["key"])
+    return bool(rx.search(line)) if rx else f["label"] in line
+
+
+def _near_years(a: dict, b: dict) -> bool:
+    if not (a["year"] and b["year"]):
+        return True
+    return abs(int(a["year"]) - int(b["year"])) <= 1
 
 
 def cross_span(answer: str, hits: list[dict], fact_list: list[dict]) -> list[dict]:
@@ -115,26 +146,31 @@ def cross_span(answer: str, hits: list[dict], fact_list: list[dict]) -> list[dic
         return []
     index = _hits_index(hits or [])
     pairs = [(a, b) for i, a in enumerate(fact_list) for b in fact_list[i + 1:]
-             if a["key"] == b["key"] and a["span"] != b["span"]]
+             if a["key"] == b["key"] and a["span"] != b["span"] and _near_years(a, b)]
     if not pairs:
         return []
+    # 原样出现过的数：片段原文和笔记里的每个数字（不管带不带 %、单位）
+    quoted = {t.replace(",", "") for text in [h.get("text") or "" for h in hits or []]
+              + [f["note"] for f in fact_list] for t in _TOKEN_RE.findall(text)}
+    known = [f["value"] for f in fact_list]
     out = []
-    for x in _answer_numbers(answer):
+    for x, line in _answer_numbers(answer):
+        if x["raw"].replace(",", "") in quoted:
+            continue
+        mine = [(a, b) for a, b in pairs if _mentions(a, line)]
         if x["kind"] == "percent":
-            # 只认片段里原样出现的；fidelity._percent_ok 还认「由片段金额算得出」，跨口径的增长率正好算得出
-            if x["raw"].replace(",", "") in index["percents"]:
-                continue
             tol = 0.5 * 10 ** -x["dec"] + 1e-9
-            for a, b in pairs:
+            for a, b in mine:
                 if any(d["value"] and abs(abs((c["value"] - d["value"]) / d["value"] * 100) - x["value"]) <= tol
                        for c, d in ((a, b), (b, a))):
                     out.append({"num": x["text"], "how": "增长率", "a": _desc(a), "b": _desc(b), "hard": True})
                     break
         else:
-            if _found(x["value"], x["dec"], x.get("scale", 1.0), index):
-                continue
             tol = _tolerance(x["value"], x["dec"], x.get("scale", 1.0))
-            for a, b in pairs:
+            if _found(x["value"], x["dec"], x.get("scale", 1.0), index) \
+                    or any(abs(v - x["value"]) <= tol for v in known):
+                continue
+            for a, b in mine:
                 if abs(abs(a["value"] - b["value"]) - x["value"]) <= tol:
                     out.append({"num": x["text"], "how": "差额", "a": _desc(a), "b": _desc(b),
                                 "hard": a["year"] != b["year"]})

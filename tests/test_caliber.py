@@ -36,7 +36,7 @@ def test_growth_rate_across_spans_is_hard():
 
 def test_difference_across_years_is_hard_same_year_is_a_clue():
     """2025 全年 − 2026 前三季度：一定错；2025 全年 − 2025 前三季度 = 第四季度单季：可能合法。"""
-    found = {c["num"]: c["hard"] for c in cross_span("差额 66.74 亿元；第四季度约 76.74 亿元。", HITS, FACTS)}
+    found = {c["num"]: c["hard"] for c in cross_span("营收差额 66.74 亿元；第四季度营收约 76.74 亿元。", HITS, FACTS)}
     assert found == {"66.74 亿元": True, "76.74 亿元": False}
 
 
@@ -49,6 +49,32 @@ def test_unrelated_items_never_pair():
     """只配同一科目：营业收入和净利润凑出来的百分比不算。"""
     other = {"src": "精达股份 2026 三季报", "t": "归属于上市公司股东的净利润：2026 年前三季度 6.00 亿元"}
     assert cross_span("净利润只有营收的 -97.57%", HITS, facts([ANNUAL, other])) == []
+
+
+PROFIT = [{"src": "精达股份 2025 年报", "t": "归属于上市公司股东的净利润：2025 年 5.99 亿元；2024 年 5.62 亿元"},
+          {"src": "精达股份 2026 三季报",
+           "t": "归属于上市公司股东的净利润：2026 年前三季度 4.98 亿元；2025 年前三季度 4.51 亿元；"
+                "2026 年第三季度单季 1.73 亿元（同比 +19.75%）"}]
+
+
+def test_quoted_numbers_are_not_computed_even_if_they_fit():
+    """端到端评测踩过：19.75% 是报告原样写的单季同比，却正好等于 5.62 → 4.51 的降幅。"""
+    ans = "| 第三季度单季归母净利润 | 1.73 亿元 | +19.75% |"
+    assert cross_span(ans, [], facts(PROFIT)) == []
+    # 片段表格里的百分数不带 %，也算原样出现
+    assert cross_span("第三季度单季归母净利润同比 +19.75%", [{"text": "1.73 亿 19.75"}],
+                      facts(PROFIT[:1] + [{"src": PROFIT[1]["src"], "t": PROFIT[1]["t"].split("（")[0]}])) == []
+
+
+def test_line_must_mention_the_item():
+    """凑得上的数要和科目在同一行：讲营收的那一行里的 27.05% 才算营收的跨口径增长率。"""
+    assert cross_span("毛利率较上年变化 27.05%", HITS, FACTS) == []
+
+
+def test_years_far_apart_never_pair():
+    old = {"src": "精达股份 2023 年报", "t": "营业收入：2023 年 140.00 亿元"}
+    # (180 - 140) / 140 = 28.57%：2023 全年和 2026 前三季度隔了三年，不配
+    assert cross_span("营业收入增长 28.57%", HITS, facts([old, Q3])) == []
 
 
 def test_note_lines_skip_supplementary_text():
@@ -76,9 +102,24 @@ def test_hard_cross_span_forces_regenerate_with_note():
 
 
 def test_soft_cross_span_is_only_a_clue():
-    clues = reviewer.program_checks("第四季度约 76.74 亿元。", HITS, FACTS)
+    clues = reviewer.program_checks("第四季度营收约 76.74 亿元。", HITS, FACTS)
     assert reviewer.normalize(_res("pass"), clues)["verdict"] == "pass"
     assert "推算单季" in reviewer._user_message("q", None, "a", HITS, clues)
+
+
+class _BrokenClient:
+    class chat:
+        class completions:
+            @staticmethod
+            def create(**kw):
+                raise TimeoutError("复核超时")
+
+
+def test_reviewer_failure_does_not_drop_hard_finding():
+    """复核模型出错时照常放行 —— 但程序查出一定错的跨口径计算时，照样要求重答。"""
+    out = reviewer.review("对比营收", TABLE, HITS, client=_BrokenClient, facts=FACTS)
+    assert out["verdict"] == "regenerate" and "27.05%" in out["note"]
+    assert reviewer.review("对比营收", "营业收入 246.74 亿元[1]", HITS, client=_BrokenClient, facts=FACTS) is None
 
 
 def test_report_must_be_one_we_offered():

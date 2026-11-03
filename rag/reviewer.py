@@ -167,10 +167,13 @@ def review(question: str, answer: str, hits: list[dict], *, client, plan: dict |
         )
         data = json.loads(resp.choices[0].message.content or "")
     except Exception:
-        return None
+        data = None
     out = normalize(data, clues, reports)
     if out is None:
-        return None
+        # 复核模型坏了不拦回答 —— 除非程序已经查出一定错的跨口径计算（端到端评测里见过：模型出错，错的增长率照样交出去）
+        if not any(c["hard"] for c in clues["cross_span"]):
+            return None
+        out = normalize({"verdict": "pass", "points": [], "note": ""}, clues)
     out["clues"] = clues
     # 常规披露项答成「未找到」：一定是检索没找全（评测里见过模型照样放行「时代新材营收多少 → 未找到」）
     if out["verdict"] == "pass" and is_abstention(answer) \
