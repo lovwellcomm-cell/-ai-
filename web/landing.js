@@ -421,6 +421,14 @@ export default function (component) {
       setTriggerValue("enter", ask ? { at: Date.now(), ask: ask } : { at: Date.now() });
     };
   });
+  // 「评测」：去评测页（app.py 收到 go 后改网址 ?eval=1）
+  root.querySelectorAll("[data-go]").forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      b.disabled = true;
+      setTriggerValue("go", b.getAttribute("data-go"));
+    };
+  });
   root.querySelectorAll("[data-scroll]").forEach((b) => {
     b.onclick = () => {
       const target = root.querySelector("#" + b.getAttribute("data-scroll"));

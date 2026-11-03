@@ -383,7 +383,8 @@ def test_as_hits_shape():
     assert "投资活动产生的现金流量净额：2025 年 -15.00 亿元；2024 年 -10.00 亿元" in cf   # 上期为负不写百分比
     calc = hits[3]
     assert calc["derived"] is True and calc["text"].startswith("以下指标由程序")
-    assert "资产负债率（负债合计 ÷ 资产总计）：2025 年末 33.3%；2024 年末 40.0%；变化 -6.7 个百分点" in calc["text"]
+    # 片段里的比率两位小数（年报披露的毛利率就是两位，片段更粗的话回答会引用粗的那个）
+    assert "资产负债率（负债合计 ÷ 资产总计）：2025 年末 33.33%；2024 年末 40.00%；变化 -6.67 个百分点" in calc["text"]
     assert "有息负债（" + st.DEBT_NOTE + "）：2025 年末 40.00 亿元" in calc["text"]
     assert "每 100 元营业收入的去向（2025 年" in calc["text"] and "剩下净利润 15.0 元" in calc["text"]
     assert "现金流画像（2025 年" in calc["text"]

@@ -263,10 +263,15 @@ def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
                                reports=list(others))
 
     entry = None
+    # 复核回退：记下回退前那一版回答和复核给的理由（评测页「拦下的错误」用）
+    retries: list[dict] = []
     for _ in range(12):
         new, entry, err = step(state["turn"], gen=gen, ana=ana, client=client, company=company,
                                year=year, recent=ctx or None,
                                rev=rev if engine == "new" else None)
+        if new and new.get("retry") and new.get("round", 0) > len(retries):
+            retries.append({"action": new["retry"], "note": (new.get("review_last") or {}).get("note") or "",
+                            "report": new.get("retry_report") or "", "first": state["turn"].get("a") or ""})
         if err:
             out.update(error=err)
             break
@@ -307,7 +312,7 @@ def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
                # 交给用户的回答里还剩几处一定错的跨口径计算（rag/caliber.py）
                cross_span=sum(c["hard"] for c in caliber.cross_span(answer, final_hits, facts_of(final_hits))),
                notes=(entry or {}).get("notes") or [], src=src_main,
-               by_points=point_diag.get("points") or [],
+               by_points=point_diag.get("points") or [], retries=retries,
                secs=round(time.time() - t0, 1), calls=client.calls)
     return out
 
@@ -485,7 +490,11 @@ def main() -> None:
     # 回答原文另存一份，改版对比要逐题读
     (OUT / f"e2e-{args.tag}.json").write_text(json.dumps(
         [{"n": c["n"], "q": c["q"], "engine": e, "answer": g.get("answer"), "ok": j["ok"],
-          "orphan": j["orphan"], "review": (g.get("review") or {}).get("verdict"), "secs": g.get("secs")}
+          "orphan": j["orphan"], "review": (g.get("review") or {}).get("verdict"), "secs": g.get("secs"),
+          # 评测页用：题目在哪份报告上问、期望数字、各项判定、复核回退前后
+          "cur": c.get("cur"), "chain": c.get("chain"), "nums": c.get("nums"), "behave": c.get("behave"),
+          "doc_ok": j["doc"], "nums_ok": j["nums"], "abstain": j["abstain"], "error": g.get("error"),
+          "calls": g.get("calls"), "retries": g.get("retries") or []}
          for c, e, g, j in rows], ensure_ascii=False, indent=1), encoding="utf-8")
     print(md)
 

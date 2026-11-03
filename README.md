@@ -3,7 +3,7 @@
 读 A 股定期报告（年报、一季报、半年报、三季报）的 AI 助手，面向散户。**每个数字都能点回原页核对**：
 回答带引用编号，点开看原文片段、翻到 PDF 那一页；表格里的数字逐格核对出处；关键财务数字由程序从报表里抽取并做勾稽自检，不交给大模型编。
 
-**[在线使用](https://xlyzp-ai.streamlit.app/)** · **[产品文档](docs/PRODUCT.md)** · **[源码](https://github.com/lovwellcomm-cell/-ai-)**
+**[在线使用](https://xlyzp-ai.streamlit.app/)** · **[评测结果](https://xlyzp-ai.streamlit.app/?eval=1)** · **[产品文档](docs/PRODUCT.md)** · **[源码](https://github.com/lovwellcomm-cell/-ai-)**
 
 ![问「有息负债有多少」：结论带引用编号，表格逐行标出处，回答上方是复核结果](docs/img/answer.png)
 
@@ -88,6 +88,7 @@ flowchart TD
 ## 怎么知道它靠谱
 
 每个功能上线前都跑评测，改动和对照组一起跑。题目是作者自建的，覆盖精达股份、时代新材、贵州茅台、七匹狼等约 15 家公司的报告；用真实模型跑，结果会有波动，下面是 2026-11-03 的结果。
+**[评测页](https://xlyzp-ai.streamlit.app/?eval=1)** 上有每次上线的记录、复核器真实拦下的错误、对照实验和改进历程。
 
 | 评测 | 测什么 | 结果 |
 |---|---|---|
@@ -99,7 +100,7 @@ flowchart TD
 | `tools/eval_drivers` | 几件大事：关键因素命中 | 19/19（13 份报告） |
 | `python -m pytest` | 单元测试（夹具多是真实报告原文行） | 773 个 |
 
-评测脚本都在 `tools/`，结果写到 `eval_out/`（不入库）。
+评测脚本都在 `tools/`，结果写到 `eval_out/`（不入库）。改了回答流程的上线，合并前跑 `python -m tools.release_eval`，结果追加到 [`docs/eval/history.jsonl`](docs/eval/history.jsonl)，评测页的数据 `docs/eval/snapshot.json` 同时重新生成。
 
 ## 技术栈
 

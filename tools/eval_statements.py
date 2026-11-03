@@ -131,6 +131,11 @@ def main() -> None:
         lines += ["## 不一致", "", "| 报告 | 项 | 答案 | 抽取 |", "|---|---|---|---|", *problems, ""]
     OUT.mkdir(exist_ok=True)
     (OUT / "statements.md").write_text("\n".join(lines), encoding="utf-8")
+    # 评测页、上线评测用的摘要（tools/release_eval.py）
+    (OUT / "statements.json").write_text(json.dumps({
+        "date": f"{datetime.now():%Y-%m-%d %H:%M}", "reports": len(table), "tables_ok": shown,
+        "tables_n": total_tables, "cross_ok": cross_ok, "cross_n": cross_n, "ans_ok": ans_ok, "ans_n": ans_n,
+        "problems": problems}, ensure_ascii=False, indent=1), encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
     print("\n".join(lines))
 

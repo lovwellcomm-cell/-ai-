@@ -1,0 +1,187 @@
+/* ============================================================
+   评测页。令牌和开屏页（web/landing.css）同一套：石墨底、金色强调、系统黑体。
+   令牌挂在 .ev 上（shadow root 里 :root 匹配不到元素），深浅色由 data-theme 切换。
+   只展示数据，没有动画；成败用中性色和对勾，不用红绿大色块。
+   ============================================================ */
+.ev {
+  --bg: #F6F5F2;
+  --surface: #FFFFFF;
+  --surface-2: #FBFAF7;
+  --line: rgba(12,13,15,.09);
+  --line-2: rgba(12,13,15,.16);
+  --ink: #0C0D0F;
+  --ink-2: #4E535A;
+  --ink-3: #868B92;
+  --accent: #8A6608;
+  --accent-ink: #FFFFFF;
+  --accent-soft: rgba(138,102,8,.08);
+  --accent-line: rgba(138,102,8,.30);
+  --pos: #2F7D4F;
+  --neg: #B4412F;
+  --font-ui: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI',
+             'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei',
+             'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+               'PingFang SC', 'Microsoft YaHei UI', monospace;
+  color-scheme: light;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.65;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+.ev[data-theme="dark"] {
+  --bg: #070809;
+  --surface: #121417;
+  --surface-2: #0E1012;
+  --line: rgba(255,255,255,.075);
+  --line-2: rgba(255,255,255,.15);
+  --ink: #EDEEF0;
+  --ink-2: #A4AAB2;
+  --ink-3: #6E757E;
+  --accent: #E0B24E;
+  --accent-ink: #16130A;
+  --accent-soft: rgba(224,178,78,.09);
+  --accent-line: rgba(224,178,78,.32);
+  --pos: #6FC08F;
+  --neg: #E5826F;
+  color-scheme: dark;
+}
+.ev *, .ev *::before, .ev *::after { box-sizing: border-box; }
+.ev a { color: inherit; }
+.ev button { font: inherit; }
+
+/* ---------- 顶栏 ---------- */
+.ev-nav {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px clamp(16px, 4vw, 40px);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.ev-brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 14.5px; white-space: nowrap; }
+.ev-mark { width: 22px; height: 22px; color: var(--accent); }
+.ev-crumb { color: var(--ink-3); font-weight: 500; }
+.ev-crumb::before { content: "/"; margin-right: 10px; color: var(--line-2); }
+.ev-links { display: flex; align-items: center; gap: 6px; }
+.ev-link {
+  border: 0; background: none; color: var(--ink-2); cursor: pointer; text-decoration: none;
+  padding: 7px 11px; border-radius: 8px; font-size: 13.5px;
+}
+.ev-link:hover { color: var(--ink); background: var(--accent-soft); }
+.ev-btn {
+  border: 0; cursor: pointer; padding: 8px 15px; border-radius: 9px;
+  background: var(--accent); color: var(--accent-ink); font-weight: 600; font-size: 13.5px;
+}
+.ev-btn:disabled, .ev-link:disabled { opacity: .55; cursor: default; }
+
+/* ---------- 主体 ---------- */
+.ev-main { max-width: 1080px; margin: 0 auto; padding: clamp(28px, 6vw, 64px) clamp(16px, 4vw, 40px) 80px; }
+.ev-hero h1 { font-size: clamp(28px, 4.6vw, 44px); line-height: 1.15; letter-spacing: -.02em; margin: 0 0 14px; font-weight: 750; }
+.ev-lede { color: var(--ink-2); font-size: clamp(15px, 1.8vw, 17px); max-width: 46em; margin: 0; }
+.ev-meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--ink-3); }
+.ev-meta .mono { font-family: var(--font-mono); }
+.ev-meta a { color: var(--accent); text-decoration: none; }
+.ev-meta a:hover { text-decoration: underline; }
+
+.ev-stats {
+  margin-top: 28px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px;
+  background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+}
+.ev-stat { background: var(--surface); padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ev-stat-v { font-family: var(--font-mono); font-size: clamp(24px, 3.4vw, 32px); font-weight: 600; letter-spacing: -.02em; line-height: 1.15; }
+.ev-stat-k { font-size: 13px; font-weight: 600; }
+.ev-stat-s { font-size: 12px; color: var(--ink-3); }
+
+.ev-sec { margin-top: clamp(44px, 7vw, 72px); }
+.ev-sec > h2 { font-size: clamp(20px, 2.6vw, 25px); margin: 0 0 6px; letter-spacing: -.01em; font-weight: 700; }
+.ev-sec > .ev-sub { color: var(--ink-2); margin: 0 0 20px; max-width: 48em; }
+.ev-h3 { font-size: 15px; font-weight: 650; margin: 26px 0 10px; }
+
+.ev-card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+.ev-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+
+/* 评测卡片 */
+.ev-suite { display: flex; flex-direction: column; gap: 8px; }
+.ev-suite-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.ev-suite-n { font-weight: 650; }
+.ev-tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--ink-3); white-space: nowrap; }
+.ev-suite-r { font-family: var(--font-mono); font-size: 19px; font-weight: 600; }
+.ev-suite-w { font-size: 13.5px; color: var(--ink-2); margin: 0; }
+.ev-suite-d { font-size: 12.5px; color: var(--ink-3); margin: 0; }
+.ev-cmd { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 7px; padding: 5px 9px; overflow-x: auto; white-space: nowrap; }
+
+/* 拦下的错误：真实回退 */
+.ev-caught { display: flex; flex-direction: column; gap: 14px; }
+.ev-q { font-weight: 650; margin: 0 0 4px; }
+.ev-q-meta { font-size: 12px; color: var(--ink-3); margin: 0 0 12px; }
+.ev-note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 9px 13px; border-radius: 0 9px 9px 0;
+  font-size: 13.5px; margin: 0 0 12px; }
+.ev-note b { font-weight: 650; margin-right: 6px; }
+.ev-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ev-ans { border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; background: var(--surface-2); min-width: 0; }
+.ev-ans-k { font-size: 11.5px; color: var(--ink-3); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.ev-ans-k i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); display: inline-block; }
+.ev-ans.final .ev-ans-k i { background: var(--pos); }
+.ev-ans-t { font-size: 13px; color: var(--ink-2); white-space: pre-wrap; word-break: break-word; margin: 0; }
+
+/* 拦下的错误：注入 */
+.ev-inj { display: flex; flex-direction: column; }
+.ev-inj-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 14px; padding: 14px 0; border-top: 1px solid var(--line); }
+.ev-inj-row:first-child { border-top: 0; padding-top: 2px; }
+.ev-inj-k { font-weight: 650; font-size: 13.5px; }
+.ev-inj-b { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ev-diff { font-size: 13px; margin: 0; word-break: break-word; }
+.ev-diff span { font-size: 11px; color: var(--ink-3); margin-right: 6px; }
+.ev-diff.before { color: var(--ink-3); }
+.ev-diff.after mark { background: color-mix(in srgb, var(--neg) 14%, transparent); color: var(--ink); padding: 0 2px; border-radius: 3px; }
+.ev-why { font-size: 12.5px; color: var(--ink-2); margin: 0; }
+.ev-why b { color: var(--pos); font-weight: 600; margin-right: 4px; }
+
+/* 表格：对照实验、上线记录 */
+.ev-tbl-wrap { overflow-x: auto; }
+.ev-tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.ev-tbl th, .ev-tbl td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+.ev-tbl th:first-child, .ev-tbl td:first-child { text-align: left; padding-left: 0; }
+.ev-tbl thead th { font-size: 12px; font-weight: 500; color: var(--ink-3); }
+.ev-tbl td { font-family: var(--font-mono); font-size: 13px; }
+.ev-tbl td:first-child { font-family: var(--font-ui); }
+.ev-tbl td.wrap { white-space: normal; min-width: 14em; font-family: var(--font-ui); text-align: left; color: var(--ink-2); }
+.ev-tbl tbody tr:last-child td { border-bottom: 0; }
+.ev-tbl .win { color: var(--accent); font-weight: 650; }
+.ev-exp { display: flex; flex-direction: column; gap: 14px; }
+.ev-exp-t { font-weight: 650; margin: 0 0 4px; }
+.ev-exp-w { font-size: 13.5px; color: var(--ink-2); margin: 0 0 10px; }
+.ev-exp-n { font-size: 12px; color: var(--ink-3); margin: 10px 0 0; }
+
+/* 时间线 */
+.ev-tl { list-style: none; margin: 0; padding: 0; position: relative; }
+.ev-tl::before { content: ""; position: absolute; left: 5px; top: 8px; bottom: 8px; width: 1px; background: var(--line-2); }
+.ev-tl li { position: relative; padding: 0 0 22px 28px; }
+.ev-tl li::before { content: ""; position: absolute; left: 0; top: 7px; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--accent); }
+.ev-tl-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.ev-tl-d { font-family: var(--font-mono); font-size: 12px; color: var(--ink-3); }
+.ev-tl-t { font-weight: 600; }
+.ev-tl-r { font-family: var(--font-mono); font-size: 12.5px; color: var(--accent); background: var(--accent-soft);
+  border: 1px solid var(--accent-line); border-radius: 6px; padding: 0 7px; }
+.ev-tl-n { font-size: 13px; color: var(--ink-2); margin: 3px 0 0; }
+.ev-tl-c { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); text-decoration: none; margin-left: 4px; }
+.ev-tl-c:hover { color: var(--accent); }
+
+.ev-limits { margin: 0; padding-left: 1.2em; color: var(--ink-2); }
+.ev-limits li { margin: 6px 0; }
+.ev-foot { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-3); }
+.ev-foot a { color: var(--accent); text-decoration: none; }
+.ev-empty { color: var(--ink-3); font-size: 13.5px; }
+
+@media (max-width: 760px) {
+  .ev-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ev-grid, .ev-pair { grid-template-columns: minmax(0, 1fr); }
+  .ev-inj-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .ev-crumb, .ev-links .ev-link[href] { display: none; }
+}

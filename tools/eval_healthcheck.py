@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -122,6 +123,11 @@ def main() -> None:
         lines += ["本机缺少、已跳过：", *[f"- {s}" for s in skipped], ""]
     OUT.mkdir(exist_ok=True)
     (OUT / "healthcheck.md").write_text("\n".join(lines), encoding="utf-8")
+    # 评测页、上线评测用的摘要（tools/release_eval.py）
+    (OUT / "healthcheck.json").write_text(json.dumps({
+        "date": f"{datetime.now():%Y-%m-%d %H:%M}", "ok": hits, "n": total,
+        "reports": len(ANSWERS) - len(skipped), "skipped": skipped, "problems": rows},
+        ensure_ascii=False, indent=1), encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
     print("\n".join(lines))
 

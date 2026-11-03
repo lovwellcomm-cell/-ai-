@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -160,6 +161,12 @@ def main() -> None:
     md = "\n".join(lines)
     OUT.mkdir(exist_ok=True)
     (OUT / f"review-{args.tag}.md").write_text(md, encoding="utf-8")
+    # 评测页用（tools/build_eval_snapshot.py）：每个用例的类型、判定、理由，好回答原文和注入后的版本
+    (OUT / f"review-{args.tag}.json").write_text(json.dumps(
+        [{"q": c["q"], "doc": c["doc"], "kind": c["kind"], "expect": c["expect"], "ok": c["ok"],
+          "verdict": (c["res"] or {}).get("verdict", "error"), "note": (c["res"] or {}).get("note", ""),
+          "answer": c["answer"], "text": c["text"]} for c in done],
+        ensure_ascii=False, indent=1), encoding="utf-8")
     print(md)
 
 

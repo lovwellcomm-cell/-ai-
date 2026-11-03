@@ -814,7 +814,9 @@ def _note_amount(v: float) -> str:
 
 
 def _pct_of(v: float) -> str:
-    return f"{v:.1f}%"
+    """片段里的比率保留两位小数：年报披露的毛利率是「54.42%」，片段写成「54.4%」的话，
+    回答会引用这个更粗的数（上线评测踩过：七匹狼毛利率答成 54.4%）。卡片上仍是一位小数。"""
+    return f"{v:.2f}%"
 
 
 def as_hits(st: dict | None, doc_id: str, label: str, period: str = FY, year="") -> list[dict]:
@@ -865,7 +867,8 @@ def _derived_lines(tables: dict, bs_cols, flow_cols) -> list[str]:
         add(name, formula, cols, cur, prev, _note_amount, f"增减 {c}" if c.endswith("%") else "")
 
     def ratio(name, formula, cols, cur, prev):
-        add(name, formula, cols, cur, prev, _pct_of, f"变化 {_pp(cur, prev)}" if _pp(cur, prev) else "")
+        chg = "" if cur is None or prev is None else f"变化 {cur - prev:+.2f} 个百分点"
+        add(name, formula, cols, cur, prev, _pct_of, chg)
 
     t = tables.get(BS)
     if t:

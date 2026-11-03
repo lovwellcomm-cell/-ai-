@@ -367,6 +367,28 @@ LANDING_CSS = """
   [data-testid="stElementContainer"]:has(> [data-testid="stMarkdown"] style) { display: none !important; }
   [data-testid="stAppViewContainer"], [data-testid="stMain"] { background: transparent; }
 """
+# ---------- 评测页（?eval=1） ----------
+# 只展示仓库里的评测快照（docs/eval/snapshot.json，tools/build_eval_snapshot.py 生成），不加载检索器和模型。
+# 顶栏「首页」「开始聊天」由组件发 go，这里改网址再重跑
+if str(st.query_params.get("eval", "")) == "1":
+    from ui.eval_component import eval_surface, load_snapshot
+
+    _theme = current_theme()
+    _bg = "#070809" if _theme == "dark" else "#F6F5F2"
+    st.markdown(f"<style>{LANDING_CSS} .stApp {{ background: {_bg}; }}</style>", unsafe_allow_html=True)
+    _ev = eval_surface(dict(load_snapshot(), theme=_theme))
+    _go = getattr(_ev, "go", None)
+    if _go in ("home", "chat"):
+        st.query_params.pop("eval", None)
+        # 「首页」回开屏页：这次会话进过助手也要清掉标记，不然开屏页那段会直接跳过
+        st.session_state["entered"] = _go == "chat"
+        if _go == "chat":
+            st.query_params["chat"] = "1"
+        else:
+            st.query_params.pop("chat", None)
+        st.rerun()
+    st.stop()
+
 if (not st.session_state.get("entered")
         and str(st.query_params.get("chat", "")) != "1"
         and str(st.query_params.get("build", "")) != "1"):
@@ -381,6 +403,10 @@ if (not st.session_state.get("entered")
         st.session_state["landing_theme"] = st.session_state.get("landing", {}).get("theme")
 
     landing = landing_surface({"theme": _theme}, on_theme=_keep_landing_theme)
+    # 顶栏「评测」：去评测页（?eval=1）
+    if getattr(landing, "go", None) == "eval":
+        st.query_params["eval"] = "1"
+        st.rerun()
     if getattr(landing, "enter", None):
         st.session_state["entered"] = True
         # 「这样问」：进入助手后直接发出那句话。数据来自浏览器，只收短字符串，照常走提问计次
@@ -492,6 +518,8 @@ with st.sidebar:
     st.caption("提问优先检索上方选中的报告；问到别的公司、别的年份或「三季度」「上半年」时，"
                "助手会先去巨潮找对应的年报或季报。同一家公司的年报和季报共用一段对话。")
     st.caption("若侧边栏显示异常，请关闭浏览器的“翻译此页”后刷新。")
+    # 评测页（?eval=1）：每次上线前的评测结果。新标签页打开，不打断当前对话
+    st.caption("[它答得准不准？看评测结果 →](?eval=1)")
 
 if not docs:
     st.markdown("### 请先在左侧上传一份上市公司年报 PDF（文字版）")

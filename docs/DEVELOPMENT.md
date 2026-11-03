@@ -113,5 +113,10 @@ python -m tools.eval_review                 # 复核器
 python -m tools.eval_drivers --tag x        # 几件大事
 ```
 
+**上线评测**：改了 `rag/` 或 `ui/` 的上线，合并前跑 `python -m tools.release_eval --note "这次改了什么"`（约十几分钟）。
+它按固定参数跑上面几项，结果追加一行到 `docs/eval/history.jsonl`，再调用 `tools/build_eval_snapshot.py` 重新生成评测页的数据
+`docs/eval/snapshot.json`（两个文件都入库）。只改文档或 `web/` 时跳过。`--skip-model` 只跑不调模型的几项，用来快速自查。
+评测页（`?eval=1`）只展示快照，线上从不跑评测；对照实验和里程碑写在 `tools/build_eval_snapshot.py` 的白名单里。
+
 需要模型的评测用 `.env` 里的 Key，只用本地已有的报告（`data/`、`demo/`、`data/_samples/`，样本 PDF 不入库）。
 结果写到 `eval_out/`（不入库），用真实模型跑会有波动，比较改动时多跑几轮、带上对照组（如 `--engines plain,nostmt`）。

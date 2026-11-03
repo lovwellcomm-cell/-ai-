@@ -61,4 +61,6 @@ def landing_surface(data: dict, *, key: str = "landing",
         height="content",
         on_enter_change=on_enter or (lambda: None),
         on_theme_change=on_theme or (lambda: None),
+        # 顶栏「评测」发 go = "eval"（app.py 改网址去评测页）
+        on_go_change=lambda: None,
     )
