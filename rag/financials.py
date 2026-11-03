@@ -15,6 +15,7 @@
   · 单位：时代新材这张表是「万元」，而它的报表是「元」——必须按表判断
   · 贵州茅台的「单位：元」被页眉过滤删掉了，所以这里读的是原始页面文本
   · 恒瑞、牧原、立讯：扣非净利润的科目折成三行（`归属于上市公司股东的` / `扣除非经常性损益的净` / `利润`）
+  · 精达 2022：列更窄，扣非科目折成四行（`归属于上市公司` / `股东的扣除非经` / `常性损益的净利` / `润`）
   · 万科：负数写成 `(88,556,470,495.64)`，扣非写「扣除非经常性损益后归属于上市公司股东的净利润」，
     总资产写「资产总额」
 """
@@ -30,7 +31,8 @@ from .periods import FY, Q3, detect
 # 3：三行科目、括号负数、万科的别名 —— 以前漏抽的扣非净利润能补上。
 # 4：追溯调整后的「调整后 / 调整前」5–6 列格式（长江电力）。
 # 5：三季报利润表科目折行、本期和上年同期金额各占一行（精达 2025 三季报以前整张表抽不出）。
-FIN_VERSION = 5
+# 6：年报科目折四行（精达 2022 的扣非净利润以前漏抽）。
+FIN_VERSION = 6
 FIN_FILE = "financials.json"
 
 UNIT_SCALE = {"亿元": 1e8, "万元": 1e4, "千元": 1e3, "元": 1.0}
@@ -86,8 +88,8 @@ def detect_unit(lines: list[str]) -> str:
 
 
 def _match_label(buffer: list[str], head: str) -> str | None:
-    """科目可能折成两到四行。依次试「本行开头」「上一行 + 本行开头」……最多往上拼三行。"""
-    for k in range(0, min(3, len(buffer)) + 1):
+    """科目可能折成两到五行。依次试「本行开头」「上一行 + 本行开头」……最多往上拼四行。"""
+    for k in range(0, min(4, len(buffer)) + 1):
         parts = buffer[len(buffer) - k:] if k else []
         key = _ALIAS.get(_norm("".join(parts) + head))
         if key:
@@ -137,7 +139,7 @@ def parse_rows(lines: list[str]) -> dict[str, list[float]]:
             # 年份表头、或数字个数不对的行：都是边界，前面累积的半截科目作废。
             buffer = []
             continue
-        buffer = (buffer + [ln])[-3:]
+        buffer = (buffer + [ln])[-4:]
     return rows
 
 
