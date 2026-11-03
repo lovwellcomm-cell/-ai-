@@ -96,6 +96,8 @@ PROMPT = """你是上市公司定期报告（年报、季报）问答助手的�
 - queries：2–4 条在报告里检索用的短语，用报告原文的规范用语：去掉公司名；口语换成会计科目或栏目名
   （"赚了多少钱"→"归属于上市公司股东的净利润"）；涉及具体财务数字时加一条带表名的（"主要会计数据 营业收入"）；
   问变化时加"本期比上年同期增减"；trend 要包含"主要会计数据"。
+- point_queries：subquestions 有 2 个及以上时，按 subquestions 的顺序给每个要点 1–2 条只针对它的检索短语（规范用语同上），
+  如 [["研发投入金额 研发投入占营业收入比例"], ["前五名客户销售额占年度销售总额比例"]]；只有 1 个要点时填 []。
 - clarify：intent 为 clarify 时填 {{"question": "反问的一句话", "options": ["选项1", "选项2", "选项3"]}}，
   选项 2–4 个，每个都是**可以直接发送的完整问题**，结合当前报告来写，只针对一家公司（系统不支持多家公司对比）；
   否则填 {{"question": "", "options": []}}。
@@ -118,7 +120,7 @@ intent 按问题本身填（不要因为要多份报告就填 trend 或 clarify�
 
 只输出 JSON：
 {{"restated": "", "intent": "report", "company": "", "multiple": false, "year": null, "period": null,
-"card": false, "subquestions": [], "queries": [], "also_read": [], "clarify": {{"question": "", "options": []}}, "reply": ""}}"""
+"card": false, "subquestions": [], "queries": [], "point_queries": [], "also_read": [], "clarify": {{"question": "", "options": []}}, "reply": ""}}"""
 
 
 def _context(question: str, history: list, current: dict, docs: list[dict], today: date,
@@ -156,6 +158,22 @@ def _str_list(v, n: int, limit: int) -> list[str]:
         return []
     out = [str(x).strip()[:limit] for x in v if isinstance(x, (str, int, float)) and str(x).strip()]
     return list(dict.fromkeys(out))[:n]
+
+
+def _points(subquestions: list[str], v) -> list[dict]:
+    """要点 + 各自的检索词（按要点分别检索，rag/retriever.py）。
+
+    和 subquestions 按顺序一一对应；没给检索词的要点不进来（检索时由全局名额补）。
+    少于 2 个要点就没有「分别」可言，返回空 —— 检索照旧。
+    """
+    if len(subquestions) < 2 or not isinstance(v, list):
+        return []
+    out = []
+    for point, qs in zip(subquestions, v):
+        qs = _str_list(qs if isinstance(qs, list) else [qs], 2, 60)
+        if qs:
+            out.append({"point": point, "queries": qs})
+    return out if len(out) >= 2 else []
 
 
 def _history_text(history: list) -> str:
@@ -232,13 +250,15 @@ def normalize(data: dict, question: str, history: list, today: date) -> dict | N
         card = True
     elif intent in ("industry", "out_of_scope", "clarify"):
         card = False
+    subquestions = _str_list(data.get("subquestions"), 4, 80)
     return {
         "source": "planner",
         "intent": intent,
         "target": target,
         "restated": str(data.get("restated") or "").strip()[:200],
-        "subquestions": _str_list(data.get("subquestions"), 4, 80),
+        "subquestions": subquestions,
         "queries": _str_list(data.get("queries"), 4, 60),
+        "points": _points(subquestions, data.get("point_queries")) if intent in ("report", "trend") else [],
         "card": card,
         "clarify": {"question": ask or "想确认一下你想问的是：", "options": options}
         if intent == "clarify" else None,
@@ -291,7 +311,7 @@ def fallback(question: str, *, client=None, history: list | None = None,
     else:
         intent = "report"
     return {"source": "fallback", "intent": intent, "target": tgt, "restated": "",
-            "subquestions": [], "queries": [], "card": card, "clarify": None, "reply": ""}
+            "subquestions": [], "queries": [], "points": [], "card": card, "clarify": None, "reply": ""}
 
 
 def focus_block(plan: dict | None) -> str:

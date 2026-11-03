@@ -127,6 +127,15 @@ def clean_entry(e, known_docs: set[str]) -> dict | None:
             steps.append({"src": _trim(x["src"], 40), "n": x["n"], "status": x["status"]})
     if steps:
         out["steps"] = steps
+    # 按要点分别检索：每个要点分到几段。同样只给界面那一行摘要用
+    points = []
+    for x in (e.get("by_points") if isinstance(e.get("by_points"), list) else [])[:4]:
+        n = x.get("n") if isinstance(x, dict) else None
+        if (isinstance(x, dict) and isinstance(n, int) and not isinstance(n, bool) and 0 <= n <= 12
+                and _trim(x.get("point"), 80)):
+            points.append({"point": _trim(x["point"], 80), "n": n})
+    if points:
+        out["by_points"] = points
     did = e.get("doc_id")
     if isinstance(did, str) and _DOC_ID_RE.match(did) and did in known_docs:
         out["doc_id"] = did
@@ -142,7 +151,7 @@ def pack(history: list[dict]) -> list[dict]:
     out = []
     for e in history[-MAX_TURNS:]:
         item = {k: e[k] for k in ("q", "a", "notice", "kind", "doc_id", "queries", "web_sources",
-                                  "options", "understood", "style", "notes", "steps")
+                                  "options", "understood", "style", "notes", "steps", "by_points")
                 if e.get(k)}
         if isinstance(e.get("secs"), int):
             item["secs"] = e["secs"]

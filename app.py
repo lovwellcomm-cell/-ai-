@@ -899,13 +899,24 @@ def advance_turn() -> None:
             else:
                 # 规划器给了检索词就直接用（不再调一次改写）；退回旧流程时照旧改写
                 pl = target.get("plan") or {}
+                # 复核说要补检索时，用它给的检索词再找一遍；已经答到的要点的旧片段留着（ui/turn.answered_hits）
+                retry = target.pop("retry_queries", None)
+                keep = (turn_core.answered_hits(target.get("hits"), target.get("review_last"),
+                                                config.MAX_POINTS_K - config.TOP_K // 2) if retry else [])
                 hits, queries = retriever.search_with_queries(
                     target["q"], client=client, use_llm=config.LLM_REWRITE,
                     history=recent or None, diag=diag,
-                    # 复核说要补检索时，用它给的检索词再找一遍
-                    queries=target.pop("retry_queries", None) or pl.get("queries") or None,
+                    queries=retry or pl.get("queries") or None,
                     restated=pl.get("restated", ""),
+                    # 按要点分别检索（一问多项）：每个要点先各取几段（rag/retriever.select_by_points）
+                    points=None if retry else pl.get("points"),
+                    k=config.TOP_K if not keep else max(config.TOP_K // 2, config.MAX_POINTS_K - len(keep)),
                 )
+                if keep:
+                    ids = {h.get("chunk_id") for h in keep}
+                    hits = keep + [h for h in hits if h.get("chunk_id") not in ids]
+                if diag.get("points"):
+                    target["by_points"] = diag["points"]
         except Exception as e:
             refund(target)
             fail(target, f"检索失败：{e}")

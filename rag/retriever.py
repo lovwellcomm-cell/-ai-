@@ -143,6 +143,29 @@ def llm_rewrite(query: str, year: str = "", client=None, timeout: float = 8.0,
         return []
 
 
+def select_by_points(per_point: list[dict[int, float]], fused: dict[int, float], k: int,
+                     per_k: int, fill) -> dict[int, int | None]:
+    """按要点分名额：{片段下标: 替第几个要点取的（None = 全局补的）}，按选中顺序。
+
+    各要点轮流取自己排名里下一个还没被取走的片段，每个最多 per_k 段 —— 轮流而不是一个取满再下一个，
+    免得两个要点的头几名重叠时，排在后面的要点只剩它的第四、第五名。剩下的名额交给 fill
+    （Retriever._select_diverse：按融合排名取，限制同一章节的占比）。纯函数，方便测试。
+    """
+    ranks = [sorted(p, key=p.get, reverse=True) for p in per_point]
+    owner: dict[int, int | None] = {}
+    cursor = [0] * len(ranks)
+    for _ in range(per_k):
+        for j, ranking in enumerate(ranks):
+            while cursor[j] < len(ranking) and ranking[cursor[j]] in owner:
+                cursor[j] += 1
+            if cursor[j] < len(ranking) and len(owner) < k:
+                owner[ranking[cursor[j]]] = j
+    rest = {i: s for i, s in fused.items() if i not in owner}
+    for i in fill(rest, k - len(owner)) if len(owner) < k else []:
+        owner[i] = None
+    return owner
+
+
 class Retriever:
     def __init__(self, chunks: list[dict], embeddings: np.ndarray, embed: EmbedFn = default_embed,
                  company: str = "", year: str = "", use_llm_rewrite: bool = False, llm_client=None):
@@ -160,7 +183,8 @@ class Retriever:
     def search_with_queries(self, query: str, k: int = config.TOP_K, pool: int = 50,
                             rrf_k: int = 60, client=None, use_llm: bool | None = None,
                             history: list[str] | None = None, diag: dict | None = None,
-                            queries: list[str] | None = None, restated: str = ""):
+                            queries: list[str] | None = None, restated: str = "",
+                            points: list[dict] | None = None):
         """检索并同时返回所用的检索词。不修改任何共享状态，多个会话可同时调用。
 
         client 为本次请求使用的大模型客户端（用于查询改写）；use_llm 覆盖实例默认值。
@@ -169,6 +193,11 @@ class Retriever:
         queries：规划器（rag/planner.py）已经给了检索词时直接用，不再调一次模型改写。
         restated 是规划器补全了指代的完整问题，规则改写一下作为补充 —— 原问题带指代时
         （「那2024年呢」）不能拿来检索，补全后的可以。
+
+        points：规划器给的「要点 + 各自检索词」（2 个以上才有）。一问多项时所有检索词融合成一个排名，
+        最好找的那一项会占满名额、其余几项一段都分不到 —— 所以每个要点先各取 PER_POINT_K 段，
+        剩下的名额再按融合排名补，总数放宽到 max(k, 要点数 × PER_POINT_K)、不超过 MAX_POINTS_K。
+        每段标上它是替哪个要点取的（point），diag["points"] 记每个要点分到几段（检索轨迹里显示）。
         """
         if not self.chunks:
             return [], []
@@ -181,19 +210,40 @@ class Retriever:
                 diag["rewrite"] = "planner"
         else:
             queries = self._expand(query, client, use_llm, history=history, diag=diag)
-        qvecs = self.embed([config.QUERY_INSTRUCTION + q for q in queries])
+        points = [p for p in points or [] if p.get("queries")] if config.RETRIEVE_BY_POINTS else []
+        if len(points) < 2:
+            points = []
+        extra = [q for p in points for q in p["queries"] if q not in queries]
+        qvecs = dict(zip(queries + extra,
+                         self.embed([config.QUERY_INSTRUCTION + q for q in queries + extra])))
 
+        fused = self._fuse(queries, qvecs, pool, rrf_k)
+        if not points:
+            best = self._select_diverse(fused, k)
+            hits = [dict(self.chunks[i], score=round(fused[i], 5)) for i in best]
+            return self._attach_headers(hits), queries
+        k = min(max(k, len(points) * config.PER_POINT_K), config.MAX_POINTS_K)
+        per = [self._fuse(p["queries"], qvecs, pool, rrf_k) for p in points]
+        owner = select_by_points(per, fused, k, config.PER_POINT_K, self._select_diverse)
+        if diag is not None:
+            diag["points"] = [{"point": p["point"], "n": sum(1 for o in owner.values() if o == j)}
+                              for j, p in enumerate(points)]
+        hits = [dict(self.chunks[i], score=round(fused.get(i, 0.0), 5),
+                     **({"point": points[o]["point"]} if o is not None else {}))
+                for i, o in owner.items()]
+        return self._attach_headers(hits), list(dict.fromkeys(queries + extra))
+
+    def _fuse(self, queries: list[str], qvecs: dict, pool: int, rrf_k: int) -> dict[int, float]:
+        """几条检索词各自的向量排名和 BM25 排名，RRF 融合成一个分数。"""
         fused: dict[int, float] = {}
-        for q, qv in zip(queries, qvecs):
-            vec_rank = np.argsort(-(self.emb @ qv))[:pool]
+        for q in queries:
+            vec_rank = np.argsort(-(self.emb @ qvecs[q]))[:pool]
             bm_scores = self.bm25.get_scores(tokenize(q))
             bm_rank = [i for i in np.argsort(-bm_scores)[:pool] if bm_scores[i] > 0]
             for ranking in (vec_rank, bm_rank):
                 for r, i in enumerate(ranking):
                     fused[int(i)] = fused.get(int(i), 0.0) + 1.0 / (rrf_k + r + 1)
-        best = self._select_diverse(fused, k)
-        hits = [dict(self.chunks[i], score=round(fused[i], 5)) for i in best]
-        return self._attach_headers(hits), queries
+        return fused
 
     def _select_diverse(self, fused: dict[int, float], k: int) -> list[int]:
         """按 RRF 顺序取 k 个，但限制任一 section 的占比。

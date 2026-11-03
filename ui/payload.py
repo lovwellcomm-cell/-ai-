@@ -120,6 +120,8 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
     if steps:
         msg["steps"] = [{"src": x.get("src", ""), "n": int(x.get("n") or 0), "status": x.get("status", "")}
                         for x in steps]
+    if turn.get("by_points"):
+        msg["byPoints"] = [{"point": x.get("point", ""), "n": int(x.get("n") or 0)} for x in turn["by_points"]]
     # 自动导入 / 自动切换文档的提示，跟着这一轮回答保留。
     if turn.get("notice"):
         msg["notice"] = turn["notice"]

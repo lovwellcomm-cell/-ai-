@@ -53,6 +53,12 @@ TOP_K = int(get("TOP_K", "8"))
 # 任一年报章节最多占用几个检索位。年报语料极度倾斜（第八节财务报告常占三分之二），
 # 不限制的话 TOP_K 个位置会被财报数字占满，模型拿不到“为什么”那部分材料。
 MAX_PER_SECTION = int(get("MAX_PER_SECTION", "5"))
+# 按要点分别检索（rag/retriever.select_by_points）：问题有 2 个以上要点时每个要点先取 PER_POINT_K 段，
+# 总数放宽到「要点数 × PER_POINT_K」、最多 MAX_POINTS_K（用户 2026-11-03 定：每个 3 段、上限 12）。
+# 设 RETRIEVE_BY_POINTS=0 回到一个融合排名取 TOP_K。
+RETRIEVE_BY_POINTS = get("RETRIEVE_BY_POINTS", "1") == "1"
+PER_POINT_K = int(get("PER_POINT_K", "3"))
+MAX_POINTS_K = int(get("MAX_POINTS_K", "12"))
 # 生成调用的超时（秒）。不设的话走 OpenAI 客户端默认的 600 秒，
 # 一次卡住会把免费实例的会话钉死十分钟。对**流式**调用这是「多久没收到数据」的上限，
 # 不是总时长上限；长推理期间服务器不发数据，所以别设得太小。

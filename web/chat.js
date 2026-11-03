@@ -1525,6 +1525,13 @@ export default function (component) {
       }).join(" → ")));
       tb.appendChild(line);
     }
+    // 按要点分别检索：一问多项时每个要点各自分到几段
+    if (m.byPoints && m.byPoints.length) {
+      const line = mk("div", "trace-line");
+      line.appendChild(document.createTextNode("按要点检索 "));
+      line.appendChild(mk("b", null, m.byPoints.map((x) => x.point + " " + x.n + " 段").join(" · ")));
+      tb.appendChild(line);
+    }
     (m.queries || []).forEach((qq) => {
       const line = mk("div", "trace-line");
       line.appendChild(document.createTextNode("检索词 "));

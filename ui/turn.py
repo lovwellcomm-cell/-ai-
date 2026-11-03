@@ -135,6 +135,9 @@ def history_entry(turn: dict, answer: str) -> dict:
     # 分步记录：界面检索轨迹里那一行「分步：① 2025 年报（记下 7 个数）→ ② …」
     if turn.get("steps_log"):
         entry["steps"] = list(turn["steps_log"])
+    # 按要点分别检索：检索轨迹里那一行「按要点检索：研发投入 3 段 · 前五大客户 3 段」
+    if turn.get("by_points"):
+        entry["by_points"] = list(turn["by_points"])
     return entry
 
 
@@ -325,6 +328,24 @@ def adopt_turn(turn: dict | None, doc_id: str):
         mark = "web" if turn.get("status") == "searching" else "analyze"
         entry = history_entry(dict(turn, **{mark: "aborted"}), turn["a"])
     return None, ((turn.get("doc_id"), entry) if entry else None)
+
+
+def answered_hits(hits: list[dict] | None, review: dict | None, limit: int) -> list[dict]:
+    """补检索时留下哪些旧片段：按要点分别检索取的、复核说已经答到的那几个要点的片段（最多 limit 段）。
+
+    以前补检索整批重找，已经答对的要点的片段可能被换掉，重答反而丢了原来答对的数。
+    要点名两边可能写得略有出入（规划器「前五大客户占比」、复核「前五名客户销售额占比」），互相包含也算同一个。
+    笔记片段、补充检索片段不留：它们由调用方照常另行接上。没有按要点检索过（片段不带 point）就什么都不留。
+    """
+    ok = [p["point"] for p in (review or {}).get("points") or [] if p.get("ok")]
+    if not ok:
+        return []
+
+    def same(a: str, b: str) -> bool:
+        return bool(a and b) and (a == b or a in b or b in a)
+
+    return [h for h in hits or [] if h.get("point") and not h.get("note")
+            and any(same(h["point"], x) for x in ok)][:max(0, limit)]
 
 
 def run_parallel(jobs: dict) -> dict:
