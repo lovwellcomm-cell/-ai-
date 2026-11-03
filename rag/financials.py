@@ -32,7 +32,8 @@ from .periods import FY, Q3, detect
 # 4：追溯调整后的「调整后 / 调整前」5–6 列格式（长江电力）。
 # 5：三季报利润表科目折行、本期和上年同期金额各占一行（精达 2025 三季报以前整张表抽不出）。
 # 6：年报科目折四行（精达 2022 的扣非净利润以前漏抽）；数字本身折行（蓝色光标 2025 整张表以前抽不出）。
-FIN_VERSION = 6
+# 7：季报、半年报的数字折行也接上（样本里还没遇到，提前补）。
+FIN_VERSION = 7
 FIN_FILE = "financials.json"
 
 UNIT_SCALE = {"亿元": 1e8, "万元": 1e4, "千元": 1e3, "元": 1.0}
@@ -329,16 +330,81 @@ def _alias_prefix(text: str) -> bool:
     return bool(t) and any(a.startswith(t) and a != t for a in _ALIAS)
 
 
-def parse_periodic_rows(lines: list[str]) -> dict[str, list[str]]:
-    """{科目键: 数字格}。科目最多折 4 行；科目后半截被分页挤到数字后面也能接上。"""
+_PFRAG_RE = re.compile(r"^[-−\d,.%]+$")
+_PCELL_WELL_RE = re.compile(r"^[-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?$")
+
+
+def _is_frag(tok: str) -> bool:
+    return bool(_PFRAG_RE.match(tok)) or tok in _BLANK_CELLS
+
+
+def _frag_line(ln: str) -> bool:
+    """这一行只有数字碎片和占位符（「8」「.95」「983.53 -6.92%」）：可能是上一行数字的后半截。"""
+    parts = ln.split()
+    return bool(parts) and all(_is_frag(t) for t in parts) and any(c.isdigit() for c in ln)
+
+
+def _wrapped_cells(ln: str, nexts: list[str]) -> tuple[str, list[list[str]], int] | None:
+    """季报版的数字折行拼接（年报版见 _wrapped_row）：`611,462,915.8` / `0 -6.01% …`、
+    `-109.59% -` / `50,553,323.89 …`、`10,060,538,` / `983.53 …`、四格的最后一格掉到下一行。
+
+    三季报这一行在这里没法复算（要到报表里核对），所以只按格式筛：每格是规范的数或占位符、
+    金额小数位一致、3–4 格；筛剩的接法都交回去，由 _periodic_item 核对，只有一种对得上才算。
+    返回 (科目文字, 候选数字格, 用掉的续行数)。
+    """
+    parts = ln.split()
+    start = next((i for i in range(len(parts)) if all(_is_frag(t) for t in parts[i:])), None)
+    if start is None:
+        return None
+    head, tail = "".join(parts[:start]), " ".join(parts[start:])
+    for k in range(1, min(3, len(nexts)) + 1):
+        conts = nexts[:k]
+        if not all(_frag_line(c) for c in conts):
+            break                              # 续行带文字：是下一个科目，不是数字的后半截
+        cands: list[list[str]] = []
+        for mask in range(1 << k):
+            text = tail
+            for i, c in enumerate(conts):
+                text += (" " if mask >> i & 1 else "") + c
+            toks = text.split()
+            if not 3 <= len(toks) <= 4:
+                continue
+            if not all(_PCELL_WELL_RE.match(t) or t in _BLANK_CELLS for t in toks):
+                continue
+            decimals = {len(t.split(".")[1]) if "." in t else 0
+                        for t in toks if t not in _BLANK_CELLS and not t.endswith("%")}
+            if len(decimals) <= 1 and toks not in cands:
+                cands.append(toks)
+        if cands:
+            return head, cands, k
+    return None
+
+
+def parse_periodic_rows(lines: list[str],
+                        alts: dict[str, list[list[str]]] | None = None) -> dict[str, list[str]]:
+    """{科目键: 数字格}。科目最多折 4 行；科目后半截被分页挤到数字后面也能接上。
+
+    数字本身折行时（_wrapped_cells）可能有几种接法：第一种放进返回值，全部候选放进 alts，
+    由调用方逐个核对。
+    """
     rows: dict[str, list[str]] = {}
     buffer: list[str] = []
     pending: tuple[str, list[str], int] | None = None    # (半截科目, 数字格, 已跳过行数)
-    for raw in lines:
-        ln = raw.strip()
-        if not ln:
-            continue
+    lines = [x.strip() for x in lines if x.strip()]
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        i += 1
         head, cells = _cells(ln)
+        cands = None
+        if len(cells) < 4 and i < len(lines) and _frag_line(lines[i]):
+            wrapped = _wrapped_cells(ln, lines[i:i + 3])
+            if wrapped:
+                whead, cands, used = wrapped
+                if len(cells) >= 3:            # 原样也像完整的一行：也当一个候选
+                    cands = [cells] + [c for c in cands if c != cells]
+                head, cells = whead, cands[0]
+                i += used
         if pending:
             prefix, pcells, skipped = pending
             if not cells:
@@ -364,6 +430,8 @@ def parse_periodic_rows(lines: list[str]) -> dict[str, list[str]]:
                 if key:
                     break
             if key:
+                if key not in rows and cands and len(cands) > 1 and alts is not None:
+                    alts[key] = cands
                 rows.setdefault(key, cells)
             elif _alias_prefix(head):
                 pending = (head, cells, 0)
@@ -475,16 +543,19 @@ def extract_periodic_from_lines(pages_lines: list[list[str]], period: str,
     for window in _table_windows(pages_lines):
         table = _cut_at_end([ln for _, ln in window])
         window = window[:len(table)]
-        rows = parse_periodic_rows(table)
+        alts: dict[str, list[list[str]]] = {}
+        rows = parse_periodic_rows(table, alts)
         if "revenue" not in rows or "np_parent" not in rows:
             continue
         unit = detect_unit(table)
         scale = UNIT_SCALE[unit]
         items = {}
         for key, cells in rows.items():
-            item = _periodic_item(key, cells, period, y0, y1, scale, all_lines)
-            if item:
-                items[key] = item
+            # 数字折行有几种接法时逐个核对：核对得上的只有一种（或几种结果相同）才算，否则不猜
+            got = [it for it in (_periodic_item(key, c, period, y0, y1, scale, all_lines)
+                                 for c in alts.get(key, [cells])) if it]
+            if got and all(g == got[0] for g in got):
+                items[key] = got[0]
         ded, npp = items.get("np_deducted"), items.get("np_parent")
         if period == Q3 and ded:
             total = _nonrecurring_total(all_lines)

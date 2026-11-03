@@ -163,6 +163,39 @@ def test_szse_q3_with_dash_placeholders_and_losses():
     assert fin["audited"] is False                                   # 「□是 否」：勾掉的是「否」
 
 
+def test_numbers_wrapped_across_lines_szse_q3():
+    """列太窄时数字本身折行（年报里蓝色光标 2025 就是）：小数位断开、负号留在行尾、
+    占位符「—」之后断开、千分位逗号处断开。接上后要和不折行时抽得一模一样。"""
+    text = (QPL_Q3
+            .replace("611,462,915.80 -6.01%", "611,462,915.8\n0 -6.01%")
+            .replace("-109.59% -50,553,323.89", "-109.59% -\n50,553,323.89")
+            .replace("— — 87,274,318.74 380.30%", "— — 87,274,318.\n74 380.30%")
+            .replace("9,364,138,667.07 10,060,538,983.53", "9,364,138,667.07 10,060,538,\n983.53"))
+    assert text.count("\n") == QPL_Q3.count("\n") + 4
+    want = extract_periodic_from_lines([_lines(QPL_Q3), _lines(QPL_Q3_STATEMENTS)], "Q3", 2026)
+    got = extract_periodic_from_lines([_lines(text), _lines(QPL_Q3_STATEMENTS)], "Q3", 2026)
+    assert got == want and set(got["items"]) == set(want["items"])
+    assert got["items"]["np_parent"]["values"]["2026"] == -50553323.89
+
+
+def test_last_cell_wrapped_sse_q3():
+    """上交所三季报四格，最后一格掉到下一行：只剩三格时不能当成完整的一行。"""
+    cover = JD_Q3_COVER.replace("23,430,538,137.40 31.81", "23,430,538,137.40\n31.81")
+    want = extract_periodic_from_lines(_jd_q3(), "Q3", 2026)
+    got = extract_periodic_from_lines(
+        [_lines(cover), _lines(JD_Q3_PAGE2), _lines(JD_Q3_STATEMENTS)], "Q3", 2026)
+    assert got == want
+
+
+def test_wrapped_number_does_not_swallow_next_label():
+    """续行带文字是下一个科目：不接；营收那行凑不齐就不要，归母净利润照常抽。"""
+    text = QPL_Q1.replace("885,376,106.15 844,034,694.74 4.90%", "885,376,106.15 844,034,694.7")
+    fin = extract_periodic_from_lines([_lines(text)], "Q1", 2026)
+    assert fin is None or "revenue" not in fin["items"]
+    rows = parse_periodic_rows(_lines(text))
+    assert rows["np_parent"] == ["49,823,715.57", "149,508,166.50", "-66.67%"]
+
+
 QPL_Q1 = """
 第一季度财务会计报告是否经过审计
 □是 否
