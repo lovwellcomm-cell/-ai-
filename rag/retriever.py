@@ -196,7 +196,7 @@ class Retriever:
         restated 是规划器补全了指代的完整问题，规则改写一下作为补充 —— 原问题带指代时
         （「那2024年呢」）不能拿来检索，补全后的可以。
 
-        points：规划器给的「要点 + 各自检索词」（2 个以上才有）。一问多项时所有检索词融合成一个排名，
+        points：规划器给的「要点 + 各自检索词」（POINTS_MIN 个以上才分）。一问多项时所有检索词融合成一个排名，
         最好找的那一项会占满名额、其余几项一段都分不到 —— 所以先取融合排名前 POINTS_HEAD_K 段，
         再每个要点各取 PER_POINT_K 段，剩下的名额按融合排名补（select_by_points），
         总数放宽到 max(k, POINTS_HEAD_K + 要点数 × PER_POINT_K)、不超过 MAX_POINTS_K。
@@ -214,7 +214,7 @@ class Retriever:
         else:
             queries = self._expand(query, client, use_llm, history=history, diag=diag)
         points = [p for p in points or [] if p.get("queries")] if config.RETRIEVE_BY_POINTS else []
-        if len(points) < 2:
+        if len(points) < max(2, config.POINTS_MIN):
             points = []
         extra = [q for p in points for q in p["queries"] if q not in queries]
         qvecs = dict(zip(queries + extra,

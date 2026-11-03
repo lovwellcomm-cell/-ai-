@@ -113,6 +113,13 @@ def test_retriever_tags_hits_and_reports_counts():
     assert "利润分配 现金红利" in queries
 
 
+def test_two_points_use_single_ranking():
+    """只有 2 个要点：8 段装得下，不按要点分（评测里按要点分没好处、偶尔反而出错）。"""
+    diag: dict = {}
+    hits, _ = _retriever().search_with_queries("q", queries=["研发投入"], points=POINTS[:2], diag=diag)
+    assert "points" not in diag and len(hits) == config.TOP_K
+
+
 def test_switch_off_restores_single_ranking(monkeypatch):
     monkeypatch.setattr(config, "RETRIEVE_BY_POINTS", False)
     diag: dict = {}
