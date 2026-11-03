@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 
+from rag.history import is_hist_id
 from rag.notes import sources_line
 from ui.card import CARD_KEYS
 
@@ -40,6 +41,14 @@ def _trim(v, limit: int) -> str:
     return v[:limit] if isinstance(v, str) else ""
 
 
+def _note_doc_ok(did, known_docs: set[str] | None) -> bool:
+    """笔记 / 笔记片段的出处：本地有的报告，或往年年报的截图缓存（rag/history，翻原页时再查文件在不在）。"""
+    if is_hist_id(did):
+        return True
+    return (isinstance(did, str) and bool(_DOC_ID_RE.match(did))
+            and (known_docs is None or did in known_docs))
+
+
 def _clean_hit(h, known_docs: set[str] | None = None) -> dict | None:
     if not isinstance(h, dict):
         return None
@@ -51,8 +60,7 @@ def _clean_hit(h, known_docs: set[str] | None = None) -> dict | None:
         return None
     # 事实笔记片段（rag/notes.as_hits）：来自别的报告，翻原页靠它的 doc_id
     did = h.get("doc_id")
-    if (h.get("note") is True and isinstance(did, str) and _DOC_ID_RE.match(did)
-            and (known_docs is None or did in known_docs)):
+    if h.get("note") is True and _note_doc_ok(did, known_docs):
         out.update(note=True, doc_id=did, note_src=_trim(h.get("note_src"), 40))
     return out if out["text"] else None
 
@@ -62,7 +70,7 @@ def _clean_note(n, known_docs: set[str]) -> dict | None:
     if not isinstance(n, dict):
         return None
     doc, p = n.get("doc"), n.get("p")
-    if not (isinstance(doc, str) and _DOC_ID_RE.match(doc) and doc in known_docs):
+    if not _note_doc_ok(doc, known_docs):
         return None
     if not isinstance(p, int) or isinstance(p, bool) or not 1 <= p <= 5000:
         return None

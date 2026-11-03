@@ -162,3 +162,86 @@ def test_local_report_preferred(tmp_data, monkeypatch):
     docs = [{"doc_id": "a" * 16, "company": "精达股份", "year": "2022"}]
     fin, fetched = load_older("精达", 2022, docs)
     assert not fetched and fin["page"] == 6 and fin["source"] == "本地"
+
+
+# ---------------------------------------------------------------- 第二步：往年数字进回答
+
+def test_as_hit_from_cninfo_cache():
+    hit = history.as_hit(_old(), "精达股份")
+    assert hit["doc_id"] == "hist:精达_2022" and history.is_hist_id(hit["doc_id"])
+    assert hit["note"] is True and hit["note_src"] == "精达股份 2022 年报"
+    assert hit["section"] == "往年年报 · 精达股份 2022 年报"
+    assert hit["page_start"] == hit["page_end"] == 6
+    assert hit["text"].splitlines()[0] == ("营业收入：2022 年 175.42 亿元；2021 年 183.30 亿元；"
+                                           "2020 年 124.47 亿元；本期比上年同期增减 +10.53%")
+
+
+def test_as_hit_local_report_keeps_its_doc_id():
+    assert history.as_hit(dict(_old(), doc_id="a" * 16), "精达股份")["doc_id"] == "a" * 16
+    assert history.as_hit(None, "精达股份") is None
+    assert history.as_hit(dict(_old(), items={}), "精达股份") is None
+
+
+def test_attach_replaces_same_page_note():
+    hit = history.as_hit(_old(), "精达股份")
+    old_note = {"doc_id": "hist:精达_2022", "page_start": 6, "text": "营业收入：2022 年 175.42 亿元"}
+    other = {"doc_id": "b" * 16, "page_start": 6, "text": "x"}
+    assert history.attach([other, old_note], hit) == [other, hit]
+    assert history.attach([other], None) == [other]
+
+
+def test_page_png_only_serves_valid_ids(tmp_data):
+    (tmp_data / "_history").mkdir()
+    (tmp_data / "_history" / "精达_2022_p6.png").write_bytes(b"png")
+    assert history.page_png("hist:精达_2022", 6) == b"png"
+    assert history.page_png("hist:精达_2022", 7) is None
+    for bad in ("hist:../x_2022", "hist:精达_22", "a" * 16, "", None):
+        assert history.page_png(bad, 6) is None
+
+
+def test_cninfo_fetch_saves_table_page(tmp_data, monkeypatch):
+    from rag import disclosure, pdf_parser
+
+    monkeypatch.setattr(disclosure, "find_report", lambda c, y, p: {"url": "https://static.cninfo.com.cn/x.pdf"})
+    monkeypatch.setattr(disclosure, "download_pdf", lambda url, timeout: (b"%PDF", {}))
+    monkeypatch.setattr(history, "extract", lambda data, period: _old())
+    monkeypatch.setattr(pdf_parser, "render_page_png", lambda data, page: f"page{page}".encode())
+    fin, fetched = load_older("精达股份", 2022, [], now=0)
+    assert fetched and fin["page"] == 6
+    assert history.page_png(history.as_hit(fin, "精达股份")["doc_id"], 6) == b"page6"
+
+
+def test_cache_without_shot_refetches_once(tmp_data, monkeypatch):
+    """第二步之前写的缓存没有表所在页截图：能下载就重下一次补上，额度用完就先用缓存里的数。"""
+    path = tmp_data / "_history" / "精达_2022.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"version": history.FIN_VERSION, "at": 0, "fin": _old()}), encoding="utf-8")
+    monkeypatch.setattr(history, "_from_cninfo", lambda c, y: pytest.fail("不该下载"))
+    assert load_older("精达股份", 2022, [], allow_fetch=False) == (_old(), False)
+    calls = []
+    monkeypatch.setattr(history, "_from_cninfo", lambda c, y: calls.append(y) or _old())
+    assert load_older("精达股份", 2022, [], now=10)[1] is True
+    assert load_older("精达股份", 2022, [], now=20)[1] is False and calls == [2022]
+
+
+def test_answer_rows_from_history_hit_keep_hist_source():
+    from rag.notes import as_hits, from_answer
+
+    hit = history.as_hit(_old(), "精达股份")
+    answer = ("| 年份 | 营业收入 |\n|---|---|\n| 2021 年 | 183.30 亿元 [2] |\n")
+    notes = from_answer(answer, [{"doc_id": "c" * 16, "page_start": 7, "text": "无关"}, hit], [],
+                        "c" * 16, "精达股份 2025 年报")
+    assert notes == [{"doc": "hist:精达_2022", "src": "精达股份 2022 年报", "p": 6,
+                      "t": "2021 年：营业收入 183.30 亿元"}]
+    # 下一轮带回来时翻原页仍然走截图
+    assert as_hits([{"notes": notes}], "c" * 16)[0]["doc_id"] == "hist:精达_2022"
+
+
+def test_browser_archive_keeps_hist_sources():
+    from ui.memory import _clean_hit, _clean_note
+
+    hit = history.as_hit(_old(), "精达股份")
+    assert _clean_hit(hit, set())["doc_id"] == "hist:精达_2022"
+    note = {"doc": "hist:精达_2022", "src": "精达股份 2022 年报", "p": 6, "t": "营业收入：2021 年 183.30 亿元"}
+    assert _clean_note(note, set()) == note
+    assert _clean_note(dict(note, doc="hist:../../etc_2022"), set()) is None

@@ -36,7 +36,8 @@ from rag.healthcheck import load_or_build as load_health, merge_quarter, wants_h
 from rag import drivers as key_drivers
 from rag.generator import analyze, generate, get_client, make_client, resolve_style
 from rag import caliber, planner, reviewer
-from rag.history import load_older, merge, older_year, wants_trend
+from rag.history import (as_hit as history_hit, attach as attach_history, is_hist_id, load_older,
+                         merge, older_year, page_png as hist_page_png, wants_trend)
 from rag import notes as fact_notes
 from rag.fidelity import unverified_in_tables
 from rag.industry import RETRIEVAL_QUERY as INDUSTRY_QUERY, industry_brief, wants_industry
@@ -976,6 +977,7 @@ def advance_turn() -> None:
         # 补检索去了别的报告时，上一轮的片段（含笔记）已经原样带上了
         if target.get("kind") != "industry" and not other:
             hits = hits + fact_notes.as_hits(history, doc_id, extra=target.get("step_notes"))
+            hits = attach_history(hits, target.get("hist_hit"))
         target["hits"] = hits
         target["queries"] = queries
         target["src_label"] = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}".strip()
@@ -1019,9 +1021,14 @@ def advance_turn() -> None:
                     allow_fetch=used < config.HISTORY_FETCHES_PER_SESSION)
                 if fetched:
                     st.session_state["history_fetches"] = used + 1
-                card = build_card(merge(fin, older))
+                merged = merge(fin, older)
+                card = build_card(merged)
                 if card:
                     target.update(card)
+                # 往年数字进回答：接得上（merge 真的拼了）才加片段。存在回合上：复核回退重新检索时还要接上
+                if merged is not fin:
+                    target["hist_hit"] = history_hit(older, company)
+                    target["hits"] = attach_history(target["hits"], target["hist_hit"])
             except Exception as e:
                 target["history_error"] = f"{type(e).__name__}: {e}"
         target["status"] = "generating"
@@ -1211,7 +1218,13 @@ elif result.open_page and isinstance(result.open_page, dict):
     # 事实笔记片段来自别的报告，自带 doc_id
     if hits and 1 <= n <= len(hits) and hits[n - 1].get("doc_id"):
         source_doc = hits[n - 1]["doc_id"]
-    if hits and 1 <= n <= len(hits) and source_doc in docs:
+    if hits and 1 <= n <= len(hits) and is_hist_id(source_doc):
+        # 往年年报片段：PDF 没留，翻的是下载时存下的表所在页截图（rag/history.page_png）
+        png = hist_page_png(source_doc, int(hits[n - 1]["page_start"]))
+        st.session_state["page"] = ({"n": n, "png": "data:image/png;base64,"
+                                     + base64.b64encode(png).decode("ascii")} if png else None)
+        st.rerun()
+    elif hits and 1 <= n <= len(hits) and source_doc in docs:
         try:
             st.session_state["page"] = {
                 "n": n, "png": page_data_uri(source_doc, int(hits[n - 1]["page_start"]), SOURCE_STAMP),

@@ -9,6 +9,10 @@
 
 来源顺序：本地已有的同公司年报（比如之前导入过）→ data/_history 缓存 → 巨潮下载。
 缓存按公司 + 年份存，全站共用：第一个访客等几秒，之后的人直接用。
+
+第二步（往年数字进回答）：往年那张表也做成一个笔记式片段（as_hit），接在检索片段后面编号，
+回答能引用、逐格核对、记成笔记。巨潮下载的那份不留 PDF，所以扔之前把表所在的那一页渲染成 PNG 存下，
+片段的 doc_id 写成「hist:<缓存键>」，翻原页时从这张图出（page_png）。本地已有的年报直接用它自己的 doc_id。
 """
 from __future__ import annotations
 
@@ -19,12 +23,15 @@ import time
 from . import config
 from .company import normalize, same_company
 from .financials import FIN_VERSION, extract, load_or_build
-from .periods import FY
+from .periods import FY, report_label
 
 HIST_DIR_NAME = "_history"
+HIST_PREFIX = "hist:"
+HIST_SECTION = "往年年报"                 # 片段标题；rag/generator.NOTES_RULE 按这个名字讲怎么用
 # 「这份年报巨潮上没有」（比如公司 2023 年才上市）也缓存，但一周后再查一次，
 # 万一当时只是检索接口抽风。网络错误不缓存。
 MISS_TTL = 7 * 24 * 3600
+_HIST_ID_RE = re.compile(r"^hist:(\w{1,40}_\d{4})$")
 
 _TREND_RE = re.compile(
     r"趋势|走势|历年|多年|这几年|近几年|过去几年|长期|"
@@ -50,9 +57,32 @@ def older_year(fin: dict) -> int | None:
         return None
 
 
-def _cache_path(company: str, year: int):
+def _cache_key(company: str, year: int) -> str:
     key = re.sub(r"[^\w一-鿿]", "_", normalize(company))[:40] or "_"
-    return config.DATA_DIR / HIST_DIR_NAME / f"{key}_{year}.json"
+    return f"{key}_{year}"
+
+
+def _cache_path(company: str, year: int):
+    return config.DATA_DIR / HIST_DIR_NAME / f"{_cache_key(company, year)}.json"
+
+
+def _page_path(key: str, page: int):
+    return config.DATA_DIR / HIST_DIR_NAME / f"{key}_p{int(page)}.png"
+
+
+def is_hist_id(doc_id) -> bool:
+    return isinstance(doc_id, str) and bool(_HIST_ID_RE.match(doc_id))
+
+
+def page_png(doc_id: str, page: int) -> bytes | None:
+    """翻原页：往年年报表所在页的截图。doc_id 来自浏览器（可能被改过），只认格式对、文件在的。"""
+    m = _HIST_ID_RE.match(doc_id or "")
+    if not m:
+        return None
+    try:
+        return _page_path(m.group(1), page).read_bytes()
+    except (OSError, ValueError):
+        return None
 
 
 def _read_cache(company: str, year: int, now: float) -> tuple[bool, dict | None]:
@@ -65,7 +95,8 @@ def _read_cache(company: str, year: int, now: float) -> tuple[bool, dict | None]
         return False, None
     fin = cached.get("fin")
     if fin:
-        return True, fin
+        # 第二步之前写的缓存没存表所在页的截图：算没命中（还能下载就重下一次补上），数字留着兜底
+        return "shot" in cached, fin
     if now - float(cached.get("at") or 0) < MISS_TTL:
         return True, None
     return False, None
@@ -76,7 +107,8 @@ def _write_cache(company: str, year: int, fin: dict | None, now: float) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"version": FIN_VERSION, "company": company, "year": year,
-                                    "at": now, "fin": fin}, ensure_ascii=False, indent=1),
+                                    "at": now, "fin": fin, "shot": True},
+                                   ensure_ascii=False, indent=1),
                         encoding="utf-8")
     except OSError:
         pass
@@ -91,12 +123,23 @@ def _from_local(company: str, year: int, docs: list[dict]) -> dict | None:
             continue
         fin = load_or_build(d["doc_id"])
         if fin and fin.get("years") and fin["years"][0] == str(year):
-            return dict(fin, source="本地")
+            return dict(fin, source="本地", doc_id=d["doc_id"])
     return None
 
 
+def _save_page(company: str, year: int, data: bytes, page: int) -> None:
+    from .pdf_parser import render_page_png
+
+    path = _page_path(_cache_key(company, year), page)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(render_page_png(data, page))
+    except Exception:
+        pass                                   # 截图失败只是翻不了原页，数字照用
+
+
 def _from_cninfo(company: str, year: int) -> dict | None:
-    """巨潮找到那份年报 → 下载 → 只读前 30 页抽表。找不到公告返回 None，网络错误往外抛。"""
+    """巨潮找到那份年报 → 下载 → 只读前 30 页抽表、存下表所在页的截图。找不到公告返回 None，网络错误往外抛。"""
     from .disclosure import ReportNotFound, download_pdf, find_report
 
     try:
@@ -108,6 +151,7 @@ def _from_cninfo(company: str, year: int) -> dict | None:
     if not fin or fin.get("years", [None])[0] != str(year):
         # 表头年份对不上（抽到了别的表、或者公告标题和正文年份不一致）就当没抽到
         return None
+    _save_page(company, year, data, fin["page"])
     return dict(fin, source=info["url"])
 
 
@@ -162,3 +206,32 @@ def merge(fin: dict, older: dict | None) -> dict:
          "page": older.get("page")},
     ]
     return out
+
+
+def as_hit(older: dict | None, company: str) -> dict | None:
+    """往年那份表 → 一个笔记式片段（和 rag/notes.as_hits 同形状），接在检索片段后面编号。
+
+    每个科目一行，写法和事实笔记一样（notes.from_financials），回答能引用、逐格核对、记成笔记；
+    本地有的年报用它自己的 doc_id，巨潮下载的用「hist:<缓存键>」，翻原页走截图。
+    """
+    from .notes import from_financials
+
+    if not older or not older.get("items") or not older.get("page"):
+        return None
+    year = older["years"][0]
+    doc = older.get("doc_id") or HIST_PREFIX + _cache_key(company, int(year))
+    src = f"{company} {report_label(year, FY)}".strip()
+    lines = [n["t"] for n in from_financials(older, doc, src)]
+    if not lines:
+        return None
+    return {"doc_id": doc, "note_src": src, "note": True, "text": "\n".join(lines),
+            "section": f"{HIST_SECTION} · {src}", "subsection": "主要会计数据",
+            "page_start": int(older["page"]), "page_end": int(older["page"])}
+
+
+def attach(hits: list[dict], hit: dict | None) -> list[dict]:
+    """把往年片段接到最后；前几轮记过同一页笔记的片段换成这张整表，免得同一页占两个编号。"""
+    if not hit:
+        return list(hits)
+    key = (hit["doc_id"], hit["page_start"])
+    return [h for h in hits if (h.get("doc_id"), h.get("page_start")) != key] + [hit]
