@@ -23,8 +23,8 @@ _DOC_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _CONV_KEY_RE = re.compile(r"^(co|doc):.{1,60}$")
 
 _ENTRY_STR = {"q": 500, "a": 20000, "notice": 200, "kind": 20, "understood": 300}
-# industry 行业动态；clarify 反问（带 options）；refuse 超出范围；health 财报体检；drivers 几件大事
-_KINDS = ("industry", "clarify", "refuse", "health", "drivers")
+# industry 行业动态；clarify 反问（带 options）；refuse 超出范围；health 财报体检；drivers 几件大事；statements 三表速读
+_KINDS = ("industry", "clarify", "refuse", "health", "drivers", "statements")
 _HIT_STR = {"text": 4000, "section": 120, "subsection": 160}
 _WEB_STR = {"title": 200, "url": 600, "site": 80, "date": 20}
 # 卡片、表格核对这些是程序算好的展示数据：结构复杂，原样带回，只限制总体大小
@@ -34,7 +34,8 @@ MAX_NOTES = 20            # 每轮最多几条事实笔记（rag/notes.MAX_PER_T
 _STEP_STATUS = ("ok", "have", "same", "skipped", "timeout", "quota", "error", "main")
 NOTE_TEXT_LIMIT = 300
 # 「几件大事」每个因素带原文引用、最新动态、估算，5 个因素实测约 7–9 千字：超了会在刷新后悄悄消失
-_OPAQUE_MAX_BY_KEY = {"drivers": 16000}
+# 三表速读三张小表 + 每 100 元拆分 + 核对说明，实测约 4 千字
+_OPAQUE_MAX_BY_KEY = {"drivers": 16000, "statements": 10000}
 
 
 def _trim(v, limit: int) -> str:

@@ -95,6 +95,8 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
             msg["statusText"] = "正在联网检索行业动态…（约半分钟）"
         if turn.get("kind") == "health" and status == "retrieving":
             msg["statusText"] = "正在逐项翻查报告做体检…"
+        if turn.get("kind") == "statements" and status == "retrieving":
+            msg["statusText"] = "正在读三张合并报表、核对勾稽关系…"
         # 分步读别的报告（第二期）：app.py 每一步写好 step_text（「第 1 步：读 2025 年报…」）
         if status == "prestep" and turn.get("step_text"):
             msg["statusText"] = turn["step_text"]
@@ -148,6 +150,8 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
         msg["health"] = health_card(msg["health"])
     if isinstance(msg.get("drivers"), dict):
         msg["drivers"] = drivers_card(msg["drivers"])
+    if isinstance(msg.get("statements"), dict):
+        msg["statements"] = statements_card(msg["statements"])
     return msg
 
 
@@ -201,6 +205,27 @@ def drivers_card(c: dict) -> dict:
             },
         })
     return {"date": _s(c.get("date"), 10), "items": items}
+
+
+def statements_card(c: dict) -> dict:
+    """三表速读卡下发前清洗：浏览器存档带回来的数据由访客控制，只留认识的字段，字符串截长度，页码核类型。"""
+    secs = []
+    for s in (c.get("sections") or [])[:3]:
+        if not isinstance(s, dict) or s.get("key") not in ("bs", "is", "cf"):
+            continue
+        rows = [{"label": _s(r.get("label"), 12), "cur": _s(r.get("cur"), 20), "prev": _s(r.get("prev"), 20),
+                 "chg": _s(r.get("chg"), 20), "hint": _s(r.get("hint"), 60), "page": _page(r.get("page"))}
+                for r in (s.get("rows") or [])[:12] if isinstance(r, dict)]
+        flow = [{"label": _s(x.get("label"), 8), "v": _num(x.get("v")), "page": _page(x.get("page")),
+                 "hint": _s(x.get("hint"), 60), "net": x.get("net") is True}
+                for x in (s.get("flow") or [])[:12] if isinstance(x, dict) and _num(x.get("v")) is not None]
+        secs.append({"key": s["key"], "title": _s(s.get("title"), 30), "page": _page(s.get("page")),
+                     "cols": [_s(x, 20) for x in (s.get("cols") or [])[:2]], "rows": rows, "flow": flow,
+                     "portrait": _s(s.get("portrait"), 60),
+                     "checks": [_s(x, 60) for x in (s.get("checks") or [])[:6]]})
+    skipped = [{"name": _s(x.get("name"), 10), "why": _s(x.get("why"), 60)}
+               for x in (c.get("skipped") or [])[:3] if isinstance(x, dict)]
+    return {"unit": _s(c.get("unit"), 4), "period": _s(c.get("period"), 4), "sections": secs, "skipped": skipped}
 
 
 def health_card(h: dict) -> dict:

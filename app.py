@@ -34,6 +34,7 @@ from rag.external import answer_with_tools
 from rag.financials import load_or_build as load_financials
 from rag.healthcheck import load_or_build as load_health, merge_quarter, wants_health
 from rag import drivers as key_drivers
+from rag import statements as three_statements
 from rag.generator import analyze, generate, get_client, make_client, resolve_style
 from rag import caliber, planner, reviewer
 from rag.history import (as_hit as history_hit, attach as attach_history, is_hist_id, load_older,
@@ -217,6 +218,12 @@ def get_health(doc_id: str, stamp: str) -> dict | None:
     return load_health(doc_id, get_financials(doc_id, stamp))
 
 
+@st.cache_data(show_spinner=False)
+def get_statements(doc_id: str, stamp: str) -> dict | None:
+    """三张合并报表的抽取和勾稽核对（rag/statements.py）。第一次做时读全文（约 1 秒），写成 statements.json。"""
+    return three_statements.load_or_build(doc_id)
+
+
 # 刚卸载过旧模块的那一次运行，把旧代码构造的缓存对象清掉（只清这几个，
 # 绝不调用 st.cache_resource.clear() —— 那会连 get_quota 一起清、额度归零）。
 from rag.freshness import take_cache_bust  # noqa: E402  （重载后这里拿到的是新版本）
@@ -227,6 +234,7 @@ if take_cache_bust(SOURCE_STAMP):
     page_data_uri.clear()
     get_financials.clear()
     get_health.clear()
+    get_statements.clear()
 
 
 def _patch_meta(doc_id: str, company: str = "", year: str = "",
@@ -755,8 +763,8 @@ def advance_turn() -> None:
                                             hint=target.get("replan_hint", ""))
         if understood is None:
             understood = planner.fallback(target["q"], client=client, history=ctx, current=meta)
-        if target.get("kind") in ("health", "drivers"):
-            # 体检、几件大事只用规划器认公司和报告（「给七匹狼做个体检」要先切过去）；
+        if target.get("kind") in ("health", "drivers", "statements"):
+            # 体检、几件大事、三表速读只用规划器认公司和报告（「给七匹狼做个体检」要先切过去）；
             # 它判成反问、超范围、行业动态都不算 —— 对当前报告总是做得了。
             # intent 照记：没指定哪一期时优先用年报（turn_core.plan_for）
             understood = dict(understood, intent=target["kind"])
@@ -863,6 +871,22 @@ def advance_turn() -> None:
                 hc = merge_quarter(base_hc, hc, {"doc": base_id, "label": base_label},
                                    {"doc": doc_id, "label": label})
         finish_turn(turn_core.health_entry(target, hc, label, note))
+        st.rerun()
+
+    if target["status"] == "retrieving" and target.get("kind") == "statements":
+        # 三表速读：不检索、不生成。卡片和正文都由程序按三张合并报表写（ui/turn.statements_entry）
+        try:
+            stmts = get_statements(doc_id, SOURCE_STAMP)
+        except Exception as e:
+            stmts = None
+            target["statements_error"] = f"{type(e).__name__}: {e}"
+        if not stmts:
+            refund(target)
+            fail(target, "这份报告没能读出三张报表（读取原文失败）。可以换一份报告再试。")
+            st.rerun()
+        label = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}".strip()
+        c = three_statements.card(stmts, period_of(meta), meta.get("year", ""))
+        finish_turn(turn_core.statements_entry(target, c, label))
         st.rerun()
 
     if target["status"] == "retrieving" and target.get("kind") == "drivers":
@@ -1174,10 +1198,12 @@ def start_question(text: str, style: str | None = None) -> None:
             # 读秒：界面显示「已思考 n 秒」，完成后记成这一轮的用时（ui/turn.py:history_entry）
             "started": time.time(),
             # 行业动态走另一条路：联网检索成文，不做年报回答 + 扩展；
-            # 体检不检索不生成，程序直接出卡片（「行业风险」这种两边都沾的算行业动态）
+            # 体检、三表速读不检索不生成，程序直接出卡片（「行业风险」这种两边都沾的算行业动态；
+            # 「三张表有什么风险」算体检）
             **({"kind": "industry"} if wants_industry(text)
                else {"kind": "drivers"} if key_drivers.wants_drivers(text)
-               else {"kind": "health"} if wants_health(text) else {}),
+               else {"kind": "health"} if wants_health(text)
+               else {"kind": "statements"} if three_statements.wants_statements(text) else {}),
         }
         st.rerun()
 
@@ -1221,7 +1247,7 @@ if getattr(result, "pick_doc", None) and isinstance(result.pick_doc, dict) and n
         st.rerun()
 
 if result.open_page and isinstance(result.open_page, dict) and "p" in result.open_page:
-    # 体检卡点开的原页：{p: 页码, turn: 历史里第几轮}。从那一轮依据的报告里渲染，
+    # 体检卡、几件大事、三表速读点开的原页：{p: 页码, turn: 历史里第几轮}。从那一轮依据的报告里渲染，
     # 页码必须在这份报告的页数之内（数据来自浏览器，按不可信输入处理）。
     try:
         p, k = int(result.open_page.get("p")), int(result.open_page.get("turn"))
@@ -1232,7 +1258,7 @@ if result.open_page and isinstance(result.open_page, dict) and "p" in result.ope
     hkey = str(result.open_page.get("key") or "")[:20]
     source_doc = turn_core.health_page_doc(entry, hkey, doc_id)
     total = int((docs.get(source_doc) or {}).get("pages") or 0)
-    if entry.get("kind") in ("health", "drivers") and source_doc in docs and 1 <= p <= total:
+    if entry.get("kind") in ("health", "drivers", "statements") and source_doc in docs and 1 <= p <= total:
         try:
             st.session_state["page"] = {"hp": p, "turn": k, "hk": hkey,
                                         "png": page_data_uri(source_doc, p, SOURCE_STAMP)}

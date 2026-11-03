@@ -335,7 +335,7 @@ def describe(plan: dict | None) -> str:
         return ""
     names = {"report": "答报告", "trend": "拉长趋势", "industry": "行业动态",
              "clarify": "反问澄清", "out_of_scope": "超出范围", "health": "财报体检",
-             "drivers": "几件大事"}
+             "drivers": "几件大事", "statements": "三表速读"}
     t = plan.get("target") or {}
     who = " ".join(x for x in (t.get("company") or "", str(t.get("year") or ""),
                                SHORT.get(t.get("period") or "", "")) if x)

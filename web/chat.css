@@ -423,6 +423,41 @@ table.md-tbl { width: 100%; border-collapse: collapse; font-size: 13px; line-hei
   .hc-sum, .hc-more, .hc-src { padding-left: 15px; }
 }
 
+/* ---------- 三表速读 ---------- */
+/* 只讲结构和变化，不上红绿色（变化列也用中性色） */
+.st-sec { padding: 13px 15px 14px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
+.st-sec:last-of-type { border-bottom: 0; }
+.st-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.st-title { font-size: 13.5px; font-weight: 600; }
+.st-from { font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
+.st-tbl-wrap { overflow-x: auto; }
+.st-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.st-tbl th, .st-tbl td { padding: 6px 7px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+.st-tbl thead th { font-size: 11px; font-weight: 500; color: var(--ink-3); }
+.st-tbl tbody tr:last-child th, .st-tbl tbody tr:last-child td { border-bottom: 0; }
+.st-tbl .st-k { text-align: left; font-weight: 500; color: var(--ink); padding-left: 0; }
+.st-tbl .st-k.has-hint { text-decoration: underline dotted var(--ink-3); text-underline-offset: 3px; cursor: help; }
+.st-tbl .st-prev { color: var(--ink-2); }
+.st-tbl .st-chg { font-size: 11.5px; color: var(--ink-2); }
+.arb .st-pg { font-size: 10.5px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-2); color: var(--ink-3); cursor: pointer; }
+.arb .st-pg:hover:not([disabled]), .arb .st-pg.on { border-color: var(--accent-line); color: var(--accent); }
+.st-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+.st-flow-k { font-size: 11.5px; color: var(--ink-3); margin-right: 2px; }
+.st-chip { display: inline-flex; align-items: baseline; gap: 5px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+.st-chip b { font-weight: 600; color: var(--ink); }
+.st-chip.net { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.st-chip.net b { color: var(--accent); }
+.st-portrait { font-size: 12.5px; line-height: 1.6; color: var(--ink-2); padding-left: 10px; border-left: 2px solid var(--accent-line); }
+.st-checks { display: flex; flex-wrap: wrap; gap: 3px 12px; font-size: 11px; color: var(--ink-3); }
+.st-checks .ok::before { content: "✓ "; color: var(--pos); }
+.st-paper .paper-wrap { width: 100%; padding: 0; }
+.st-skip { padding: 10px 15px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-3); }
+@media (max-width: 560px) {
+  .st-tbl .st-prev { display: none; }
+  .st-tbl th, .st-tbl td { padding: 6px 4px; }
+}
+
 /* ---------- 几件大事 ---------- */
 .kd-item { border-bottom: 1px solid var(--line); }
 .kd-item:last-child { border-bottom: 0; }

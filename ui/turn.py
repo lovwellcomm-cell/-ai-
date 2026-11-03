@@ -19,6 +19,7 @@ from rag.fidelity import unverified_in_tables
 from rag.generator import join_answer, should_analyze
 from rag.drivers import brief as drivers_brief
 from rag.healthcheck import brief as health_brief, compact as compact_health
+from rag.statements import brief as statements_brief
 from rag import notes as fact_notes
 from rag.reviewer import decide, summary
 from rag.periods import (FY, RANK, latest_quarter, latest_report, latest_year, next_report,
@@ -88,7 +89,7 @@ def history_entry(turn: dict, answer: str) -> dict:
         entry["web_error"] = turn["web_error"]
     # 行业动态回合：界面据此不再显示「行业动态」按钮、不出指标卡。
     # 反问（clarify）、超出范围（refuse）也是 kind：它们没检索，回答是规划器给的一句话。
-    # 体检（health）同理：没检索，正文和卡片是程序写的。
+    # 体检（health）、三表速读（statements）同理：没检索，正文和卡片是程序写的。
     if turn.get("kind"):
         entry["kind"] = turn["kind"]
     # 反问的可选项：界面渲染成按钮，点了直接发送
@@ -252,6 +253,12 @@ def health_entry(turn: dict, hc: dict, label: str, note: str = "") -> dict:
     note：给用户的说明（财报体检没取到年报底稿时为什么只做了几项），放在正文最前面。"""
     t = dict(turn, hits=[], queries=[], kind="health", health=compact_health(hc))
     return history_entry(t, health_brief(hc, label, note))
+
+
+def statements_entry(turn: dict, c: dict, label: str) -> dict:
+    """三表速读回合：不检索、不生成，卡片和正文都由程序按 rag/statements 的结果写。"""
+    t = dict(turn, hits=[], queries=[], kind="statements", statements=c)
+    return history_entry(t, statements_brief(c, label))
 
 
 def health_page_doc(entry: dict, key: str, fallback: str) -> str:

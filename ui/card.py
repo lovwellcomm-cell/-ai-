@@ -11,8 +11,8 @@ from rag.periods import FY, MONTHS, Q3, SHORT, SPAN
 
 # 指标卡随消息携带的字段。回合写进历史（ui/turn.py）和下发给组件（ui/payload.py）
 # 都按这份清单 —— 漏掉一处，卡片就会在回合结束时消失。health 是体检卡（rag/healthcheck.compact），
-# drivers 是「影响这家公司的几件大事」（rag/drivers.card）。
-CARD_KEYS = ("kpis", "charts", "cardTitle", "cardNote", "health", "drivers")
+# drivers 是「影响这家公司的几件大事」（rag/drivers.card），statements 是三表速读卡（rag/statements.card）。
+CARD_KEYS = ("kpis", "charts", "cardTitle", "cardNote", "health", "drivers", "statements")
 
 # 只有问到这些方向时才出卡。问前五大客户、研发资本化这类问题，一排利润指标就是答非所问。
 _WANTS_RE = re.compile(

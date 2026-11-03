@@ -25,7 +25,8 @@ const ICONS = {
   copy: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 9h10v10H9zM5 15V5h10" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
   pulse: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6H21" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   layers: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m3 13 9 5 9-5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
-  doc: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+  grid: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 9.5v10" stroke="currentColor" stroke-width="1.6"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" stroke="currentColor"stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
 };
 
 // 第一次用到时的小提示：看过哪几个记在浏览器里（addCoach）
@@ -119,6 +120,7 @@ const SWITCH_COS = ["七匹狼", "时代新材", "贵州茅台"];
 const HERO_TOC = [
   { k: "查一个数", sub: "营收、利润、现金流，带出处", qs: [
     { text: "营业收入和归母净利润分别是多少？", what: "指标卡" },
+    { text: "三表速读：三张报表各说明了什么", what: "家底 · 收入去向 · 现金来去" },
     { text: "毛利率同比变化的原因是什么？", what: "原文 + 分析" }] },
   { k: "看隐患", sub: "散户最容易漏看的小字", qs: [
     { text: "给这家公司做个财报体检", what: "9 项红黄绿灯" },
@@ -325,7 +327,7 @@ export default function (component) {
   // 否则发出新问题后，上一条回答不重建，按钮会留在它下面
   // elapsed 每次 rerun 都变，但读秒由前端自己往上数，不该为它重建消息
   // 例外：体检卡、几件大事点开的原页就画在卡片里那一项下面，它变了要重建这条消息
-  const healthPage = (m) => ((m.kind === "health" || m.kind === "drivers") && m.page
+  const healthPage = (m) => ((m.kind === "health" || m.kind === "drivers" || m.kind === "statements") && m.page
     ? [m.page.hp, m.page.hk, (m.page.png || "").length] : undefined);
   const msgSig = (m, i) => JSON.stringify([Object.assign({}, m, { page: healthPage(m), elapsed: undefined }),
     i === ms.length - 1 ? (d.busy ? "last-busy" : "last") : ""]);
@@ -689,6 +691,7 @@ export default function (component) {
     if (m.kpis && m.kpis.length) body.appendChild(buildCard(m));
     if (m.health && m.health.items && m.health.items.length) body.appendChild(buildHealth(m, idx));
     if (m.drivers && m.drivers.items && m.drivers.items.length) body.appendChild(buildDrivers(m, idx));
+    if (m.statements && m.statements.sections && m.statements.sections.length) body.appendChild(buildStatements(m, idx));
     if (m.queries && m.queries.length) body.appendChild(buildTrace(m));
     if (m.sources && m.sources.length) body.appendChild(buildSources(m, idx));
     if (m.webSources && m.webSources.length) body.appendChild(buildWebSources(m, idx));
@@ -1341,6 +1344,123 @@ export default function (component) {
     return card;
   }
 
+  /* ---------------- 三表速读 ----------------
+     三块（资产负债表 / 利润表 / 现金流量表），每块一张小表：项目 · 本期 · 上期 · 变化 · 原页。
+     利润表多一行「每 100 元收入去了哪」，现金流量表多一句画像；表下列出核对过的勾稽关系。
+     不上红绿色：只讲结构和变化，不替用户判断好坏（用户 2026-11-03 定）。
+     点页码发 open_page {p, turn, key: "st:<表>"}，原页画在那张表下面（m.page.hk 记着是哪张表）。 */
+  function buildStatements(m, idx) {
+    s.hcHide = s.hcHide || new Set();
+    const c = m.statements;
+    const turn = (idx - 1) / 2;          // 历史里第几轮：消息按「问、答」成对排列
+    const card = mk("div", "card st");
+    const head = mk("div", "card-head");
+    head.appendChild(mk("span", "card-title", "三表速读"));
+    head.appendChild(mk("span", "tag", "合并报表 · 勾稽已核对 · 单位：" + (c.unit || "亿元")));
+    card.appendChild(head);
+
+    c.sections.forEach((sec) => {
+      const box = mk("section", "st-sec");
+      const top = mk("div", "st-top");
+      top.appendChild(mk("span", "st-title", sec.title));
+      if (sec.page) top.appendChild(mk("span", "st-from mono", "第 " + sec.page + " 页起"));
+      box.appendChild(top);
+
+      const hk = "st:" + sec.key;              // 服务端只用它记「原页画在哪张表下面」
+      const hideKey = "st" + idx + ":" + sec.key;
+      const host = mk("div", "st-paper");
+      const btns = [];
+      const shownPage = () => (m.page && m.page.hk === hk && !s.hcHide.has(hideKey) ? m.page.hp : null);
+      let paper = null;
+      const sync = () => {
+        const p = shownPage();
+        if (paper) { paper.remove(); paper = null; }
+        if (p) {
+          paper = mk("div", "paper-wrap");
+          const img = mk("img", "paper-img");
+          img.src = m.page.png;
+          img.alt = "原文第 " + p + " 页";
+          paper.appendChild(img);
+          paper.appendChild(mk("div", "paper-cap", "原文第 " + p + " 页" + (m.docLabel ? " · " + m.docLabel : "")));
+          host.appendChild(paper);
+        }
+        btns.forEach(([b, bp]) => b.classList.toggle("on", p === bp));
+      };
+      const pageBtn = (p) => {
+        const b = mk("button", "st-pg mono", String(p));
+        b.type = "button";
+        b.title = "翻到原文第 " + p + " 页";
+        b.onclick = (e) => {
+          e.preventDefault();
+          if (m.page && m.page.hk === hk && m.page.hp === p) {
+            if (s.hcHide.has(hideKey)) s.hcHide.delete(hideKey); else s.hcHide.add(hideKey);
+            sync();
+            return;
+          }
+          if (d.busy) return;
+          b.disabled = true;
+          b.textContent = "…";
+          s.hcHide.delete(hideKey);
+          setTriggerValue("open_page", { p: p, turn: turn, key: hk, at: Date.now() });   // 只在点击里触发
+        };
+        btns.push([b, p]);
+        return b;
+      };
+
+      const tbl = mk("table", "st-tbl");
+      const hr = mk("tr");
+      const cols = sec.cols || [];
+      [["", "st-k"], [cols[0] || "本期", null], [cols[1] || "上期", "st-prev"], ["变化", null], ["原页", null]]
+        .forEach(([h, cls]) => hr.appendChild(mk("th", cls, h)));
+      const thead = mk("thead");
+      thead.appendChild(hr);
+      tbl.appendChild(thead);
+      const tb = mk("tbody");
+      (sec.rows || []).forEach((r) => {
+        const tr = mk("tr");
+        const k = mk("th", "st-k", r.label);
+        if (r.hint) { k.title = r.hint; k.classList.add("has-hint"); }
+        tr.appendChild(k);
+        tr.appendChild(mk("td", "mono", r.cur));
+        tr.appendChild(mk("td", "mono st-prev", r.prev));
+        tr.appendChild(mk("td", "mono st-chg", r.chg || ""));
+        const pg = mk("td");
+        if (r.page) pg.appendChild(pageBtn(r.page));
+        tr.appendChild(pg);
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb);
+      const wrap = mk("div", "st-tbl-wrap");
+      wrap.appendChild(tbl);
+      box.appendChild(wrap);
+
+      if (sec.flow && sec.flow.length) {
+        const f = mk("div", "st-flow");
+        f.appendChild(mk("span", "st-flow-k", "每 100 元收入"));
+        sec.flow.forEach((x) => {
+          const chip = mk("span", "st-chip" + (x.net ? " net" : ""));
+          chip.appendChild(mk("span", null, (x.net ? "= " : "") + x.label));
+          chip.appendChild(mk("b", "mono", x.v.toFixed(1)));
+          if (x.hint) chip.title = x.hint;
+          f.appendChild(chip);
+        });
+        box.appendChild(f);
+      }
+      if (sec.portrait) box.appendChild(mk("div", "st-portrait", sec.portrait));
+      if (sec.checks && sec.checks.length) {
+        const ck = mk("div", "st-checks");
+        ck.appendChild(mk("span", null, "已核对"));
+        sec.checks.forEach((x) => ck.appendChild(mk("span", "ok", x)));
+        box.appendChild(ck);
+      }
+      box.appendChild(host);
+      sync();
+      card.appendChild(box);
+    });
+    (c.skipped || []).forEach((x) => card.appendChild(mk("div", "st-skip", "未展示" + x.name + "：" + x.why)));
+    return card;
+  }
+
   function buildTable(t) {
     const wrap = mk("div", "tbl-wrap");
     const table = mk("table", "tbl");
@@ -1677,6 +1797,17 @@ export default function (component) {
         ask("给" + company + "做个财报体检：审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押");
       };
       acts.appendChild(hc);
+      // 「三表速读」：同上，发一句读得懂的问题（rag/statements.button_question）
+      const st3 = mk("button", "act act-hc");
+      st3.type = "button";
+      st3.innerHTML = ICONS.grid;
+      st3.appendChild(mk("span", null, "三表速读"));
+      st3.title = "资产负债表、利润表、现金流量表各说明了什么：家底、每 100 元收入去了哪、钱的来去，勾稽核对过、每个数可翻原页";
+      st3.onclick = () => {
+        st3.disabled = true;
+        ask("三表速读：" + company + "的资产负债表、利润表、现金流量表各说明了什么");
+      };
+      acts.appendChild(st3);
       // 「几件大事」：同上，发一句读得懂的问题（rag/drivers.button_question）
       const kd = mk("button", "act act-hc");
       kd.type = "button";
