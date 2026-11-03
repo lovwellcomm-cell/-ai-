@@ -269,7 +269,9 @@ def judge(case: dict, got: dict) -> dict:
     ans = got.get("answer") or ""
     want_docs = case["doc"] if isinstance(case["doc"], list) else [case["doc"]]
     doc_ok = got.get("doc") in [D[x] for x in want_docs]
-    nums_ok = all(x in ans for x in case["nums"])
+    # 去掉空白再比：回答写「每 10 股」，期望写「10股」（第三期评测里因此误判过缺数字）
+    flat = re.sub(r"\s+", "", ans)
+    nums_ok = all(re.sub(r"\s+", "", x) in flat for x in case["nums"])
     abstain = ans.strip().startswith("年报中未找到") and bool(case["nums"])
     orphan = check(ans, got.get("hits") or []).get("无出处", 0) if ans else None
     # 跨报告：回答引用了笔记片段（编号排在检索片段之后的那几个）
