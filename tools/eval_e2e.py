@@ -87,7 +87,8 @@ CASES = [
          nums=["3.59", "2032", "12.39"]),
     # 三表片段（rag/statements.as_hits）：数字取自勾稽核对过的合并报表，--engines plain,nostmt 对比有没有片段
     dict(n=31, cur="jd25", q="有息负债有多少？", doc="jd25", nums=["31.64"]),
-    dict(n=32, cur="jd25", q="资产负债率是多少，比去年变化多少？", doc="jd25", nums=["56.4", "53.4"]),
+    # 2024 年末 = 67.37 ÷ 126.27 = 53.35%。原来只写了「53.4」（照三表片段一位小数抄的），片段改两位小数后回答写 53.35%
+    dict(n=32, cur="jd25", q="资产负债率是多少，比去年变化多少？", doc="jd25", nums=["56.4", ("53.35", "53.4")]),
     dict(n=33, cur="jd25", q="自由现金流是多少？", doc="jd25", nums=["23.1"]),
     dict(n=34, cur="qpl25", q="货币资金和短期借款各是多少？", doc="qpl25", nums=["6.84", "15.17"]),
     dict(n=35, cur="jd26q3", q="前三季度的毛利率和期间费用率是多少？", doc="jd26q3", nums=["5.2", "1.9"]),
@@ -329,7 +330,9 @@ def judge(case: dict, got: dict) -> dict:
     doc_ok = got.get("doc") in [D[x] for x in want_docs]
     # 去掉空白和千分位逗号再比：回答写「每 10 股」「1,708.99 亿元」，期望写「10股」「1708.99」（都误判过缺数字）
     flat = re.sub(r"[\s,]+", "", ans)
-    nums_ok = all(re.sub(r"[\s,]+", "", x) in flat for x in case["nums"])
+    # 期望数字可以是几种写法之一（元组）：53.35% 四舍五入成 53.4% 也对
+    nums_ok = all(any(re.sub(r"[\s,]+", "", y) in flat for y in ((x,) if isinstance(x, str) else x))
+                  for x in case["nums"])
     abstain = ans.strip().startswith("年报中未找到") and bool(case["nums"])
     orphan = check(ans, got.get("hits") or []).get("无出处", 0) if ans else None
     # 跨报告：回答引用了笔记片段（编号排在检索片段之后的那几个）

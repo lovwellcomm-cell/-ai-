@@ -71,6 +71,8 @@ ANNOTATIONS = {
         "回答写成 0.11 亿元。复核器拦下是对的，评测按规则仍记为判错。",
     ("review-rel-1103-2254", "改数字", "七匹狼 2025 年报和 2026 三季报的营收、净利润对比"):
         "复核调用本身出错（没有返回判断），不是放行。线上遇到这种情况时回答照常给出、不标「已复核」。",
+    ("review-rel-1103-2307", "答非所问", "营业收入和归母净利润分别是多少？"):
+        "复核调用本身出错（没有返回判断），不是放行。线上遇到这种情况时回答照常给出、不标「已复核」。",
 }
 
 LIMITS = [
@@ -181,6 +183,15 @@ def review_misses(review_stem: str) -> list[dict]:
             for r in rows if not r["ok"]]
 
 
+def _dedup(items: list[dict], key: str) -> list[dict]:
+    seen, out = set(), []
+    for x in items:
+        if x[key] not in seen:
+            seen.add(x[key])
+            out.append(x)
+    return out
+
+
 def experiments() -> list[dict]:
     out = []
     for title, what, stem, cols, metrics, note in EXPERIMENTS:
@@ -239,7 +250,9 @@ def build() -> dict:
         "release": {k: rec[k] for k in ("date", "commit", "model", "note") if k in rec},
         "headline": headline(rec),
         "suites": suites(rec),
-        "caught": caught_examples(rec["e2e"]["tag"]),
+        # 真实回退的例子从历次上线评测里收（新的在前，同一道题只留一次）：一次评测里触发回退的题本来就少
+        "caught": sorted(_dedup([x for h in reversed(history) for x in caught_examples(h["e2e"]["tag"])], "q"),
+                         key=lambda x: "未找到" not in x["first"])[:4],
         "injected": injected_examples(rec["review"]["tag"]),
         "misses": review_misses(rec["review"]["tag"]),
         "experiments": experiments(),
