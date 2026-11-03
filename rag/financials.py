@@ -31,7 +31,7 @@ from .periods import FY, Q3, detect
 # 3：三行科目、括号负数、万科的别名 —— 以前漏抽的扣非净利润能补上。
 # 4：追溯调整后的「调整后 / 调整前」5–6 列格式（长江电力）。
 # 5：三季报利润表科目折行、本期和上年同期金额各占一行（精达 2025 三季报以前整张表抽不出）。
-# 6：年报科目折四行（精达 2022 的扣非净利润以前漏抽）。
+# 6：年报科目折四行（精达 2022 的扣非净利润以前漏抽）；数字本身折行（蓝色光标 2025 整张表以前抽不出）。
 FIN_VERSION = 6
 FIN_FILE = "financials.json"
 
@@ -55,6 +55,10 @@ BALANCE_KEYS = ("equity_parent", "total_assets")
 _ALIAS = {alias: key for key, aliases in ITEMS.items() for alias in aliases}
 
 _NUM_RE = re.compile(r"\(-?\d[\d,]*\.\d+\)|-?\d[\d,]*\.\d+%?")
+# 数字折行拼接用：一个完整的数（千分位要么规范、要么没有），一行只有数字碎片
+_AMOUNT = r"-?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d+"
+_WELL_RE = re.compile(rf"^(?:\({_AMOUNT}\)|{_AMOUNT}%?)$")
+_FRAG_RE = re.compile(r"^[\d,.\-%()\s]+$")
 _YEAR_RE = re.compile(r"(20\d\d)\s*年")
 _UNIT_DECL_RE = re.compile(r"单位\s*[:：]\s*(亿元|万元|千元|元)")
 _UNIT_IN_LABEL_RE = re.compile(r"[（(](亿元|万元|千元|元)[)）]")
@@ -62,6 +66,7 @@ _UNIT_IN_LABEL_RE = re.compile(r"[（(](亿元|万元|千元|元)[)）]")
 _END_RE = re.compile(r"^\s*([(（]二[)）]|主要财务指标|[一二三四五六七八九十]{1,3}、)")
 _WINDOW = 60          # 从标题往下最多看多少行
 _TOLERANCE = 0.1      # 复算增减与披露值允许相差的百分点
+_ROUNDING = 0.0051    # 两位小数四舍五入的误差（调整前后两列都在容差内时用来分辨）
 
 
 def _norm(label: str) -> str:
@@ -108,8 +113,59 @@ def _restated(vals: list[float]) -> list[float] | None:
     else:
         return None
     ok = [c for c in cands if verify(c)]
-    # 调整前后数字相同（长江电力就是）两种都对：取哪个都一样
-    return ok[0] if ok and all(c[1] == ok[0][1] for c in ok) else None
+    # 调整前后数字相同（长江电力的利润表科目就是）两种都对：取哪个都一样
+    if ok and all(c[1] == ok[0][1] for c in ok):
+        return ok[0]
+    # 调整前后只差一点（长江电力的净资产、总资产差 0.03%），两种都落在容差里：
+    # 披露的增减精确到两位小数，按四舍五入精度只有一种对得上才算
+    exact = [c for c in ok if verify(c, tolerance=_ROUNDING)]
+    return exact[0] if len(exact) == 1 else None
+
+
+def _row_values(nums: list[str]) -> list[float] | None:
+    """一行的数字 → [本年, 上年, 增减%, 前年]；个数不对或复算对不上返回 None。"""
+    vals = [_to_float(n) for n in nums]
+    if len(vals) == 4:
+        return vals
+    return _restated(vals) if len(vals) in (5, 6) else None
+
+
+def _wrapped_row(ln: str, nexts: list[str]) -> tuple[str, list[float], int] | None:
+    """列太窄时数字本身也会折行（蓝色光标 2025）：`430.4` / `8`、`156` / `.95`、`971.` / `13`，
+    负号单独留在行尾 `777.93 -` / `290,675,602.27`。把后面的纯数字行接上来再认。
+
+    每个断点要么直接拼上（同一个数），要么是两个数之间的空格，两种都试；只认
+    「每个数的千分位格式都对、金额小数位一致、个数 4–6、用披露的增减复算对得上」且结果唯一的那种接法。
+    返回 (科目文字, 数值, 用掉的续行数)。
+    """
+    first = _NUM_RE.search(ln) or re.search(r"\s-$", ln)
+    if not first:
+        return None
+    head, tail = ln[: first.start()].strip(), ln[first.start():].strip()
+    for k in range(1, min(3, len(nexts)) + 1):
+        conts = [x.strip() for x in nexts[:k]]
+        if not all(_FRAG_RE.match(c) for c in conts):
+            return None                        # 续行带文字：是下一个科目，不是数字的后半截
+        found = set()
+        for mask in range(1 << k):
+            text = tail
+            for i, c in enumerate(conts):
+                text += (" " if mask >> i & 1 else "") + c
+            toks = text.split()
+            if not all(_WELL_RE.match(t) for t in toks):
+                continue
+            # 同一行的金额小数位一致：`430.4` + `860,796,…` 这种接法复算也可能凑巧对上
+            # （差额落在不用的那列「调整前」里），但小数位露了馅
+            if len({len(t.rstrip(")").split(".")[1]) for t in toks if not t.endswith("%")}) > 1:
+                continue
+            vals = _row_values(toks)
+            if vals and verify(vals):
+                found.add(tuple(vals))
+        if len(found) == 1:
+            return head, list(found.pop()), k
+        if found:
+            return None                        # 几种接法都说得通：不猜
+    return None
 
 
 def parse_rows(lines: list[str]) -> dict[str, list[float]]:
@@ -117,19 +173,25 @@ def parse_rows(lines: list[str]) -> dict[str, list[float]]:
 
     认**恰好 4 个数**的行：本表的列序固定为本年、上年、增减、前年。
     5–6 个数的行是追溯调整后的格式，交给 _restated 用复算决定列序。
-    数字个数不对（比如「不适用」）就无法确定列的归属，直接跳过，而不是去猜。
+    数字个数不对时先看是不是数字折行了（_wrapped_row，接上后必须复算对得上）；
+    还不对（比如「不适用」）就无法确定列的归属，直接跳过，而不是去猜。
     """
     rows: dict[str, list[float]] = {}
     buffer: list[str] = []
-    for raw in lines:
-        ln = raw.strip()
-        if not ln:
-            continue
+    lines = [x.strip() for x in lines if x.strip()]
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        i += 1
         nums = _NUM_RE.findall(ln)
-        vals = [_to_float(n) for n in nums] if len(nums) == 4 else (
-            _restated([_to_float(n) for n in nums]) if len(nums) in (5, 6) else None)
+        vals = _row_values(nums)
+        head = ln[: ln.find(nums[0])].strip() if vals else ""
+        if not vals and (nums or ln.endswith(" -")):
+            wrapped = _wrapped_row(ln, lines[i:i + 3])
+            if wrapped:
+                head, vals, used = wrapped
+                i += used
         if vals:
-            head = ln[: ln.find(nums[0])].strip()
             key = _match_label(buffer, head)
             if key and key not in rows:
                 rows[key] = vals
@@ -143,12 +205,12 @@ def parse_rows(lines: list[str]) -> dict[str, list[float]]:
     return rows
 
 
-def verify(values: list[float]) -> bool:
+def verify(values: list[float], tolerance: float = _TOLERANCE) -> bool:
     """用本年、上年复算增减，与公司披露的比例对比。对不上 = 列错位或科目抽错。"""
     cur, prior, change, _ = values
     if prior == 0:
         return False
-    return abs((cur - prior) / abs(prior) * 100 - change) <= _TOLERANCE
+    return abs((cur - prior) / abs(prior) * 100 - change) <= tolerance
 
 
 def _table_windows(pages_lines: list[list[str]]):
