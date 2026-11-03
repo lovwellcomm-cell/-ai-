@@ -59,6 +59,8 @@ MAX_PER_SECTION = int(get("MAX_PER_SECTION", "5"))
 RETRIEVE_BY_POINTS = get("RETRIEVE_BY_POINTS", "1") == "1"
 PER_POINT_K = int(get("PER_POINT_K", "3"))
 MAX_POINTS_K = int(get("MAX_POINTS_K", "12"))
+# 按要点分之前先按融合排名取几段：主要会计数据这种一段答多项的表格不能被各要点的名额挤掉（评测踩过）
+POINTS_HEAD_K = int(get("POINTS_HEAD_K", "3"))
 # 生成调用的超时（秒）。不设的话走 OpenAI 客户端默认的 600 秒，
 # 一次卡住会把免费实例的会话钉死十分钟。对**流式**调用这是「多久没收到数据」的上限，
 # 不是总时长上限；长推理期间服务器不发数据，所以别设得太小。

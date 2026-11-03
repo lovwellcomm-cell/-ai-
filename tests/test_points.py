@@ -64,6 +64,17 @@ def test_each_point_gets_its_share_even_when_one_dominates():
     assert len(owner) == 8 and list(owner.values()).count(None) == 2
 
 
+def test_global_head_comes_first():
+    """评测踩过：「近几年发展如何」拆成三个要点各取三段，主要会计数据表（全局第一）被挤掉。"""
+    fused = {99: 10.0, **{i: 1.0 - i * 0.01 for i in range(20)}}         # 99 = 主要会计数据，哪个要点都没排到
+    per = [{i: 1.0 - i * 0.01 for i in range(10)}, {i: 1.0 - i * 0.01 for i in range(10, 20)}]
+    owner = select_by_points(per, fused, 9, 3, _fill, head=3)
+    assert list(owner)[:3] == [99, 0, 1] and all(owner[i] is None for i in (99, 0, 1))
+    # 要点一的头两名已被全局取走，它接着取自己的第三、四、五名；要点二照样 3 段
+    assert sorted(i for i, o in owner.items() if o == 0) == [2, 3, 4]
+    assert sorted(i for i, o in owner.items() if o == 1) == [10, 11, 12]
+
+
 def test_overlapping_points_take_turns():
     """两个要点的头几名重叠时轮流取：后面那个要点不会只剩别人挑剩的。"""
     per = [{1: 3, 2: 2, 3: 1}, {1: 3, 4: 2, 5: 1}]
@@ -96,9 +107,9 @@ POINTS = [{"point": "研发投入", "queries": ["研发投入"]},
 def test_retriever_tags_hits_and_reports_counts():
     diag: dict = {}
     hits, queries = _retriever().search_with_queries("q", queries=["研发投入"], points=POINTS, diag=diag)
-    assert len(hits) == 9                                  # 3 个要点 × 3 段，未超过上限 12
+    assert len(hits) == 12                                 # 全局 3 段 + 3 个要点 × 3 段 = 上限 12
     assert diag["points"] == [{"point": "研发投入", "n": 3}, {"point": "前五大客户", "n": 3}, {"point": "分红", "n": 3}]
-    assert {h["point"] for h in hits} == {"研发投入", "前五大客户", "分红"}
+    assert {h.get("point") for h in hits} == {None, "研发投入", "前五大客户", "分红"}
     assert "利润分配 现金红利" in queries
 
 

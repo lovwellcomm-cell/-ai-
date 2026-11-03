@@ -1,6 +1,7 @@
 """端到端对比：旧流程（识别目标 + 改写检索词 → 检索 → 生成 → 扩展）vs 新流程（规划器 → 检索 → 生成 → 复核∥扩展 → 最多回退一次）。
 
 用法：python -m tools.eval_e2e [--engines old,new] [--only 1,5] [--tag 名字]
+     按要点分别检索对比：--engines plain,flat（flat = plain 去掉按要点检索）
      回答改版对比：--engines new,plain（plain = 新流程 + 通俗版提示词，new 是专业版）
 结果写到 eval_out/e2e-<tag>.md（不入库）。要真实模型；只用本地已有的报告（不导入新报告，免得测的是网速）。
 
@@ -66,6 +67,14 @@ CASES = [
          doc=["jd26q3", "jd25"], nums=["234.31"], cross=True),
     # 毛利率变化的原因写在半年报里：复核应要求到半年报补检索（judge 不强求，逐题表里看「补检索」）
     dict(n=22, cur="jd26q3", q="结合半年报看前三季度毛利率变化", doc=["jd26q3", "jd26h1"], nums=[], cross=True),
+    # 一问多项（按要点分别检索）：数字取自前面单项题已核对过的答案
+    dict(n=23, cur="jd25", q="研发投入、前五大客户销售额占比和经营活动现金流净额分别是多少？", doc="jd25",
+         nums=["1.21", "9.69", "24.75"]),
+    dict(n=24, cur="jd25", q="营业收入、归母净利润、研发投入和前五大客户占比各是多少", doc="jd25",
+         nums=["246.74", "5.99", "1.21", "9.69"]),
+    dict(n=25, cur="qpl25", q="七匹狼的毛利率是多少，分红方案是什么？", doc="qpl25", nums=["54.42", "10股"]),
+    dict(n=26, cur="jd26q3", q="前三季度营收、归母净利润和经营现金流分别多少", doc="jd26q3",
+         nums=["234.31", "4.98", "4.60"]),
 ]
 
 
@@ -98,8 +107,11 @@ def _meta(key: str) -> dict:
 def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
     """prior：前几轮的历史条目（带事实笔记），链式题（chain）用 —— 和 app.py 的 history 同一个形状。"""
     # plain：新流程，只是回答用通俗版提示词（rag/generator.PLAIN_RULE_8）
-    style = "plain" if engine == "plain" else "pro"
-    engine = "new" if engine == "plain" else engine
+    # flat：和 plain 一样，只是不按要点分别检索（所有检索词一个融合排名取 TOP_K）—— 按要点检索的对照组
+    label = engine
+    by_points = engine != "flat"
+    style = "plain" if engine in ("plain", "flat") else "pro"
+    engine = "new" if engine in ("plain", "flat") else engine
     from rag import caliber, config, planner, reviewer
     from ui.memory import recent_context
     from rag.company import extract_target
@@ -111,7 +123,7 @@ def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
     from rag.fidelity import unverified_in_tables
     from rag.financials import load_or_build as load_fin
     from rag.periods import report_label
-    from ui.turn import plan_for, plan_resolution, step, with_period
+    from ui.turn import answered_hits, plan_for, plan_resolution, step, with_period
 
     client = Counting(get_client())
     docs = list_documents(None)
@@ -137,7 +149,7 @@ def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
         return None, plan_resolution(tgt, **kw)
 
     u, plan = resolve()
-    out = {"engine": "plain" if style == "plain" else engine, "n": case["n"]}
+    out = {"engine": label, "n": case["n"]}
     if plan["action"] in ("clarify", "out_of_scope", "multiple", "import"):
         out.update(action=plan["action"], doc=None, answer=(u or {}).get("reply") or "",
                    secs=round(time.time() - t0, 1), calls=client.calls)
@@ -146,10 +158,18 @@ def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
     _, chunks, emb = load_index(meta["doc_id"])
     r = Retriever(chunks, emb, company=meta.get("company", ""), year=meta.get("year", ""))
 
-    def retrieve(queries=None):
-        return r.search_with_queries(q, client=client, use_llm=True, history=history or None,
-                                     queries=queries or (u or {}).get("queries") or None,
-                                     restated=(u or {}).get("restated", ""))
+    point_diag: dict = {}
+
+    def retrieve(queries=None, keep=()):
+        """和 app.py 的 retrieving 一样：补检索（queries）时不按要点分，已答到要点的旧片段 keep 留着。"""
+        hh, qq = r.search_with_queries(
+            q, client=client, use_llm=True, history=history or None, diag=point_diag,
+            queries=queries or (u or {}).get("queries") or None,
+            restated=(u or {}).get("restated", ""),
+            points=(u or {}).get("points") if by_points and not queries else None,
+            k=config.TOP_K if not keep else max(config.TOP_K // 2, config.MAX_POINTS_K - len(keep)))
+        ids = {h.get("chunk_id") for h in keep}
+        return list(keep) + [h for h in hh if h.get("chunk_id") not in ids], qq
 
     hits, qs = retrieve()
     company, year, period = meta.get("company", ""), meta.get("year", ""), period_of(meta)
@@ -235,7 +255,8 @@ def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
                        queries=list(dict.fromkeys(list(new.get("queries") or []) + list(used))),
                        status="generating")
         elif new["status"] == "retrieving":
-            hits, qs = retrieve(new.pop("retry_queries", None))
+            keep = answered_hits(new.get("hits"), new.get("review_last"), config.MAX_POINTS_K - config.TOP_K // 2)
+            hits, qs = retrieve(new.pop("retry_queries", None), keep=keep)
             n_retrieved = len(hits)
             hits = hits + notes.as_hits(prior, meta["doc_id"], extra=step_notes)
             new = dict(new, hits=hits, queries=qs, status="generating")
@@ -255,6 +276,7 @@ def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
                # 交给用户的回答里还剩几处一定错的跨口径计算（rag/caliber.py）
                cross_span=sum(c["hard"] for c in caliber.cross_span(answer, final_hits, facts_of(final_hits))),
                notes=(entry or {}).get("notes") or [], src=src_main,
+               by_points=point_diag.get("points") or [],
                secs=round(time.time() - t0, 1), calls=client.calls)
     return out
 
@@ -269,9 +291,9 @@ def judge(case: dict, got: dict) -> dict:
     ans = got.get("answer") or ""
     want_docs = case["doc"] if isinstance(case["doc"], list) else [case["doc"]]
     doc_ok = got.get("doc") in [D[x] for x in want_docs]
-    # 去掉空白再比：回答写「每 10 股」，期望写「10股」（第三期评测里因此误判过缺数字）
-    flat = re.sub(r"\s+", "", ans)
-    nums_ok = all(re.sub(r"\s+", "", x) in flat for x in case["nums"])
+    # 去掉空白和千分位逗号再比：回答写「每 10 股」「1,708.99 亿元」，期望写「10股」「1708.99」（都误判过缺数字）
+    flat = re.sub(r"[\s,]+", "", ans)
+    nums_ok = all(re.sub(r"[\s,]+", "", x) in flat for x in case["nums"])
     abstain = ans.strip().startswith("年报中未找到") and bool(case["nums"])
     orphan = check(ans, got.get("hits") or []).get("无出处", 0) if ans else None
     # 跨报告：回答引用了笔记片段（编号排在检索片段之后的那几个）
@@ -364,7 +386,7 @@ def main() -> None:
         ("「片段」用语（合计）", lambda e: str(sum(r[3].get('jargon', 0) for r in col(e, lambda r: True)))),
     ]:
         lines.append(f"| {name} | " + " | ".join(fn(e) for e in engines) + " |")
-    for eng in [e for e in engines if e in ("new", "plain")]:
+    for eng in [e for e in engines if e in ("new", "plain", "flat")]:
         revs = [r[2].get("review") or {} for r in rows if r[1] == eng]
         lines.append(f"\n复核（{eng}）：通过 {sum(v.get('verdict') == 'pass' for v in revs)}，"
                      f"未通过 {sum(v.get('verdict') == 'fail' for v in revs)}，"
@@ -391,6 +413,8 @@ def main() -> None:
                 bits.append("没引用笔记")
             if g.get("steps"):
                 bits.append("先读" + "、".join(f"{y}{p}:{n}" for y, p, n in g["steps"]))
+            if g.get("by_points"):
+                bits.append("要点" + "/".join(str(x["n"]) for x in g["by_points"]))
             if g.get("supplemented"):
                 bits.append("补检索→" + "、".join(g["supplemented"]))
             if j.get("span"):

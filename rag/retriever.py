@@ -144,15 +144,17 @@ def llm_rewrite(query: str, year: str = "", client=None, timeout: float = 8.0,
 
 
 def select_by_points(per_point: list[dict[int, float]], fused: dict[int, float], k: int,
-                     per_k: int, fill) -> dict[int, int | None]:
-    """按要点分名额：{片段下标: 替第几个要点取的（None = 全局补的）}，按选中顺序。
+                     per_k: int, fill, head: int = 0) -> dict[int, int | None]:
+    """按要点分名额：{片段下标: 替第几个要点取的（None = 全局取的）}，按选中顺序。
 
-    各要点轮流取自己排名里下一个还没被取走的片段，每个最多 per_k 段 —— 轮流而不是一个取满再下一个，
+    先按融合排名取 head 段：「主要会计数据」这种一段答好几项的表格总在全局最前面，评测里见过
+    「近几年发展如何」拆成三个要点各取三段，把它挤掉了，回答只好拿主营业务收入顶营业收入。
+    然后各要点轮流取自己排名里下一个还没被取走的片段，每个最多 per_k 段 —— 轮流而不是一个取满再下一个，
     免得两个要点的头几名重叠时，排在后面的要点只剩它的第四、第五名。剩下的名额交给 fill
     （Retriever._select_diverse：按融合排名取，限制同一章节的占比）。纯函数，方便测试。
     """
     ranks = [sorted(p, key=p.get, reverse=True) for p in per_point]
-    owner: dict[int, int | None] = {}
+    owner: dict[int, int | None] = {i: None for i in fill(fused, min(head, k))} if head else {}
     cursor = [0] * len(ranks)
     for _ in range(per_k):
         for j, ranking in enumerate(ranks):
@@ -195,8 +197,9 @@ class Retriever:
         （「那2024年呢」）不能拿来检索，补全后的可以。
 
         points：规划器给的「要点 + 各自检索词」（2 个以上才有）。一问多项时所有检索词融合成一个排名，
-        最好找的那一项会占满名额、其余几项一段都分不到 —— 所以每个要点先各取 PER_POINT_K 段，
-        剩下的名额再按融合排名补，总数放宽到 max(k, 要点数 × PER_POINT_K)、不超过 MAX_POINTS_K。
+        最好找的那一项会占满名额、其余几项一段都分不到 —— 所以先取融合排名前 POINTS_HEAD_K 段，
+        再每个要点各取 PER_POINT_K 段，剩下的名额按融合排名补（select_by_points），
+        总数放宽到 max(k, POINTS_HEAD_K + 要点数 × PER_POINT_K)、不超过 MAX_POINTS_K。
         每段标上它是替哪个要点取的（point），diag["points"] 记每个要点分到几段（检索轨迹里显示）。
         """
         if not self.chunks:
@@ -222,9 +225,10 @@ class Retriever:
             best = self._select_diverse(fused, k)
             hits = [dict(self.chunks[i], score=round(fused[i], 5)) for i in best]
             return self._attach_headers(hits), queries
-        k = min(max(k, len(points) * config.PER_POINT_K), config.MAX_POINTS_K)
+        head = config.POINTS_HEAD_K
+        k = min(max(k, head + len(points) * config.PER_POINT_K), config.MAX_POINTS_K)
         per = [self._fuse(p["queries"], qvecs, pool, rrf_k) for p in points]
-        owner = select_by_points(per, fused, k, config.PER_POINT_K, self._select_diverse)
+        owner = select_by_points(per, fused, k, config.PER_POINT_K, self._select_diverse, head=head)
         if diag is not None:
             diag["points"] = [{"point": p["point"], "n": sum(1 for o in owner.values() if o == j)}
                               for j, p in enumerate(points)]
