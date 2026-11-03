@@ -292,7 +292,8 @@ export default function (component) {
   setPlaceholder();
   window.onresize = () => { setPlaceholder(); paintSplit(); };
   // 宽屏开抽屉时对话区往左让出抽屉的宽度，边看原文边看回答；窄了就照旧盖在上面
-  function paintSplit() { root.classList.toggle("split", !!s.drawer && root.clientWidth >= 1100); }
+  // 门槛 960：减掉抽屉 430 还剩 530 给对话；常见 1366 宽笔记本开着侧边栏也够
+  function paintSplit() { root.classList.toggle("split", !!s.drawer && root.clientWidth >= 960); }
 
   const lastAi = (() => {
     const ms = d.messages || [];
@@ -948,7 +949,12 @@ export default function (component) {
             btn.type = "button";
             btn.setAttribute("aria-label", "查看引用 " + n);
             btn.dataset.n = String(n);
-            btn.onclick = () => openSource(n);
+            // 每条回答的引用编号各自从 1 起：要带上是第几条消息，否则点旧回答的 [1] 会打开最新回答的第 1 段
+            btn.onclick = () => {
+              const msg = btn.closest(".msg");
+              const at = msg ? [...threadInner.children].indexOf(msg) : -1;
+              openSource(n, at >= 0 ? at : undefined);
+            };
             container.appendChild(btn);
           });
         } else {
@@ -2094,9 +2100,17 @@ export default function (component) {
     panel.focus({ preventScroll: true });
   }
 
+  // 抽屉里正在看的是哪条回答的来源：角标高亮、整句高亮都只在这条消息里找（各条回答的编号互不相干）
+  function citeScope() {
+    const m = sourceMsg();
+    const i = m ? (d.messages || []).indexOf(m) : -1;
+    return (i >= 0 && threadInner.children[i]) || parentElement;
+  }
+
   function markCite(n) {
+    const scope = citeScope();
     parentElement.querySelectorAll(".cite").forEach((c) => {
-      c.classList.toggle("on", c.dataset.n === String(n));
+      c.classList.toggle("on", c.dataset.n === String(n) && scope.contains(c));
     });
     paintSentence();
   }
@@ -2108,7 +2122,7 @@ export default function (component) {
     if (typeof CSS === "undefined" || !CSS.highlights || typeof Highlight === "undefined") return;
     const ranges = [];
     if (s.drawer && s.activeCite != null) {
-      parentElement.querySelectorAll('.cite[data-n="' + String(s.activeCite) + '"]').forEach((c) => {
+      citeScope().querySelectorAll('.cite[data-n="' + String(s.activeCite) + '"]').forEach((c) => {
         const r = sentenceRange(c);
         if (r) ranges.push(r);
       });
