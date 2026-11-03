@@ -146,6 +146,8 @@ Cloud 原地更新时不一定重启进程，`rag/freshness.py` 发现磁盘上�
 
 ## 开发说明
 
+完整的开发说明（代码怎么生效、部署自检、组件的坑、评测命令）见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。要点：
+
 - **界面**：左侧文档栏是原生 Streamlit 控件（上传必须留在这里）；主区对话面板是 `st.components.v2` 自定义组件，由 `web/chat.*` 渲染，`ui/payload.py` 把会话状态整形成组件要的数据。改 `web/` 下的文件刷新浏览器即可。
 - **安全**：组件里的 HTML 不消毒，而数据里有用户提问和模型输出，所以 `web/chat.js` 里动态文本一律用 `textContent`；浏览器存档送回的对话由 `ui/memory.py` 按白名单校验。
 - **预览**：`python tools/build_preview.py` 生成 `design/preview.html`，不起后端、不花 API 额度就能看完整界面；开屏页预览 `python -m tools.build_landing_preview`。
