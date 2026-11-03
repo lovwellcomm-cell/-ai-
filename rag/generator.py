@@ -77,6 +77,16 @@ def has_notes(chunks: list[dict]) -> bool:
     return any(c.get("note") for c in chunks or [])
 
 
+# 三表片段（rag/statements.as_hits）：问到报表科目、指标，或上一轮是三表速读时才接。
+# 片段标题以「三表数据」开头（rag/statements.STMT_SECTION）
+STMT_RULE = """
+12. 标着“三表数据”的片段是程序从本报告的合并资产负债表、利润表、现金流量表里抽出的数，勾稽关系（资产 = 负债 + 所有者权益等）已经核对过，可以像其他片段一样用 [编号] 引用；和报表原文片段对不上时以它为准（原文片段常有只有一列有数、科目折行的行，容易读错列）。“三表数据 · 程序计算的指标”片段里的有息负债、资产负债率、毛利率、自由现金流等是按括号里的公式算的，引用时要说明是按公式计算的，不要说成公司披露的数。问题用不到这些数据时忽略它们。"""
+
+
+def has_statements(chunks: list[dict]) -> bool:
+    return any(str(c.get("section") or "").startswith("三表数据") for c in chunks or [])
+
+
 def format_context(chunks: list[dict]) -> str:
     parts = []
     for n, c in enumerate(chunks, start=1):
@@ -132,7 +142,9 @@ def build_messages(question: str, chunks: list[dict], company: str = "", year: s
         system += ANSWER_WHY_RULE
     if has_notes(chunks):
         system += NOTES_RULE
-    user = (f"【年报片段】\n{format_context(chunks)}\n\n"
+    if has_statements(chunks):
+        system += STMT_RULE
+    user =(f"【年报片段】\n{format_context(chunks)}\n\n"
             f"{_history_block(history)}"
             f"{focus}"
             f"【问题】\n{question}")

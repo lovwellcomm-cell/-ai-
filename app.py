@@ -1005,6 +1005,19 @@ def advance_turn() -> None:
             hits = hits + fact_notes.as_hits(history, doc_id, extra=target.get("step_notes"))
             hits = attach_history(hits, target.get("hist_hit"))
             hits = attach_quarters(hits, target.get("quarter_hit"))
+            # 三表片段：问到报表科目、指标，或上一轮是三表速读（追问）时接上核对过的三张表（rag/statements.as_hits）。
+            # 存在回合上：复核回退重新检索时照样接；重新理解换了报告就按新报告重做。失败只记下来，不拖垮回答
+            if "stmt_hits" not in target or any(h.get("doc_id") != doc_id for h in target["stmt_hits"]):
+                target["stmt_hits"] = []
+                if three_statements.wants_items(target["q"], history[-1].get("kind") if history else None):
+                    try:
+                        target["stmt_hits"] = three_statements.as_hits(
+                            get_statements(doc_id, SOURCE_STAMP), doc_id,
+                            f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}".strip(),
+                            period_of(meta), meta.get("year", ""))
+                    except Exception as e:
+                        target["stmt_error"] = f"{type(e).__name__}: {e}"
+            hits = three_statements.attach(hits, target["stmt_hits"])
         target["hits"] = hits
         target["queries"] = queries
         target["src_label"] = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}".strip()

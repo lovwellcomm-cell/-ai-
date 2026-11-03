@@ -779,3 +779,138 @@ def button_question(company: str) -> str:
     """「三表速读」按钮发出的问题。写成自然语言，聊天记录里读得懂，也能被 wants_statements 认出。"""
     who = company or "这家公司"
     return f"三表速读：{who}的资产负债表、利润表、现金流量表各说明了什么"
+
+
+# ---------------------------------------------------------------- 片段：三张表进回答（第二步）
+#
+# 普通提问问到负债率、有息负债、自由现金流这些时，模型只能从检索到的报表原文里自己找数、自己算，
+# 只有一列有数的行、折行的科目都容易读错列。这里把勾稽核对过的数做成片段接在检索片段后面：
+#   · 每张表一个片段：报表原值（和卡片同一批数），可以记成事实笔记；
+#   · 一个「程序计算的指标」片段：有息负债、资产负债率、毛利率、自由现金流这些按公式算的数，
+#     标 derived，不记成笔记（和 rag/quarters 的单季数一样），回答要说明是按公式计算的。
+# 只在两种情况下接（用户 2026-11-03 定）：问题问到这些科目或指标；上一轮是三表速读（追问）。
+
+STMT_SECTION = "三表数据"          # 片段标题；rag/generator.STMT_RULE 按这个名字讲怎么用
+DERIVED_TITLE = "程序计算的指标"
+
+_ITEM_Q_RE = re.compile(
+    r"负债率|负债|有息|借款|债务|偿债|货币资金|现金|应收|存货|应付|预收|合同负债|上下游|占款|"
+    r"毛利|费用率|期间费用|销售费用|管理费用|研发费用|财务费用|净利率|减值|所得税|"
+    r"现金流|资本开支|自由现金|收现|分红|付息|筹资|投资活动|经营活动|总资产|净资产|资产负债表|利润表|现金流量表")
+
+
+def wants_items(question: str, last_kind: str | None = None) -> bool:
+    """这一问要不要接三表片段：上一轮是三表速读（「应付为什么涨了」这种追问），或问到了表里的科目、指标。"""
+    return last_kind == "statements" or bool(_ITEM_Q_RE.search(question or ""))
+
+
+def _cells(cols, cur, prev, fmt) -> list[str]:
+    return [f"{c} {fmt(v)}" for c, v in zip(cols, (cur, prev)) if v is not None]
+
+
+def _note_amount(v: float) -> str:
+    """和事实笔记同一种写法（rag/notes._amount）：逐格核对按「亿元 / 万元」找数。"""
+    return f"{v / 1e8:,.2f} 亿元" if abs(v) >= 1e8 else f"{v / 1e4:,.2f} 万元"
+
+
+def _pct_of(v: float) -> str:
+    return f"{v:.1f}%"
+
+
+def as_hits(st: dict | None, doc_id: str, label: str, period: str = FY, year="") -> list[dict]:
+    """核对过的三张表 → 片段（每张表一个 + 程序计算的指标一个）。勾稽没对上的表不出片段。"""
+    if not st or not doc_id:
+        return []
+    bs_cols, flow_cols = col_labels(period, year)
+    tables = {k: _Table(st[k]) for k in (BS, IS, CF) if (st.get(k) or {}).get("ok")}
+    out = []
+    for k, t in tables.items():
+        cols = bs_cols if k == BS else flow_cols
+        lines = []
+        for key, aliases in ITEMS[k].items():
+            it = t.items.get(key)
+            if not it or key in ("interest_net", "premium"):
+                continue
+            cells = _cells(cols, it.get("cur"), it.get("prev"), _note_amount)
+            if not cells:
+                continue
+            c = _chg(it.get("cur"), it.get("prev"), 1.0)
+            if c.endswith("%"):
+                cells.append(f"增减 {c}")
+            lines.append(f"{aliases[0]}：{'；'.join(cells)}")
+        pages = [it["page"] for it in t.items.values() if it.get("page")] or [t.page]
+        out.append({"doc_id": doc_id, "note_src": label, "text": "\n".join(lines),
+                    "section": f"{STMT_SECTION} · {NAMES[k]}", "subsection": "合并报表（勾稽已核对）",
+                    "page_start": int(min(pages)), "page_end": int(max(pages)), "stmt": k})
+    derived = _derived_lines(tables, bs_cols, flow_cols)
+    if derived:
+        first = min(h["page_start"] for h in out)
+        out.append({"doc_id": doc_id, "note_src": label, "derived": True, "stmt": "derived",
+                    "text": "\n".join(["以下指标由程序按括号里的公式、用本报告合并报表的数算出，不是公司披露的数"] + derived),
+                    "section": f"{STMT_SECTION} · {DERIVED_TITLE}", "subsection": "按公式计算",
+                    "page_start": first, "page_end": first})
+    return out
+
+
+def _derived_lines(tables: dict, bs_cols, flow_cols) -> list[str]:
+    lines = []
+
+    def add(name: str, formula: str, cols, cur, prev, fmt, chg: str = ""):
+        cells = _cells(cols, cur, prev, fmt)
+        if cells:
+            lines.append(f"{name}（{formula}）：{'；'.join(cells + ([chg] if chg else []))}")
+
+    def amount(name, formula, cols, cur, prev):
+        c = _chg(cur, prev, 1.0)
+        add(name, formula, cols, cur, prev, _note_amount, f"增减 {c}" if c.endswith("%") else "")
+
+    def ratio(name, formula, cols, cur, prev):
+        add(name, formula, cols, cur, prev, _pct_of, f"变化 {_pp(cur, prev)}" if _pp(cur, prev) else "")
+
+    t = tables.get(BS)
+    if t:
+        ratio("资产负债率", "负债合计 ÷ 资产总计", bs_cols, _ratio(t.get("total_liab"), t.get("total_assets")),
+              _ratio(t.get("total_liab", "prev"), t.get("total_assets", "prev")))
+        amount("有息负债", DEBT_NOTE, bs_cols, t.total(DEBT_KEYS), t.total(DEBT_KEYS, "prev"))
+        amount("应收合计", REC_NOTE, bs_cols, t.total(REC_KEYS), t.total(REC_KEYS, "prev"))
+        amount("应付和预收合计", PAY_NOTE, bs_cols, t.total(PAY_KEYS), t.total(PAY_KEYS, "prev"))
+    t = tables.get(IS)
+    revenue = None
+    if t:
+        rev, rev0 = t.get("revenue") or t.get("total_rev"), t.get("revenue", "prev") or t.get("total_rev", "prev")
+        revenue = rev
+        cost, cost0 = t.get("cost"), t.get("cost", "prev")
+        ratio("毛利率", "(营业收入 − 营业成本) ÷ 营业收入", flow_cols,
+              _ratio(rev - cost, rev) if rev and cost is not None else None,
+              _ratio(rev0 - cost0, rev0) if rev0 and cost0 is not None else None)
+        ratio("期间费用率", "销售费用 + 管理费用 + 研发费用 + 财务费用，除以营业收入", flow_cols,
+              _ratio(t.total(FEE_KEYS), rev), _ratio(t.total(FEE_KEYS, "prev"), rev0))
+        ratio("净利率", "净利润 ÷ 营业收入", flow_cols, _ratio(t.get("net_profit"), rev),
+              _ratio(t.get("net_profit", "prev"), rev0))
+        for col, name in (("cur", flow_cols[0]), ("prev", flow_cols[1])):
+            flow = per_hundred(t, col)
+            if flow:
+                parts = "、".join(f"{x['label']} {x['v']:.1f} 元" for x in flow if not x.get("net"))
+                lines.append(f"每 100 元营业收入的去向（{name}，其他收支按净利润倒算，负数为净收入）："
+                             f"{parts}，{_left(flow[-1]['v'])}")
+    t = tables.get(CF)
+    if t:
+        op, capex = t.get("op_net"), t.get("capex")
+        op0, capex0 = t.get("op_net", "prev"), t.get("capex", "prev")
+        if capex is not None:
+            add("自由现金流", "经营活动产生的现金流量净额 − 购建固定资产、无形资产和其他长期资产支付的现金", flow_cols,
+                op - capex, None if capex0 is None or op0 is None else op0 - capex0, _note_amount)
+        if revenue and t.get("sales_cash") is not None:
+            ratio("收现比", "销售商品、提供劳务收到的现金 ÷ 营业收入，现金含增值税", flow_cols,
+                  _ratio(t.get("sales_cash"), revenue),
+                  _ratio(t.get("sales_cash", "prev"), tables[IS].get("revenue", "prev") or tables[IS].get("total_rev", "prev")))
+        sign = "".join("+" if v >= 0 else "-" for v in (op, t.get("inv_net"), t.get("fin_net")))
+        lines.append(f"现金流画像（{flow_cols[0]}，按经营、投资、筹资三项净额的正负）：{PORTRAITS[sign]}")
+    return lines
+
+
+def attach(hits: list[dict], new: list[dict] | None) -> list[dict]:
+    """三表片段接到最后；旧的（复核回退前那一版）换掉。"""
+    if not new:
+        return list(hits)
+    return [h for h in hits if not str(h.get("section") or "").startswith(STMT_SECTION + " · ")] + list(new)

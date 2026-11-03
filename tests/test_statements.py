@@ -368,3 +368,79 @@ def test_payload_sanitizes_restored_statements():
 def test_page_flip_uses_entry_doc():
     entry = {"kind": "statements", "doc_id": "b" * 16, "statements": {}}
     assert turn_core.health_page_doc(entry, "st:bs", "c" * 16) == "b" * 16
+
+
+# ---------------------------------------------------------------- 第二步：三表片段进回答
+
+def test_as_hits_shape():
+    hits = st.as_hits(_small(), "a" * 16, "示例 2025 年报", "FY", "2025")
+    assert [h["section"] for h in hits] == ["三表数据 · 资产负债表", "三表数据 · 利润表",
+                                            "三表数据 · 现金流量表", "三表数据 · 程序计算的指标"]
+    bs = hits[0]
+    assert bs["doc_id"] == "a" * 16 and bs["page_start"] == 1 and not bs.get("derived")
+    assert "货币资金：2025 年末 100.00 亿元；2024 年末 80.00 亿元；增减 +25.0%" in bs["text"]
+    cf = hits[2]["text"]
+    assert "投资活动产生的现金流量净额：2025 年 -15.00 亿元；2024 年 -10.00 亿元" in cf   # 上期为负不写百分比
+    calc = hits[3]
+    assert calc["derived"] is True and calc["text"].startswith("以下指标由程序")
+    assert "资产负债率（负债合计 ÷ 资产总计）：2025 年末 33.3%；2024 年末 40.0%；变化 -6.7 个百分点" in calc["text"]
+    assert "有息负债（" + st.DEBT_NOTE + "）：2025 年末 40.00 亿元" in calc["text"]
+    assert "每 100 元营业收入的去向（2025 年" in calc["text"] and "剩下净利润 15.0 元" in calc["text"]
+    assert "现金流画像（2025 年" in calc["text"]
+
+
+def test_as_hits_skips_unreconciled_table():
+    pages = [p.strip("\n").split("\n") for p in SMALL]
+    pages[0] = [ln.replace("资产总计 180.00", "资产总计 181.00") for ln in pages[0]]
+    hits = st.as_hits(st.build_from_lines(pages), "a" * 16, "x", "FY", "2025")
+    assert all("资产负债表" not in h["section"] for h in hits)
+    assert "资产负债率" not in hits[-1]["text"] and "毛利率" in hits[-1]["text"]
+    assert st.as_hits(None, "a" * 16, "x") == [] and st.as_hits({"bs": {"ok": False}}, "a" * 16, "x") == []
+
+
+def test_quarter_hit_columns():
+    hits = st.as_hits(_small("Q3"), "a" * 16, "示例 2026 三季报", "Q3", "2026")
+    assert "货币资金：2026 年 9 月末 100.00 亿元；2025 年末 80.00 亿元" in hits[0]["text"]
+    assert "营业收入：2026 年前三季度 200.00 亿元；2025 年前三季度 150.00 亿元" in hits[1]["text"]
+
+
+@pytest.mark.parametrize("q,last,want", [
+    ("有息负债有多少？", None, True),
+    ("资产负债率比去年变化多少", None, True),
+    ("自由现金流是多少", None, True),
+    ("前五大客户占比多少", None, False),
+    ("研发人员有多少", None, False),
+    ("为什么增加这么多？", "statements", True),      # 三表速读之后的追问
+    ("为什么增加这么多？", "health", False),
+])
+def test_wants_items(q, last, want):
+    assert st.wants_items(q, last) is want
+
+
+def test_attach_replaces_old_statement_hits():
+    old = st.as_hits(_small(), "a" * 16, "x", "FY", "2025")
+    base = [{"section": "第三节", "text": "原文"}]
+    once = st.attach(base, old)
+    again = st.attach(once, old)
+    assert len(again) == len(once) == 1 + len(old)
+    assert st.attach(base, []) == base
+
+
+def test_generator_rule_only_with_statement_hits():
+    from rag.generator import STMT_RULE, build_messages
+
+    hits = st.as_hits(_small(), "a" * 16, "x", "FY", "2025")
+    with_rule = build_messages("有息负债多少", hits)[0]["content"]
+    plain = build_messages("有息负债多少", [{"section": "第三节", "text": "x", "page_start": 1, "page_end": 1}])[0]["content"]
+    assert STMT_RULE in with_rule and STMT_RULE not in plain
+
+
+def test_derived_hit_not_recorded_as_note():
+    from rag.notes import from_answer
+
+    hits = st.as_hits(_small(), "a" * 16, "示例 2025 年报", "FY", "2025")
+    n = len(hits)
+    answer = ("| 指标 | 2025 年末 |\n|---|---|\n"
+              f"| 货币资金 | 100.00 亿元 [1] |\n| 有息负债 | 40.00 亿元 [{n}] |\n")
+    notes = from_answer(answer, hits, [], "a" * 16, "示例 2025 年报")
+    assert [x["t"].split("：")[0] for x in notes] == ["货币资金"]      # 程序算的有息负债不记成笔记

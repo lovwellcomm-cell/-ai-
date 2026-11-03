@@ -85,6 +85,16 @@ CASES = [
          nums=["0.6", "12.07", "45.50"]),
     dict(n=30, cur="qpl25", q="七匹狼研发人员占比、员工总数和前五名供应商采购占比", doc="qpl25",
          nums=["3.59", "2032", "12.39"]),
+    # 三表片段（rag/statements.as_hits）：数字取自勾稽核对过的合并报表，--engines plain,nostmt 对比有没有片段
+    dict(n=31, cur="jd25", q="有息负债有多少？", doc="jd25", nums=["31.64"]),
+    dict(n=32, cur="jd25", q="资产负债率是多少，比去年变化多少？", doc="jd25", nums=["56.4", "53.4"]),
+    dict(n=33, cur="jd25", q="自由现金流是多少？", doc="jd25", nums=["23.1"]),
+    dict(n=34, cur="qpl25", q="货币资金和短期借款各是多少？", doc="qpl25", nums=["6.84", "15.17"]),
+    dict(n=35, cur="jd26q3", q="前三季度的毛利率和期间费用率是多少？", doc="jd26q3", nums=["5.2", "1.9"]),
+    dict(n=36, cur="qpl25", q="有息负债和账上的货币资金比怎么样？", doc="qpl25", nums=["6.84", "17.0"]),
+    # 三表速读之后的追问：上一轮是速读（程序出卡，不调模型），这一问接三表片段
+    dict(n=37, cur="jd25", chain="三表速读：精达股份的资产负债表、利润表、现金流量表各说明了什么",
+         q="应付和预收为什么增加这么多？", doc="jd25", nums=[]),
 ]
 
 
@@ -118,11 +128,13 @@ def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
     """prior：前几轮的历史条目（带事实笔记），链式题（chain）用 —— 和 app.py 的 history 同一个形状。"""
     # plain：新流程，只是回答用通俗版提示词（rag/generator.PLAIN_RULE_8）
     # flat：和 plain 一样，只是不按要点分别检索（所有检索词一个融合排名取 TOP_K）—— 按要点检索的对照组
+    # nostmt：和 plain 一样，只是不接三表片段（rag/statements.as_hits）—— 三表片段的对照组
     label = engine
     by_points = engine != "flat"
-    style = "plain" if engine in ("plain", "flat") else "pro"
-    engine = "new" if engine in ("plain", "flat") else engine
-    from rag import caliber, config, planner, reviewer
+    use_stmt = engine != "nostmt"
+    style = "plain" if engine in ("plain", "flat", "nostmt") else "pro"
+    engine = "new" if engine in ("plain", "flat", "nostmt") else engine
+    from rag import caliber, config, planner, reviewer, statements
     from ui.memory import recent_context
     from rag.company import extract_target
     from rag.generator import analyze, generate, get_client
@@ -209,7 +221,16 @@ def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
         step_notes += got_notes
         steps.append((x["year"], x["period"], len(got_notes)))
     n_retrieved = len(hits)
-    hits = hits + notes.as_hits(prior, meta["doc_id"], extra=step_notes)
+    # 三表片段：和 app.py 一样，问到报表科目、指标，或上一轮是三表速读时接
+    stmt_hits = []
+    if use_stmt and statements.wants_items(q, prior[-1].get("kind") if prior else None):
+        stmt_hits = statements.as_hits(statements.load_or_build(meta["doc_id"]), meta["doc_id"],
+                                       f"{company} {report_label(year, period)}".strip(), period, year)
+
+    def extras(hh):
+        return statements.attach(hh + notes.as_hits(prior, meta["doc_id"], extra=step_notes), stmt_hits)
+
+    hits = extras(hits)
     state = {"turn": {"q": q, "hits": hits, "queries": qs, "status": "generating", "started": t0}}
     # 分步回答：回退的时间预算按主步骤估（rag/reviewer.decide），和 app.py 先读完才起算一致
     if (u or {}).get("also_read"):
@@ -268,14 +289,14 @@ def run(case: dict, engine: str, prior: list[dict] | None = None) -> dict:
             keep = answered_hits(new.get("hits"), new.get("review_last"), config.MAX_POINTS_K - config.TOP_K // 2)
             hits, qs = retrieve(new.pop("retry_queries", None), keep=keep)
             n_retrieved = len(hits)
-            hits = hits + notes.as_hits(prior, meta["doc_id"], extra=step_notes)
+            hits = extras(hits)
             new = dict(new, hits=hits, queries=qs, status="generating")
         elif new["status"] == "resolving":
             # 复核要求重新理解：评测里不换报告（换了也是本地切换），只重做规划和检索
             u, _ = resolve(new.get("replan_hint", ""))
             hits, qs = retrieve()
             n_retrieved = len(hits)
-            hits = hits + notes.as_hits(prior, meta["doc_id"], extra=step_notes)
+            hits = extras(hits)
             new = dict(new, hits=hits, queries=qs, status="generating")
         state["turn"] = new
     final_hits = state["turn"].get("hits") or []
@@ -341,6 +362,24 @@ def readability(ans: str) -> dict:
             "jargon": rest.count("片段")}
 
 
+def wants_statements(q: str) -> bool:
+    from rag.statements import wants_statements as w
+    return w(q)
+
+
+def statements_turn(q: str, cur: str) -> dict:
+    """三表速读那一轮的历史条目（ui/turn.statements_entry），和 app.py 同一个形状。"""
+    from rag import statements
+    from rag.periods import period_of, report_label
+    from ui.turn import statements_entry
+
+    meta = _meta(cur)
+    st = statements.load_or_build(meta["doc_id"])
+    c = statements.card(st, period_of(meta), meta.get("year", ""))
+    label = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}".strip()
+    return statements_entry({"q": q, "doc_id": meta["doc_id"]}, c, label)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--engines", default="old,new")
@@ -356,7 +395,10 @@ def main() -> None:
         c, e = job
         try:
             prior, this = [], c
-            if c.get("chain"):
+            if c.get("chain") and wants_statements(c["chain"]):
+                # 前一问是三表速读：和 app.py 一样程序出卡、不调模型，这一问就在同一份报告上追问
+                prior = [statements_turn(c["chain"], c["cur"])]
+            elif c.get("chain"):
                 # 链式题：先完整跑前一问，把它的历史条目（含笔记）带进这一问；当前报告换成前一问用的那份
                 first = run(dict(c, q=c["chain"]), e)
                 prior = [{"q": c["chain"], "a": first.get("answer", ""), "notes": first.get("notes") or []}]
