@@ -44,7 +44,7 @@ from rag.indexer import (build_index, cleanup_uploads, doc_dir, doc_id_of, ensur
                          is_current, list_documents, load_index)
 from rag.limits import Quota, check_and_consume
 from rag.pdf_parser import extract_doc_info, parse_pdf, render_page_png
-from rag.periods import FY, SHORT, period_of, report_label
+from rag.periods import FY, SHORT, not_out_yet, period_of, report_label
 from rag.retriever import Retriever
 from ui import payload
 from ui import turn as turn_core
@@ -775,6 +775,12 @@ def advance_turn() -> None:
             st.rerun()
 
         else:
+            # 报告期还没结束的报告（2026 年 11 月问「2026 年报」）不可能已经披露：直接说明，不去巨潮白找一趟再报「没有找到」
+            early = not_out_yet(int(plan["year"]), plan["period"]) if str(plan.get("year") or "").isdigit() else ""
+            if early:
+                refund(target)
+                finish_turn(turn_core.quick_entry(target, early, "refuse"))
+                st.rerun()
             if config.PUBLIC_DEMO and uploads_used() \
                     >= config.MAX_UPLOADS_PER_SESSION:
                 refund(target)

@@ -138,6 +138,20 @@ def period_end(year: int, period: str) -> date:
     return date(year, month, 31 if month in (3, 12) else 30)
 
 
+def not_out_yet(year: int, period: str, today: date | None = None) -> str:
+    """报告期还没结束的报告（2026 年 11 月问「2026 年报」）：不可能已经披露，返回给用户的一句说明；否则空串。
+
+    报告期结束了、只是没到截止日的不算 —— 不少公司提前披露，那种照常去巨潮找。
+    """
+    today = today or date.today()
+    if period_end(year, period) < today:
+        return ""
+    end, d = period_end(year, period), deadline(period, year)
+    ly = latest_year(period, today)
+    return (f"{year} {SHORT[period]}还没有披露：报告期到 {end.year} 年 {end.month} 月 {end.day} 日才结束，"
+            f"最晚 {d.year} 年 {d.month} 月 {d.day} 日前披露。目前最新的{SHORT[period]}是 {ly} {SHORT[period]}。")
+
+
 def next_report(year: int, period: str) -> tuple[int, str]:
     """紧接着的下一期：三季报之后是同年年报，年报之后是次年一季报。"""
     order = (Q1, H1, Q3, FY)

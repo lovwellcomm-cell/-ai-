@@ -206,6 +206,10 @@ def plan_resolution(target: dict, *, current_company: str = "", current_year: st
     if here and year is None and str(current_year).isdigit():
         # 在 2026 三季报上问「一季度呢」：同一年的一季报，而不是最新的一季报。
         year = int(current_year)
+        # 「年报」不能照搬：季报那一年的年报要到第二年 4 月才披露。线上踩过：停在 2026 三季报上点「年报体检」，
+        # 拼出「2026 年报」去巨潮找，报「没有找到」。取已经过了截止日的最近一期年报；当前季报更早时仍是同一年
+        if period == FY:
+            year = min(year, latest_year(FY, today))
 
     candidates = [d for d in docs if same_company(d.get("company", ""), company)]
     if year is not None:

@@ -177,3 +177,14 @@ def test_latest_cash_flow_on_half_year_report_moves_to_newest(  ):
     # 本地没有三季报：去巨潮导入
     plan = plan_resolution(tgt, current_company="精达股份", current_year="2026", current_period="H1", docs=docs[:1])
     assert plan["action"] == "import" and (plan["year"], plan["period"]) == (2026, "Q3")
+
+
+def test_not_out_yet_explains_reports_whose_period_has_not_ended():
+    """用户提醒过「没有时间概念，26 年年报还没有发出来」：2026 年 11 月问 2026 年报，直接说明还没披露。"""
+    today = date(2026, 11, 3)
+    msg = periods.not_out_yet(2026, periods.FY, today)
+    assert "2026 年报还没有披露" in msg and "2027 年 4 月 30 日" in msg and "2025 年报" in msg
+    # 报告期已经结束、只是没到截止日（提前披露常见）：照常去巨潮找
+    assert periods.not_out_yet(2026, periods.Q3, today) == ""
+    assert periods.not_out_yet(2025, periods.FY, today) == ""
+    assert "2027 一季报" in periods.not_out_yet(2027, periods.Q1, today)

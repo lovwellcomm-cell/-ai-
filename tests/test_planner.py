@@ -113,6 +113,25 @@ def test_health_prefers_annual_unless_period_named():
     assert planner.describe(dict(on_q3, intent="health")).startswith("年报体检")
 
 
+def test_annual_without_year_on_quarterly_means_latest_disclosed_annual():
+    """线上踩过：停在时代新材 2026 三季报上点「年报体检」，规划器给了 period=FY、没给年份，
+    沿用当前季报的年份拼出「2026 年报」（2027 年 4 月才披露）去巨潮找，报「没有找到」。"""
+    asked = {"intent": "health", "target": {"company": "", "year": None, "period": "FY"}}
+    assert _plan(asked, "2026", "Q3") == {"action": "switch", "doc": DOCS[0]}      # 精达 2025 年报
+    # 本地没有那份年报：去巨潮导入的也是 2025 年报，不是 2026
+    plan = plan_for(asked, current_company="精达股份", current_year="2026", current_period="Q3",
+                    docs=DOCS[1:], today=TODAY)
+    assert plan == {"action": "import", "company": "精达股份", "year": 2025, "period": "FY"}
+    # 当前季报更早（2024 三季报）：同一年的年报已经披露，仍用 2024
+    plan = plan_for(asked, current_company="精达股份", current_year="2024", current_period="Q3",
+                    docs=[], today=TODAY)
+    assert plan["year"] == 2024
+    # 季报不受影响：在 2026 三季报上问「一季度呢」仍是 2026 一季报
+    q1 = {"intent": "report", "target": {"company": "", "year": None, "period": "Q1"}}
+    assert plan_for(q1, current_company="精达股份", current_year="2026", current_period="Q3",
+                    docs=[], today=TODAY)["year"] == 2026
+
+
 def test_clarify_and_out_of_scope_skip_resolution():
     assert _plan({"intent": "clarify", "target": {}}) == {"action": "clarify"}
     assert _plan({"intent": "out_of_scope", "target": {}}) == {"action": "out_of_scope"}
