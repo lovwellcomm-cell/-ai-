@@ -33,7 +33,8 @@ RULES = {
     "audit": "绿：标准无保留意见；黄：带强调事项段；红：保留、否定、无法表示意见，或提示持续经营重大不确定性",
     "accounting": "绿：未重述以前年度数据；黄：重述过以前年度数据，或有会计变更/差错更正需看原文；红：更正了重大会计差错",
     "cash": "看经营现金流 ÷ 归母净利润。绿：≥ 0.8；黄：0–0.8，或亏损但现金流为正；红：< 0，或亏损且现金流为负",
-    "profit": "看非经常性损益占归母净利润。绿：< 20%；黄：20%–50%，或政府补助占净利润 ≥ 30%；红：≥ 50%，或亏损",
+    "profit": "看非经常性损益占归母净利润。绿：< 20%；黄：20%–50%，或政府补助占净利润 ≥ 30%，或亏损但扣非后盈利；"
+              "红：≥ 50%，或扣非后也亏损",
     "customers": "前五名客户占销售额。绿：< 50%；黄：50%–80%；红：≥ 80%",
     "suppliers": "前五名供应商占采购额。绿：< 50%；黄：50%–80%；红：≥ 80%",
     "related": "前五名客户/供应商中关联方的占比（取较大者）。绿：< 10%；黄：10%–30%；红：≥ 30%",
@@ -558,36 +559,86 @@ def wants_health(question: str) -> bool:
 
 
 def button_question(company: str) -> str:
-    """「体检」按钮发出的问题。写成自然语言，聊天记录里读得懂，也能被 wants_health 认出。"""
+    """「财报体检」按钮发出的问题。写成自然语言，聊天记录里读得懂，也能被 wants_health 认出。"""
     who = company or "这家公司"
-    return f"给{who}做个年报体检：审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押"
+    return f"给{who}做个财报体检：审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押"
+
+
+MERGED = "merged"
+
+
+def merge_quarter(annual: dict, quarter: dict, base: dict, update: dict) -> dict:
+    """财报体检：季报上做体检时，以那之前的年报 9 项为底，季报判得了的几项（现金流、利润、商誉）换成季报的结果。
+
+    用户（2026-11-03）选的做法：只看季报的话 9 项里 6 项「仅年报披露」，只看年报又不是最新的。
+    base / update 是两份报告的 {"doc", "label"}。每项记下出自哪份（doc、src，翻原页按它找报告）；
+    被季报更新的项带上年报时的结果（prev），卡片和正文据此写「年报 绿 → 三季报 黄」。
+    季报里没判出来的项（找不到披露）保留年报的结果，不拿「未判断」盖掉年报的结论。
+    """
+    newer = {it["key"]: it for it in quarter.get("items") or []}
+    items = []
+    for it in annual.get("items") or []:
+        q = newer.get(it["key"])
+        if q and q["status"] != NONE:
+            new = dict(q, doc=update["doc"], src=update["label"])
+            if it["status"] != NONE:
+                new["prev"] = {"status": it["status"], "value": it.get("value") or "", "src": base["label"]}
+        else:
+            new = dict(it, doc=base["doc"], src=base["label"])
+        items.append(new)
+    counts = {s: sum(1 for it in items if it["status"] == s) for s in (RED, YELLOW, GREEN, NONE)}
+    return {"version": HC_VERSION, "period": MERGED, "base": base["label"], "update": update["label"],
+            "items": items, "counts": counts}
 
 
 def compact(hc: dict) -> dict:
     """存进历史和浏览器的形状：去掉判断标准（固定文字，下发时按 key 从 RULES 补回）。"""
-    keep = ("key", "label", "status", "value", "summary", "detail", "page")
-    return {"period": hc.get("period", FY), "counts": dict(hc.get("counts") or {}),
-            "items": [{k: it.get(k) for k in keep} for it in hc.get("items") or []]}
+    keep = ("key", "label", "status", "value", "summary", "detail", "page", "src", "doc", "prev")
+    out = {"period": hc.get("period", FY), "counts": dict(hc.get("counts") or {}),
+           "items": [{k: it[k] for k in keep if it.get(k) is not None} for it in hc.get("items") or []]}
+    if hc.get("period") == MERGED:
+        out.update(base=hc.get("base", ""), update=hc.get("update", ""))
+    return out
 
 
-def brief(hc: dict, label: str) -> str:
-    """回答正文：几红几黄、各是哪几项、在第几页。细节在卡片里。"""
+def _where(it: dict) -> str:
+    if not it.get("page"):
+        return ""
+    return f"（{it['src']}第 {it['page']} 页）" if it.get("src") else f"（第 {it['page']} 页）"
+
+
+def brief(hc: dict, label: str, note: str = "") -> str:
+    """回答正文：几红几黄、各是哪几项、在第几页。细节在卡片里。
+
+    合并体检（merge_quarter）先说清两份报告各管哪几项、和年报比哪几项变了灯；note 是给用户的说明
+    （比如年报没能导入、只做了季报那几项），放在最前面。"""
     items = hc.get("items") or []
     judged = [it for it in items if it["status"] != NONE]
     c = {s: sum(1 for it in judged if it["status"] == s) for s in (RED, YELLOW, GREEN)}
-    src = f"《{label}》" if label else "这份报告"
-    head = (f"按{src}的披露做了 {len(judged)} 项体检：**红灯 {c[RED]} 项，"
-            f"黄灯 {c[YELLOW]} 项，绿灯 {c[GREEN]} 项**。")
+    tally = f"**红灯 {c[RED]} 项，黄灯 {c[YELLOW]} 项，绿灯 {c[GREEN]} 项**。"
+    if hc.get("period") == MERGED:
+        newer = [it["label"] for it in items if it.get("src") == hc.get("update")]
+        head = f"按《{hc.get('base')}》做了 {len(judged)} 项体检"
+        if newer:
+            head += f"，其中{'、'.join(newer)} {len(newer)} 项用《{hc.get('update')}》的最新数据更新"
+        head += "：" + tally
+    else:
+        src = f"《{label}》" if label else "这份报告"
+        head = f"按{src}的披露做了 {len(judged)} 项体检：" + tally
     skipped = len(items) - len(judged)
     if skipped:
-        head += f"另有 {skipped} 项{'只在年报里披露' if hc.get('period', FY) != FY else '没有找到披露'}，未作判断。"
-    paras = [head]
+        head += f"另有 {skipped} 项{'只在年报里披露' if hc.get('period', FY) not in (FY, MERGED) else '没有找到披露'}，未作判断。"
+    paras = ([note] if note else []) + [head]
+    moved = [it for it in items if it.get("prev") and it["prev"]["status"] != it["status"]]
+    if moved:
+        paras.append("**和年报相比**：" + "；".join(
+            f"{it['label']} {_STATUS_NAME.get(it['prev']['status'], '未判断')} → {_STATUS_NAME[it['status']]}"
+            f"（{it['prev'].get('value') or '—'} → {it.get('value') or '—'}）" for it in moved) + "。")
     for status in (RED, YELLOW):
         hits = [it for it in judged if it["status"] == status]
         if hits:
             paras.append(f"**{_STATUS_NAME[status]}**：" + "；".join(
-                f"{it['label']} {it['value']}" + (f"（第 {it['page']} 页）" if it.get("page") else "")
-                for it in hits) + "。")
+                f"{it['label']} {it['value']}" + _where(it) for it in hits) + "。")
     if not c[RED] and not c[YELLOW] and judged:
         paras.append("没有亮红灯或黄灯的项目。")
     paras.append("每一项的判断标准写在卡片里，点开可以翻到原页核对。体检只看报告披露的数字和勾选项，"

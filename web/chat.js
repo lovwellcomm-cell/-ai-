@@ -121,7 +121,7 @@ const HERO_TOC = [
     { text: "营业收入和归母净利润分别是多少？", what: "指标卡" },
     { text: "毛利率同比变化的原因是什么？", what: "原文 + 分析" }] },
   { k: "看隐患", sub: "散户最容易漏看的小字", qs: [
-    { text: "给这家公司做个年报体检", what: "9 项红黄绿灯" },
+    { text: "给这家公司做个财报体检", what: "9 项红黄绿灯" },
     { text: "前五大客户与供应商集中度如何？", what: "原文" }] },
   { k: "看外面", sub: "行情和行业的新变化", qs: [
     { text: "影响这家公司业绩的几件大事", what: "行情 + 估算" },
@@ -326,7 +326,7 @@ export default function (component) {
   // elapsed 每次 rerun 都变，但读秒由前端自己往上数，不该为它重建消息
   // 例外：体检卡、几件大事点开的原页就画在卡片里那一项下面，它变了要重建这条消息
   const healthPage = (m) => ((m.kind === "health" || m.kind === "drivers") && m.page
-    ? [m.page.hp, (m.page.png || "").length] : undefined);
+    ? [m.page.hp, m.page.hk, (m.page.png || "").length] : undefined);
   const msgSig = (m, i) => JSON.stringify([Object.assign({}, m, { page: healthPage(m), elapsed: undefined }),
     i === ms.length - 1 ? (d.busy ? "last-busy" : "last") : ""]);
   let changed = false;
@@ -1223,9 +1223,16 @@ export default function (component) {
     const items = m.health.items.slice().sort((a, b) => (HC_ORDER[a.status] ?? 3) - (HC_ORDER[b.status] ?? 3));
     const card = mk("div", "card hc");
     const head = mk("div", "card-head");
-    head.appendChild(mk("span", "card-title", "年报体检"));
+    head.appendChild(mk("span", "card-title", "财报体检"));
     head.appendChild(mk("span", "tag", "程序按公开规则判断 · 不构成投资建议"));
     card.appendChild(head);
+    // 财报体检（季报上）：以年报为底，季报能查的几项用季报更新 —— 说清两份报告各管哪几项
+    const merged = m.health.base && m.health.update;
+    if (merged) {
+      const fresh = items.filter((x) => x.src === m.health.update).length;
+      card.appendChild(mk("div", "hc-basis", "以《" + m.health.base + "》9 项为底" +
+        (fresh ? "，其中 " + fresh + " 项用《" + m.health.update + "》更新" : "")));
+    }
 
     const tally = mk("div", "hc-tally");
     ["red", "yellow", "green"].forEach((st) => {
@@ -1260,6 +1267,20 @@ export default function (component) {
       row.appendChild(mk("span", "hc-tog"));
       sum.appendChild(row);
       sum.appendChild(mk("div", "hc-sum", it.summary));
+      if (merged && it.src) {
+        // 出自哪份报告；被季报更新的项写上年报时的结果：「年报 绿 1.12 → 三季报 黄 0.42」
+        const src = mk("div", "hc-src");
+        if (it.prev && it.prev.status) {
+          src.appendChild(mk("span", null, it.prev.src + " "));
+          src.appendChild(mk("i", "hc-dot " + it.prev.status));
+          src.appendChild(mk("span", "mono", " " + (it.prev.value || "") + "  →  " + it.src + " "));
+          src.appendChild(mk("i", "hc-dot " + st));
+          src.appendChild(mk("span", "mono", " " + (it.value || "")));
+        } else {
+          src.textContent = "出自《" + it.src + "》";
+        }
+        sum.appendChild(src);
+      }
       det.appendChild(sum);
 
       const more = mk("div", "hc-more");
@@ -1270,7 +1291,8 @@ export default function (component) {
       more.appendChild(rule);
       if (it.page) {
         // 服务端下发的那一页才是「已渲染」的真相；s.hcHide 只记用户手动收起过哪几项
-        const rendered = () => !!(m.page && m.page.hp === it.page);
+        // 财报体检里两份报告可能是同一个页码：再比一下是哪一项（hk）
+        const rendered = () => !!(m.page && m.page.hp === it.page && (!m.page.hk || m.page.hk === it.key));
         const btn = mk("button", "ghost hc-open");
         btn.type = "button";
         btn.innerHTML = ICONS.doc;
@@ -1287,7 +1309,8 @@ export default function (component) {
             img.src = m.page.png;
             img.alt = "原文第 " + it.page + " 页";
             paper.appendChild(img);
-            paper.appendChild(mk("div", "paper-cap", "原文第 " + it.page + " 页" + (m.docLabel ? " · " + m.docLabel : "")));
+            const from = (merged && it.src) || m.docLabel;
+            paper.appendChild(mk("div", "paper-cap", "原文第 " + it.page + " 页" + (from ? " · " + from : "")));
             more.appendChild(paper);
           } else if (!shown && paper) {
             paper.remove();
@@ -1306,7 +1329,8 @@ export default function (component) {
           label.textContent = "渲染中…";
           s.srcOpen.add(key);
           s.hcHide.delete(key);
-          setTriggerValue("open_page", { p: it.page, turn: turn, at: Date.now() });   // 只在点击里触发
+          // key：财报体检里各项出自不同报告，服务端按它查是哪份（只用来查，不信浏览器给的报告）
+          setTriggerValue("open_page", { p: it.page, turn: turn, key: it.key, at: Date.now() });   // 只在点击里触发
         };
         sync();
       }
@@ -1646,11 +1670,11 @@ export default function (component) {
       const hc = mk("button", "act act-hc");
       hc.type = "button";
       hc.innerHTML = ICONS.shield;
-      hc.appendChild(mk("span", null, "年报体检"));
+      hc.appendChild(mk("span", null, "财报体检"));
       hc.title = "审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押等 9 项，红黄绿灯 + 原文页码";
       hc.onclick = () => {
         hc.disabled = true;
-        ask("给" + company + "做个年报体检：审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押");
+        ask("给" + company + "做个财报体检：审计意见、利润和现金流含金量、客户集中度、商誉、大股东质押");
       };
       acts.appendChild(hc);
       // 「几件大事」：同上，发一句读得懂的问题（rag/drivers.button_question）

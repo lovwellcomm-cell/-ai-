@@ -240,10 +240,20 @@ def quick_entry(turn: dict, text: str, kind: str, options: list[str] | None = No
     return history_entry(t, text)
 
 
-def health_entry(turn: dict, hc: dict, label: str) -> dict:
-    """体检回合：不检索、不生成，卡片和正文都由程序按 rag/healthcheck 的结果写。"""
+def health_entry(turn: dict, hc: dict, label: str, note: str = "") -> dict:
+    """体检回合：不检索、不生成，卡片和正文都由程序按 rag/healthcheck 的结果写。
+    note：给用户的说明（财报体检没取到年报底稿时为什么只做了几项），放在正文最前面。"""
     t = dict(turn, hits=[], queries=[], kind="health", health=compact_health(hc))
-    return history_entry(t, health_brief(hc, label))
+    return history_entry(t, health_brief(hc, label, note))
+
+
+def health_page_doc(entry: dict, key: str, fallback: str) -> str:
+    """体检卡某一项「翻到原页」翻哪份报告：财报体检里每项记着出自哪份（rag/healthcheck.merge_quarter），
+    其余情况就是这一轮依据的那份。key 来自浏览器，只用来在服务端自己存的条目里查找。"""
+    for it in ((entry.get("health") or {}).get("items") or []):
+        if isinstance(it, dict) and it.get("key") == key and isinstance(it.get("doc"), str) and it["doc"]:
+            return it["doc"]
+    return entry.get("doc_id") or fallback
 
 
 def drivers_entry(turn: dict, c: dict, label: str, web_sources: list[dict]) -> dict:
@@ -259,8 +269,11 @@ def plan_for(understanding: dict, *, current_company: str = "", current_year: st
     · 反问、超范围：不找报告，返回 {"action": "clarify" | "out_of_scope"}；
     · 趋势：季报里只有本期和上年同期两个数，问多年必须用年报 —— 落在季报上就改找这家公司
       最新的年报（用户实际遇到的：停在三季报上问「近几年发展如何」，回答「年报中未找到」）。
-    · 体检、几件大事：要用年报里才有的内容（体检 9 项里 6 项、风险章节和成本构成），
-      落在季报上同样改用最新年报；用户明说了哪一期（「三季报体检」）就照他说的。
+    · 几件大事：要用年报里才有的内容（风险章节和成本构成），落在季报上改用最新年报；
+      用户明说了哪一期就照他说的。
+    · 财报体检：落在季报上**不**换报告 —— app.py 以那之前的年报 9 项为底、季报能判的几项用季报更新
+      （rag/healthcheck.merge_quarter，用户 2026-11-03 定）。「年报体检」没写年份也按这样做（合并里就有年报 9 项）；
+      「三季报体检」「2025 年报体检」照他说的那份。
     """
     intent = understanding.get("intent")
     if intent in ("clarify", "out_of_scope"):
@@ -268,8 +281,10 @@ def plan_for(understanding: dict, *, current_company: str = "", current_year: st
     kw = dict(current_company=current_company, current_year=current_year,
               current_period=current_period, docs=docs, today=today)
     tgt = understanding.get("target") or {}
+    if intent == "health" and tgt.get("period") == FY and tgt.get("year") is None:
+        tgt = dict(tgt, period=None)
     plan = plan_resolution(tgt, **kw)
-    annual_first = intent == "trend" or (intent in ("health", "drivers") and not tgt.get("period"))
+    annual_first = intent == "trend" or (intent == "drivers" and not tgt.get("period"))
     # 跨报告（事实笔记第二期）：年报已经排在「先读」里，主报告就按规划器说的来（多半是最新季报）。
     # 不然「近三年和最新季报比」会被改回年报，和先读的年报撞成同一份，季报一个数都没读到（评测踩过）
     if any(x.get("period") == FY for x in understanding.get("also_read") or []):

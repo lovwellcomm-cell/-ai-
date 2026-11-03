@@ -104,19 +104,25 @@ def test_trend_on_quarterly_switches_to_annual():
     assert _plan(u) == {"action": "current"}
 
 
-def test_health_prefers_annual_unless_period_named():
-    """实测：在精达上问「七匹狼有什么风险」切到了七匹狼 2026 三季报，9 项只能做 3 项。"""
+def test_health_on_quarterly_stays_for_merged_check():
+    """财报体检（用户 2026-11-03 选的做法）：季报上体检不换报告，app.py 以年报 9 项为底合并。
+    「年报体检」没写年份也一样；写了哪一期（「三季报体检」「2025 年报体检」）照他说的。"""
     on_q3 = {"intent": "health", "target": {"company": "", "year": None, "period": None}}
-    assert _plan(on_q3, "2026", "Q3") == {"action": "switch", "doc": DOCS[0]}
+    assert _plan(on_q3, "2026", "Q3") == {"action": "current"}
+    annual_word = {"intent": "health", "target": {"company": "", "year": None, "period": "FY"}}
+    assert _plan(annual_word, "2026", "Q3") == {"action": "current"}
     named = {"intent": "health", "target": {"company": "", "year": None, "period": "Q3"}}
     assert _plan(named, "2026", "Q3") == {"action": "current"}
-    assert planner.describe(dict(on_q3, intent="health")).startswith("年报体检")
+    year_named = {"intent": "health", "target": {"company": "", "year": 2025, "period": "FY"}}
+    assert _plan(year_named, "2026", "Q3") == {"action": "switch", "doc": DOCS[0]}
+    assert planner.describe(dict(on_q3, intent="health")).startswith("财报体检")
 
 
 def test_annual_without_year_on_quarterly_means_latest_disclosed_annual():
     """线上踩过：停在时代新材 2026 三季报上点「年报体检」，规划器给了 period=FY、没给年份，
-    沿用当前季报的年份拼出「2026 年报」（2027 年 4 月才披露）去巨潮找，报「没有找到」。"""
-    asked = {"intent": "health", "target": {"company": "", "year": None, "period": "FY"}}
+    沿用当前季报的年份拼出「2026 年报」（2027 年 4 月才披露）去巨潮找，报「没有找到」。
+    体检现在留在季报上做合并体检；这条规则对「年报里…」这类普通问题照样要成立。"""
+    asked = {"intent": "report", "target": {"company": "", "year": None, "period": "FY"}}
     assert _plan(asked, "2026", "Q3") == {"action": "switch", "doc": DOCS[0]}      # 精达 2025 年报
     # 本地没有那份年报：去巨潮导入的也是 2025 年报，不是 2026
     plan = plan_for(asked, current_company="精达股份", current_year="2026", current_period="Q3",

@@ -404,6 +404,10 @@ table.md-tbl { width: 100%; border-collapse: collapse; font-size: 13px; line-hei
   transform: rotate(45deg) translate(-2px, -2px); transition: transform var(--dur) var(--ease); }
 .hc-item[open] .hc-tog::before { transform: rotate(225deg) translate(-2px, -2px); }
 .hc-sum { padding: 0 15px 11px 34px; font-size: 13px; line-height: 1.65; color: var(--ink-2); }
+/* 财报体检：说明两份报告各管哪几项；每项出自哪份，被季报更新的写「年报 ● → 三季报 ●」 */
+.hc-basis { padding: 9px 15px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
+.hc-src { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: -6px;
+  padding: 0 15px 11px 34px; font-size: 11.5px; color: var(--ink-3); }
 .hc-more { padding: 0 15px 13px 34px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .hc-detail { font-size: 12.5px; color: var(--ink-2); }
 .hc-rule { font-size: 12px; color: var(--ink-3); line-height: 1.6; }
@@ -416,7 +420,7 @@ table.md-tbl { width: 100%; border-collapse: collapse; font-size: 13px; line-hei
   .hc-row { grid-template-columns: auto minmax(0, 1fr) auto 14px; }
   .hc-page { display: none; }
   .hc-value { max-width: 9em; }
-  .hc-sum, .hc-more { padding-left: 15px; }
+  .hc-sum, .hc-more, .hc-src { padding-left: 15px; }
 }
 
 /* ---------- 几件大事 ---------- */

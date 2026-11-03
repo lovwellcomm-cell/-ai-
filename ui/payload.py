@@ -205,22 +205,35 @@ def drivers_card(c: dict) -> dict:
 def health_card(h: dict) -> dict:
     """体检卡下发前补回每项的判断标准（历史里不存这段固定文字）。浏览器存档带回来的数据
     由访客控制：只留认识的 key 和灯色，其余字段一律转成有长度上限的字符串。"""
+    lights = ("red", "yellow", "green", "none")
     items = []
     for it in (h.get("items") or [])[:len(HEALTH_RULES)]:
         if not isinstance(it, dict) or it.get("key") not in HEALTH_RULES:
             continue
         page = it.get("page")
-        items.append({
+        item = {
             "key": it["key"],
             "label": str(it.get("label") or "")[:20],
-            "status": it.get("status") if it.get("status") in ("red", "yellow", "green", "none") else "none",
+            "status": it.get("status") if it.get("status") in lights else "none",
             "value": str(it.get("value") or "")[:40],
             "summary": str(it.get("summary") or "")[:300],
             "detail": str(it.get("detail") or "")[:200],
             "page": page if isinstance(page, int) and not isinstance(page, bool) and page > 0 else None,
             "rule": HEALTH_RULES[it["key"]],
-        })
-    return {"period": str(h.get("period") or ""), "items": items}
+        }
+        # 财报体检（rag/healthcheck.merge_quarter）：出自哪份报告、年报时的结果。报告 id（doc）不下发 ——
+        # 翻原页由服务端按 key 查（ui/turn.health_page_doc）
+        if it.get("src"):
+            item["src"] = str(it["src"])[:40]
+        prev = it.get("prev")
+        if isinstance(prev, dict) and prev.get("status") in lights:
+            item["prev"] = {"status": prev["status"], "value": str(prev.get("value") or "")[:40],
+                            "src": str(prev.get("src") or "")[:40]}
+        items.append(item)
+    out = {"period": str(h.get("period") or ""), "items": items}
+    if h.get("base") and h.get("update"):
+        out.update(base=str(h["base"])[:40], update=str(h["update"])[:40])
+    return out
 
 
 def build_messages(history: list[dict], turn: dict | None = None, page: dict | None = None,

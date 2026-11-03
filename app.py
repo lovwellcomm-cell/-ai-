@@ -32,7 +32,7 @@ except Exception as _import_error:          # 部署环境里的 import 失败�
     raise
 from rag.external import answer_with_tools
 from rag.financials import load_or_build as load_financials
-from rag.healthcheck import load_or_build as load_health, wants_health
+from rag.healthcheck import load_or_build as load_health, merge_quarter, wants_health
 from rag import drivers as key_drivers
 from rag.generator import analyze, generate, get_client, make_client, resolve_style
 from rag import caliber, planner, reviewer
@@ -667,6 +667,34 @@ def run_prestep(target: dict) -> None:
         finish()
 
 
+# ---------- 财报体检：季报上用哪份年报做底稿 ----------
+
+def health_base() -> tuple[str | None, str, str]:
+    """当前季报之前的那份年报（2026 三季报 → 2025 年报）：(doc_id, 报告名, 给用户的说明)。
+
+    本地有就用；没有就去巨潮导入（和前置步骤一样计入每个会话的导入上限）。拿不到时 doc_id 为 None，
+    说明写清原因 —— 体检照样做，只是只有季报能查的几项。注意：这里只读 meta，不给它赋值。
+    """
+    company = meta.get("company", "")
+    year = int(meta["year"]) - 1 if str(meta.get("year", "")).isdigit() else None
+    if not company or year is None:
+        return None, "", ""
+    label = f"{company} {report_label(year, FY)}"
+    plan = turn_core.plan_resolution({"company": company, "year": year, "period": FY},
+                                     current_company=company, current_year=meta.get("year", ""),
+                                     current_period=period_of(meta), docs=list_documents(visible_ids()))
+    if plan["action"] == "switch":
+        return plan["doc"]["doc_id"], label, ""
+    if config.PUBLIC_DEMO and uploads_used() >= config.MAX_UPLOADS_PER_SESSION:
+        return None, label, (f"本会话的报告导入次数已用完，没能取来《{label}》做底稿，"
+                             "这次只做了季报能查的几项。")
+    try:
+        new_id, label = import_report(company, year, FY)
+    except Exception as e:
+        return None, label, f"没能从巨潮取到《{label}》（{e}），这次只做了季报能查的几项。"
+    return new_id, label, ""
+
+
 # ---------- 第三期：复核要求去别的报告补检索 ----------
 # 复核器只能从这几份里挑（rag/reviewer.normalize 只认给它看过的名字）：本地已有的同一公司别的报告，新的在前。
 # 不去巨潮下载 —— 回退要快，而且没读过的报告复核器也说不准答案在不在里面。
@@ -813,8 +841,25 @@ def advance_turn() -> None:
             refund(target)
             fail(target, "这份报告没能完成体检（读取原文失败）。可以换一份报告再试。")
             st.rerun()
-        label = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}"
-        finish_turn(turn_core.health_entry(target, hc, label.strip()))
+        label = f"{meta.get('company', '')} {report_label(meta.get('year', ''), period_of(meta))}".strip()
+        note = ""
+        # 财报体检：季报上以那之前的年报 9 项为底，季报判得了的几项用季报更新（rag/healthcheck.merge_quarter）。
+        # 用户点名要季报那一期（「三季报体检」）就只做季报
+        named = (target.get("target") or {}).get("period") == period_of(meta)
+        if period_of(meta) != FY and not named:
+            base_id, base_label, note = health_base()
+            base_hc = None
+            if base_id:
+                try:
+                    base_hc = get_health(base_id, SOURCE_STAMP)
+                except Exception as e:
+                    target["health_error"] = f"{type(e).__name__}: {e}"
+                if not base_hc:
+                    note = f"没能读取《{base_label}》，这次只做了季报能查的几项。"
+            if base_hc:
+                hc = merge_quarter(base_hc, hc, {"doc": base_id, "label": base_label},
+                                   {"doc": doc_id, "label": label})
+        finish_turn(turn_core.health_entry(target, hc, label, note))
         st.rerun()
 
     if target["status"] == "retrieving" and target.get("kind") == "drivers":
@@ -1144,11 +1189,13 @@ if result.open_page and isinstance(result.open_page, dict) and "p" in result.ope
     except (TypeError, ValueError):
         p, k = 0, -1
     entry = history[k] if 0 <= k < len(history) else {}
-    source_doc = entry.get("doc_id") or doc_id
+    # 财报体检里各项出自不同报告：按这一项（key）在服务端存的条目里查出是哪份
+    hkey = str(result.open_page.get("key") or "")[:20]
+    source_doc = turn_core.health_page_doc(entry, hkey, doc_id)
     total = int((docs.get(source_doc) or {}).get("pages") or 0)
     if entry.get("kind") in ("health", "drivers") and source_doc in docs and 1 <= p <= total:
         try:
-            st.session_state["page"] = {"hp": p, "turn": k,
+            st.session_state["page"] = {"hp": p, "turn": k, "hk": hkey,
                                         "png": page_data_uri(source_doc, p, SOURCE_STAMP)}
         except Exception:
             st.session_state["page"] = None
