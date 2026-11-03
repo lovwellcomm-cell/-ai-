@@ -142,6 +142,10 @@ PLANNER_TIMEOUT = float(get("PLANNER_TIMEOUT", "25"))
 AGENT_REVIEW = get("AGENT_REVIEW", "1") == "1"
 AGENT_MAX_RETRY = int(get("AGENT_MAX_RETRY", "1"))
 AGENT_TIME_BUDGET = float(get("AGENT_TIME_BUDGET", "90"))
+# 分步回答（先读了别的报告）的整轮上限：已用时 + 主步骤用时（≈ 回退一轮要多久）超过它就不再回退
+AGENT_TURN_BUDGET = float(get("AGENT_TURN_BUDGET", "120"))
+# 复核要求去别的报告补检索时，从那份报告取几段原文接上
+RETRY_OTHER_TOP_K = int(get("RETRY_OTHER_TOP_K", "4"))
 REVIEW_MAX_TOKENS = int(get("REVIEW_MAX_TOKENS", "4000"))
 REVIEW_TIMEOUT = float(get("REVIEW_TIMEOUT", "30"))
 

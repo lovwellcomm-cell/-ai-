@@ -104,6 +104,9 @@ def ai_message(turn: dict, *, status: str | None = None, error: str | None = Non
             note = (turn.get("review_last") or {}).get("note") or "回答有遗漏"
             doing = {"retrieve": "正在补充检索后重新回答", "regenerate": "正在重新生成",
                      "replan": "正在重新理解问题"}.get(turn["retry"], "正在重新回答")
+            # 第三期：去别的报告补检索时说清楚去了哪份
+            if turn["retry"] == "retrieve" and turn.get("retry_report"):
+                doing = f"正在到 {turn['retry_report']} 里补充检索后重新回答"
             msg["statusText"] = f"复核发现：{note}。{doing}…"
             msg["retrying"] = True
     elif isinstance(turn.get("secs"), int):

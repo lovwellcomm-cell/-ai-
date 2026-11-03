@@ -430,13 +430,18 @@ def step(turn: dict, *, gen, ana, web=None, ind=None, client=None, company: str 
         ok, res = results["review"]
         res = res if ok else None
         rounds = turn.get("round", 0)
-        action = decide(res, round_no=rounds, elapsed=now() - turn.get("started", now()))
+        # 分步回答：回退只重跑主步骤，按主步骤用了多久估（rag/reviewer.decide）
+        main = now() - turn["main_started"] if turn.get("main_started") else None
+        action = decide(res, round_no=rounds, elapsed=now() - turn.get("started", now()),
+                        main_elapsed=main)
         base = {k: v for k, v in turn.items() if k != "after_review"}
         if action in ("retrieve", "regenerate", "replan"):
             # 回退：旧回答留着显示（界面挂「复核发现…」），新的一轮出来再替换
             new = dict(base, round=rounds + 1, retry=action, review_last=res)
             if action == "retrieve":
-                return dict(new, status="retrieving", retry_queries=res["queries"]), None, None
+                # report：复核要求去哪份别的报告补检索（空 = 主报告），app.py 的 retrieving 照它找
+                return dict(new, status="retrieving", retry_queries=res["queries"],
+                            retry_report=res.get("report") or ""), None, None
             if action == "regenerate":
                 return dict(new, status="generating"), None, None
             # 重新理解可能换报告：旧报告的指标卡不能留到新报告上
